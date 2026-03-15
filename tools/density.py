@@ -4,6 +4,7 @@ Predict density range for a composition.
 
 import sys
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 # Add aviary to path
 aviary_path = Path(__file__).parent / "aviary"
@@ -15,13 +16,12 @@ import torch
 from torch.utils.data import DataLoader
 from aviary.roost.data import CompositionData, collate_batch
 from aviary.roost.model import Roost
-from aviary.core import Normalizer
 import glob
 
 class DensityEnsemblePredictor:
     """Load models once and reuse for efficient batch predictions."""
 
-    def __init__(self, checkpoint_pattern: str = None):
+    def __init__(self, checkpoint_pattern: Optional[str] = None):
         """Initialize by loading all models."""
         if checkpoint_pattern is None:
             current_dir = Path(__file__).parent
@@ -29,9 +29,12 @@ class DensityEnsemblePredictor:
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         checkpoint_paths = sorted(glob.glob(checkpoint_pattern))
+        if not checkpoint_paths:
+            raise FileNotFoundError(f"No density model checkpoints found matching: {checkpoint_pattern}")
 
         self.models = []
-        self.normalizers = []
+        self.scales = []
+        self.means = []
 
         # Load all models once
         for checkpoint_path in checkpoint_paths:
@@ -43,9 +46,14 @@ class DensityEnsemblePredictor:
 
             self.models.append(model)
             normalizer = checkpoint.get("normalizer_dict", {}).get("density", None)
-            self.normalizers.append(normalizer)
+            if normalizer:
+                self.scales.append(float(normalizer["std"]))
+                self.means.append(float(normalizer["mean"]))
+            else:
+                self.scales.append(1.0)
+                self.means.append(0.0)
 
-    def predict(self, composition: str, sigma: float = 3.0) -> dict:
+    def predict(self, composition: str, sigma: float = 3.0) -> Dict[str, Any]:
         """Predict density for a single composition using pre-loaded models."""
         predictions = []
         uncertainties = []
@@ -57,17 +65,12 @@ class DensityEnsemblePredictor:
         with torch.no_grad():
             for inputs, *_ in loader:
                 inputs = [inp.to(self.device) for inp in inputs]
-                for model, normalizer in zip(self.models, self.normalizers):
+                for model, scale, mean in zip(self.models, self.scales, self.means):
                     output = model(*inputs)[0].cpu()
                     prediction, log_std = output[0]
 
-                    if normalizer:
-                        norm = Normalizer.from_state_dict(normalizer)
-                        prediction = prediction * norm.std.item() + norm.mean.item()
-                        uncertainty = torch.exp(log_std).item() * norm.std.item()
-                    else:
-                        prediction = prediction.item()
-                        uncertainty = torch.exp(log_std).item()
+                    prediction = prediction.item() * scale + mean
+                    uncertainty = torch.exp(log_std).item() * scale
 
                     predictions.append(prediction)
                     uncertainties.append(uncertainty)
@@ -86,8 +89,8 @@ class DensityEnsemblePredictor:
 
 def predict_density_ensemble(composition: str,
                              sigma: float = 3.0,
-                             checkpoint_pattern: str = None,
-                             predictor: DensityEnsemblePredictor = None):
+                             checkpoint_pattern: Optional[str] = None,
+                             predictor: Optional[DensityEnsemblePredictor] = None) -> Dict[str, Any]:
     """Backward compatible function. Use DensityEnsemblePredictor for better performance."""
     if predictor is None:
         predictor = DensityEnsemblePredictor(checkpoint_pattern)

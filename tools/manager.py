@@ -5,6 +5,7 @@ Module for PXRD managers
 - WPManager: sample Wyckoff positions according to constraints (spg, composition, density range)
 - XtalManager: sample crystal structures from Spg, cell parameters and Wyckoff positions.
 """
+from typing import Sequence
 import numpy as np
 from pandas import read_csv
 from scipy.signal import find_peaks, savgol_filter
@@ -14,8 +15,16 @@ from pyxtal.lattice import Lattice
 from pyxtal.symmetry import rf, Group
 from pyxtal.database.element import Element
 
+
+DEFAULT_BG_ORDER = 6
+DEFAULT_BG_ITERS = 50
+DEFAULT_BG_ASYM = 0.01
+DEFAULT_SAVGOL_WINDOW = 4
+DEFAULT_SAVGOL_POLYORDER = 3
+
 class RawDataManager:
-    def __init__(self, two_thetas, intensities, bg_subtract=True, smooth=True):
+    def __init__(self, two_thetas: Sequence[float], intensities: Sequence[float],
+                 bg_subtract: bool = True, smooth: bool = True):
         """
         RawDataManager is used to process the raw PXRD data, including
         - background subtraction
@@ -31,14 +40,23 @@ class RawDataManager:
         self.x = two_thetas
         self.y_raw = intensities
         if bg_subtract:
-            self.y = self.background_subtraction(order=6, n_iter=50, asym=0.01)
+            self.y = self.background_subtraction(
+                order=DEFAULT_BG_ORDER,
+                n_iter=DEFAULT_BG_ITERS,
+                asym=DEFAULT_BG_ASYM,
+            )
         else:
             self.y = self.y_raw.copy()
         if smooth:
-            self.y = savgol_filter(self.y, window_length=4, polyorder=3)
+            self.y = savgol_filter(
+                self.y,
+                window_length=DEFAULT_SAVGOL_WINDOW,
+                polyorder=DEFAULT_SAVGOL_POLYORDER,
+            )
 
 
-    def background_subtraction(self, order=6, n_iter=50, asym=0.01):
+    def background_subtraction(self, order: int = 6, n_iter: int = 50,
+                               asym: float = 0.01) -> np.ndarray:
         """
         Remove background from XRD data using asymmetric least squares polynomial fitting.
 
@@ -59,7 +77,8 @@ class RawDataManager:
         y_corrected[y_corrected < 0] = 0
         return y_corrected
 
-    def get_peaks_from_scipy(self, height=1.0, distance=5, prominence=1.5):
+    def get_peaks_from_scipy(self, height: float = 1.0, distance: int = 5,
+                             prominence: float = 1.5) -> None:
         """
         Detect peaks in the processed XRD data using scipy's find_peaks function.
         Intentionally use small height and prominence thresholds to capture more peaks,
@@ -72,7 +91,7 @@ class RawDataManager:
         """
         self.peaks, _ = find_peaks(self.y, height=height, distance=distance, prominence=prominence)
 
-    def filter_peaks_by_ml(self, threshold=0.8, min_height=5.0):
+    def filter_peaks_by_ml(self, threshold: float = 0.8, min_height: float = 5.0) -> None:
         """
         Filter detected peaks according to the probabilities predicted by a machine learning model.
 
@@ -100,9 +119,11 @@ class RawDataManager:
         self.peaks = np.delete(self.peaks, indices_to_remove)
 
 
-    def get_peaks_from_scipy_adaptive(self, distance=5, height=1.5, prominence=2,
-                                      max_peaks=35, min_peaks=15, heights_fallback=[0.5, 0.2],
-                                      prominence_fallback=[1.5, 1.0]):
+    def get_peaks_from_scipy_adaptive(self, distance: int = 5, height: float = 1.5,
+                                      prominence: float = 2.0, max_peaks: int = 35,
+                                      min_peaks: int = 15,
+                                      heights_fallback: Sequence[float] | None = None,
+                                      prominence_fallback: Sequence[float] | None = None) -> None:
         """
         Detect peaks in the processed XRD data using an adaptive thresholding approach.
 
@@ -120,12 +141,17 @@ class RawDataManager:
             heights_fallback (list): Fallback heights to try if too few peaks.
             prominence_fallback (list): Fallback prominences to try if too few peaks.
         """
+        if heights_fallback is None:
+            heights_fallback = (0.5, 0.2)
+        if prominence_fallback is None:
+            prominence_fallback = (1.5, 1.0)
+
         # Scenario 1: Try default settings first
         self.peaks, _ = find_peaks(self.y, height=height, distance=distance, prominence=prominence)
 
         # Scenario 2: Too many peaks - keep strong peaks and fill up to max_peaks
         if len(self.peaks) > max_peaks:
-            intensities = self.y[self.peaks]; print(min(intensities))
+            intensities = self.y[self.peaks]
             # Keep peaks with intensity > 2*height (strong peaks)
             strong_mask = intensities > 4.0 * height
             strong_peaks = self.peaks[strong_mask]
@@ -144,30 +170,15 @@ class RawDataManager:
 
             return
 
-        # Scenario 3: Too few peaks - try relaxing thresholds
-        #if len(self.peaks) < min_peaks:
-        #    for h in heights_fallback:
-        #        for p in prominence_fallback:
-        #            peaks_candidate, _ = find_peaks(self.y, height=h, distance=distance, prominence=p)
-        #            if min_peaks <= len(peaks_candidate) <= max_peaks:
-        #                self.peaks = peaks_candidate
-        #                return
-        #            elif len(peaks_candidate) > max_peaks:
-        #                # Keep only strongest max_peaks
-        #                intensities = self.y[peaks_candidate]
-        #                sorted_indices = np.argsort(intensities)[::-1]
-        #                self.peaks = np.sort(peaks_candidate[sorted_indices[:max_peaks]])
-        #                return
-        #    # If no good setting found, use the relaxed setting that gives most peaks (up to max_peaks)
-        #    if len(peaks_candidate) > max_peaks:
-        #        intensities = self.y[peaks_candidate]
-        #        sorted_indices = np.argsort(intensities)[::-1]
-        #        self.peaks = np.sort(peaks_candidate[sorted_indices[:max_peaks]])
-        #    else:
-        #        self.peaks = peaks_candidate
+        # Scenario 3 (too few peaks) currently disabled to avoid introducing extra weak/noisy peaks.
+        _ = (min_peaks, heights_fallback, prominence_fallback)
 
-    def add_low_angle_peaks(self, angle_threshold=35, height_ratio=0.25, prominence_ratio=0.15,
-                            min_distance=5, max_additional_peaks=10, height_min=1.25):
+    def add_low_angle_peaks(self, angle_threshold: float = 35,
+                            height_ratio: float = 0.25,
+                            prominence_ratio: float = 0.15,
+                            min_distance: int = 5,
+                            max_additional_peaks: int = 10,
+                            height_min: float = 1.25) -> None:
         """
         Check for and add missing peaks in the low-angle region with relaxed but adaptive criteria.
         Uses ratios relative to strongest peaks rather than absolute thresholds to avoid adding noise.
@@ -205,7 +216,7 @@ class RawDataManager:
         low_angle_data = self.y[low_angle_mask]
 
         # Find all peaks in low-angle region with adaptive criteria
-        low_angle_peaks, properties = find_peaks(
+        low_angle_peaks, _ = find_peaks(
             low_angle_data,
             height=height_threshold,
             distance=min_distance,
@@ -232,11 +243,8 @@ class RawDataManager:
             # Add new peaks and re-sort
             self.peaks = np.sort(np.concatenate([self.peaks, peaks_to_add]))
             print(f"Added {len(peaks_to_add)} low-angle peaks. Total peaks: {len(self.peaks)}")
-        #else:
-        #    print("No additional low-angle peaks added.")
-        #    import sys; sys.exit()
 
-    def get_non_peak_integral(self, window=0.05):
+    def get_non_peak_integral(self, window: float = 0.05) -> None:
         """
         Calculate the integrals of non-peak regions for potential use in refinement or scoring.
 
@@ -256,7 +264,7 @@ class RawDataManager:
 
         self.non_peak_integral = np.trapz(self.y[non_peak_mask], self.x[non_peak_mask])
 
-    def get_integrals_by_peaks(self, peaks, window=0.05):
+    def get_integrals_by_peaks(self, peaks: Sequence[float], window: float = 0.05) -> float:
         """
         Calculate the integrals around specified peaks for potential use in refinement or scoring.
 

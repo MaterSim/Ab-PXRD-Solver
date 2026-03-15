@@ -2,7 +2,11 @@ from strands import Agent, tool, ToolContext
 from strands.models.gemini import GeminiModel
 from strands.multiagent.graph import GraphBuilder
 import logging
+import os
+import inspect
 import sys
+import traceback
+from importlib.metadata import version as pkg_version, PackageNotFoundError
 import pandas as pd
 import numpy as np
 from tools.manager import RawDataManager, CellManager
@@ -93,41 +97,138 @@ gemini_model = GeminiModel(
     params={"temperature": 0.7}
 )
 
-@tool(context=True)
-def WyckoffSolverTool(tool_context: ToolContext) -> str:
-    spg = tool_context.invocation_state.get("spg")
-    formula = tool_context.invocation_state.get("formula")
-    cells = tool_context.invocation_state.get("cells")
-    composition = tool_context.invocation_state.get("composition")
-    density_min = tool_context.invocation_state.get("density_min")
-    density_max = tool_context.invocation_state.get("density_max")
-    wavelength = tool_context.invocation_state.get("wavelength")
-    pxrd_csv = tool_context.invocation_state.get("pxrd_csv")
-    INST_FILE = tool_context.invocation_state.get("INST_FILE")
-    thetas = tool_context.invocation_state.get("thetas")
-    resolution = tool_context.invocation_state.get("resolution")
-    SCALED_INTENSITY_TOL = tool_context.invocation_state.get("SCALED_INTENSITY_TOL")
-    ref_den = (density_min, density_max)
-    x1 = np.array(tool_context.invocation_state.get("x1"))
-    y1 = np.array(tool_context.invocation_state.get("y1"))
-    peaks = np.array(tool_context.invocation_state.get("peaks"))
-    min_r2 = tool_context.invocation_state.get("min_r2")
-    max_chi2 = tool_context.invocation_state.get("max_chi2")
-    max_force = tool_context.invocation_state.get("max_force")
-    max_stress = tool_context.invocation_state.get("max_stress")
+INPUT_PROMPT = "Process the PXRD data from Examples/PXRD_PrYMg2_123.csv"
 
-    # ===== Step 3: Try all cells/WP/xtal options for a maximum of N1 * N2 * (3*N3 + 1)
+
+def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
+    formula = pxrd_csv.split('_')[1]
+    spg = int(pxrd_csv.split('_')[2].split('.')[0])
+    composition = parse_formula(formula)
+
+    df = pd.read_csv(pxrd_csv, comment='#')
+    x1 = df.iloc[:, 0].values
+    y1 = df.iloc[:, 1].values
+    data = RawDataManager(x1, y1, bg_subtract=False)
+    data.get_peaks_from_scipy()
+    data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
+    peaks = data.peaks
+    peak_positions = x1[peaks]
+
+    min_abc = 2.0
+    wavelength = 1.54184
+    density = predict_density_ensemble(formula, sigma=2.5)
+    density_min = float(density['min'])
+    density_max = float(density['max'])
+    min_volume = float(get_volume_from_density(composition, density['max']))
+
+    result = {
+        "spg": int(spg),
+        "formula": formula,
+        "x1": x1.tolist(),
+        "y1": y1.tolist(),
+        "peaks": peaks.tolist(),
+        "peak_positions": peak_positions.tolist(),
+        "composition": composition,
+        "density_min": density_min,
+        "density_max": density_max,
+        "min_volume": min_volume,
+        "min_abc": min_abc,
+        "wavelength": wavelength,
+    }
+    state.update(result)
+    return result
+
+
+def _run_cell_solver_stage(state: dict) -> dict:
+    spg = state.get("spg")
+    formula = state.get("formula")
+    peak_positions = state.get("peak_positions")
+    max_cells = state.get("max_cells")
+
+    peak_positions_np = np.array(peak_positions)
+    solver = CellSolver(
+        spg,
+        peak_positions_np,
+        max_mismatch=12,
+        hkl_max=(2, 5, 6),
+        max_square=28,
+        total_square=40,
+        theta_tols=[0.1, 0.15, 0.5],
+        verbose=False,
+    )
+    solutions = solver.solve()
+    sols = [
+        (spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
+        for sol in solutions
+    ]
+    cells = CellManager.consolidate(sols, max_solutions=max_cells, merge_tol=0.05)
+
+    state["cells"] = cells
+    text = f"Cell solving completed for formula {formula} in space group {spg}.\n"
+    return {
+        "status": "success",
+        "message": text,
+        "cells": [{"dimensions": cell.dims, "missing_peaks": cell.missing} for cell in cells],
+    }
+
+
+def _run_wyckoff_solver_stage(state: dict) -> str:
+    spg = state.get("spg")
+    formula = state.get("formula")
+    cells = state.get("cells")
+    composition = state.get("composition")
+    density_min = state.get("density_min")
+    density_max = state.get("density_max")
+    wavelength = state.get("wavelength")
+    pxrd_csv = state.get("pxrd_csv")
+    INST_FILE = state.get("INST_FILE")
+    thetas = state.get("thetas")
+    resolution = state.get("resolution")
+    SCALED_INTENSITY_TOL = state.get("SCALED_INTENSITY_TOL")
+    ref_den = (density_min, density_max)
+    x1 = np.array(state.get("x1"))
+    y1 = np.array(state.get("y1"))
+    peaks = np.array(state.get("peaks"))
+    min_r2 = state.get("min_r2")
+    max_chi2 = state.get("max_chi2")
+    max_force = state.get("max_force")
+    max_stress = state.get("max_stress")
+
     N1, N2, N3 = 5, 20, 9
     eng_min, sim_max = 1e10, 0.90
 
     title = f'{formula} PXRD Prediction: Space Group {spg}'
     match_png = f"Results/Match_{formula}_{spg}.png"
     match_cif = f'Results/Match_{formula}_{spg}.cif'
-    (wr, r2, chi2, xtal, _) = search_solution(cells[:N1], spg, composition,
-                            ref_den, title, match_png, match_cif, pxrd_csv,
-                            peaks, x1, y1, eng_min, sim_max, N1, N2, N3, 
-                            max_force, max_stress, wavelength, thetas, resolution,
-                            SCALED_INTENSITY_TOL, INST_FILE, logger, min_r2, max_chi2)
+    (wr, r2, chi2, xtal, _) = search_solution(
+        cells[:N1],
+        spg,
+        composition,
+        ref_den,
+        title,
+        match_png,
+        match_cif,
+        pxrd_csv,
+        peaks,
+        x1,
+        y1,
+        eng_min,
+        sim_max,
+        N1,
+        N2,
+        N3,
+        max_force,
+        max_stress,
+        wavelength,
+        thetas,
+        resolution,
+        SCALED_INTENSITY_TOL,
+        INST_FILE,
+        logger,
+        min_r2,
+        max_chi2,
+    )
+
     if wr is None:
         logger.info("No satisfactory solution found.")
     else:
@@ -144,88 +245,87 @@ def WyckoffSolverTool(tool_context: ToolContext) -> str:
         text += "No satisfactory solution found.\n"
     return text
 
-@tool(context=True)
-def CellSolverTool(tool_context: ToolContext) -> str:
-    spg = tool_context.invocation_state.get("spg")
-    formula = tool_context.invocation_state.get("formula")
-    peak_positions = tool_context.invocation_state.get("peak_positions")
-    max_cells = tool_context.invocation_state.get("max_cells")
-    peak_positions_np = np.array(peak_positions)
-    solver = CellSolver(spg, peak_positions_np,
-                        max_mismatch=12,
-                        hkl_max=(2, 5, 6),
-                        max_square=28,
-                        total_square=40,
-                        theta_tols=[0.1, 0.15, 0.5],
-                        verbose=False)
-    solutions = solver.solve()
-    sols = [(spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match']) for sol in solutions]
-    cells = CellManager.consolidate(sols,
-                                    max_solutions=max_cells,
-                                    merge_tol=0.05)
 
-    # Implement the cell solving logic here using the above parameters
-    text = f"Cell solving completed for formula {formula} in space group {spg}.\n"
-    tool_context.invocation_state["cells"] = cells
-    cells_list = tool_context.invocation_state.get("cells")
+def _is_strands_gemini_stream_bug(error: BaseException) -> bool:
+    error_text = f"{error}\n{traceback.format_exc()}"
+    return (
+        "strands/models/gemini.py" in error_text
+        and "candidate" in error_text
+        and "UnboundLocalError" in error_text
+    )
+
+
+def _get_strands_version() -> str:
+    try:
+        return pkg_version("strands")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _has_known_gemini_stream_candidate_bug() -> bool:
+    try:
+        src = inspect.getsource(GeminiModel.stream)
+    except Exception:
+        return False
+    vulnerable_finish_reason_line = "candidate.finish_reason if candidate else \"STOP\""
+    has_guard_initialization = "candidate = None" in src
+    return vulnerable_finish_reason_line in src and not has_guard_initialization
+
+
+def _startup_runtime_mode() -> tuple[bool, str]:
+    strands_version = _get_strands_version()
+    force_fallback_raw = os.getenv("STRANDS_FORCE_FALLBACK", "0")
+    allow_graph_raw = os.getenv("STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG", "0")
+    env_force_fallback = force_fallback_raw == "1"
+    env_allow_graph = allow_graph_raw == "1"
+    has_known_bug = _has_known_gemini_stream_candidate_bug()
+
+    if has_known_bug:
+        logger.warning(
+            "Detected known Strands Gemini streaming candidate bug in installed package "
+            f"(strands=={strands_version}). "
+            "Graph execution may crash; fallback mode is recommended."
+        )
+
+    use_fallback = env_force_fallback or (has_known_bug and not env_allow_graph)
+    mode = "fallback" if use_fallback else "graph"
+    print(
+        "Startup flags: "
+        f"STRANDS_FORCE_FALLBACK={force_fallback_raw}, "
+        f"STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG={allow_graph_raw}"
+    )
+    logger.info(
+        f"Runtime mode: {mode} (strands=={strands_version}, "
+        f"known_gemini_stream_bug={has_known_bug}, "
+        f"STRANDS_FORCE_FALLBACK={env_force_fallback}, "
+        f"STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG={env_allow_graph})"
+    )
+    return use_fallback, strands_version
+
+
+def _run_pipeline_fallback(state: dict) -> dict:
+    logger.info("Detected Strands Gemini streaming bug; switching to deterministic fallback pipeline.")
+    _run_data_preprocessor_stage(state["pxrd_csv"], state)
+    _run_cell_solver_stage(state)
+    wyckoff_message = _run_wyckoff_solver_stage(state)
     return {
-        "status": "success",
-        "message": text,
-        "cells": [
-            {"dimensions": cell.dims,
-            "missing_peaks": cell.missing
-            } for cell in cells_list
-        ]
+        "status": "fallback_success",
+        "message": wyckoff_message,
+        "spg": state.get("spg"),
+        "formula": state.get("formula"),
     }
 
 @tool(context=True)
-def DataPreprocessor(pxrd_csv: str, tool_context: ToolContext) -> str:
-    formula = pxrd_csv.split('_')[1]
-    spg = int(pxrd_csv.split('_')[2].split('.')[0])
-    composition = parse_formula(formula)
+def WyckoffSolverTool(tool_context: ToolContext) -> str:
+    return _run_wyckoff_solver_stage(tool_context.invocation_state)
 
-    # ===== Step 1: Process Data to get the peaks
-    df = pd.read_csv(pxrd_csv, comment='#')
-    x1 = df.iloc[:, 0].values
-    y1 = df.iloc[:, 1].values
-    data = RawDataManager(x1, y1, bg_subtract=False)
-    data.get_peaks_from_scipy()
-    data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
-    peaks = data.peaks
-    peak_positions = x1[peaks]
+@tool(context=True)
+def CellSolverTool(tool_context: ToolContext) -> dict:
+    return _run_cell_solver_stage(tool_context.invocation_state)
 
-    # Composition related properties for the additional constraints
-    min_abc = 2.0
-    wavelength = 1.54184
-    density = predict_density_ensemble(formula, sigma=2.5)
-    density_min = float(density['min'])
-    density_max = float(density['max'])
-    min_volume = get_volume_from_density(composition, density['max'])
-    min_volume = float(min_volume)
-    tool_context.invocation_state["spg"] = int(spg)
-    tool_context.invocation_state["formula"] = formula
-    tool_context.invocation_state["x1"] = x1.tolist()
-    tool_context.invocation_state["y1"] = y1.tolist()
-    tool_context.invocation_state["peaks"] = peaks.tolist()
-    tool_context.invocation_state["peak_positions"] = peak_positions.tolist()
-    tool_context.invocation_state["composition"] = composition
-    tool_context.invocation_state["density_min"] = density_min
-    tool_context.invocation_state["density_max"] = density_max
-    tool_context.invocation_state["min_volume"] = min_volume
-    tool_context.invocation_state["min_abc"] = min_abc
-    tool_context.invocation_state["wavelength"] = wavelength
-
-    return {"spg": int(spg),
-            "formula": formula,
-            "x1": x1.tolist(),
-            "y1": y1.tolist(),
-            "peaks": peaks.tolist(),
-            "composition": composition,
-            "density_min": density_min,
-            "density_max": density_max,
-            "min_volume": min_volume,
-            'min_abc': min_abc,
-            "wavelength": wavelength}
+@tool(context=True)
+def DataPreprocessor(pxrd_csv: str, tool_context: ToolContext) -> dict:
+    return _run_data_preprocessor_stage(pxrd_csv, tool_context.invocation_state)
 
 DataPreprocessAgent = Agent(
     model=gemini_model,
@@ -244,13 +344,7 @@ DataPreprocessAgent = Agent(
         "The return format should include status, messages, and all relevant computed parameters."
     )
 )
-prompt = "Process the PXRD data from Examples/PXRD_PrYMg2_123.csv"
-''' 1. DataPreprocessor Agent
-    - read PXRD data from CSV
-    - background subtraction and smoothing
-    - peak detection using scipy
-    - predict density range from composition using ensemble ML model
-'''
+
 CellManagerAgent = Agent(
     model=gemini_model,
     tools=[CellSolverTool],
@@ -348,10 +442,24 @@ builder.add_edge("CellSolverAgent", "WyckoffSolverAgent")
 builder.set_entry_point("DataPreprocessorAgent")
 graph = builder.build()
 
+force_fallback, strands_version = _startup_runtime_mode()
+
 try:
-    result = graph("Process the PXRD data from Examples/PXRD_PrYMg2_123.csv",
-                   invocation_state=share_state)
-    print("Pipeline completed successfully!")
+    if force_fallback:
+        print("Starting pipeline in fallback mode.")
+        result = _run_pipeline_fallback(share_state)
+        print("Pipeline completed successfully via fallback execution!")
+    else:
+        result = graph(INPUT_PROMPT,
+                       invocation_state=share_state)
+        print("Pipeline completed successfully!")
 except KeyboardInterrupt:
     print("Process interrupted by user")
+except Exception as exc:
+    if _is_strands_gemini_stream_bug(exc):
+        print("Strands Gemini streaming error detected; retrying with fallback execution.")
+        result = _run_pipeline_fallback(share_state)
+        print("Pipeline completed successfully via fallback execution!")
+    else:
+        raise
 print("Exiting main thread")

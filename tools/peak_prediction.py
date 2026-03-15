@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+from functools import lru_cache
+from typing import Any, Sequence
 
 # Add peak_finder to path
 peak_path = Path(__file__).parent / "peak_finder"
@@ -17,7 +19,23 @@ from peak_finder.config import Config
 from peak_finder.model import PeakFinderCNN
 from spacegroup.spacegroup_predictor import load_model, predict_from_array
 
-def sliding_window_predict(model, xrd, window_size=51, device='cpu'):
+
+@lru_cache(maxsize=1)
+def _get_peak_model() -> tuple[PeakFinderCNN, int, torch.device]:
+    current_dir = Path(__file__).parent
+    chkpt = str(current_dir / "models" / "peaks" / "best_model.pth")
+    cfg = Config()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = PeakFinderCNN(window_size=cfg.WINDOW_SIZE).to(device)
+    checkpoint = torch.load(chkpt, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    return model, cfg.WINDOW_SIZE, device
+
+def sliding_window_predict(model: torch.nn.Module,
+                           xrd: np.ndarray,
+                           window_size: int = 51,
+                           device: str | torch.device = 'cpu') -> np.ndarray:
     """
     Predict peak probabilities for the whole XRD using a sliding window.
 
@@ -53,7 +71,8 @@ def sliding_window_predict(model, xrd, window_size=51, device='cpu'):
 
     return predictions
 
-def predict_spacegroup(xrd, formula, top_k=10, use_normalization=False):
+def predict_spacegroup(xrd: Sequence[float], formula: str,
+                       top_k: int = 10, use_normalization: bool = False) -> Any:
     """
     Predict space groups from the given intensity array using the provided model.
     """
@@ -65,28 +84,22 @@ def predict_spacegroup(xrd, formula, top_k=10, use_normalization=False):
     predictions = predict_from_array(model, xrd, formula, top_k=top_k, use_normalization = use_normalization)
     return predictions
 
-def _predict_peaks(xrd):
+def _predict_peaks(xrd: np.ndarray) -> np.ndarray:
     """
     Predict peaks in the given intensity array using the provided model.
     """
-    current_dir = Path(__file__).parent
-    chkpt = str(current_dir / "models" / "peaks" / "best_model.pth")
     # the new peak_finder checkpoint can be found at https://github.com/qzhu2017/PXRD-GPT/tree/strands-multiagent/get_stat_3500/spacegroup_peak_scale_mask_GSAS_withcleandata_nonoise_20260205_023156
 
-    # Load model
-    cfg = Config()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = PeakFinderCNN(window_size=cfg.WINDOW_SIZE).to(device)
-    checkpoint = torch.load(chkpt, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model, window_size, device = _get_peak_model()
     predictions = sliding_window_predict(
         model, xrd,
-        window_size=cfg.WINDOW_SIZE,
+        window_size=window_size,
         device=device
     )
     return predictions
 
-def predict_peaks(xrd, threshold=0.5, min_height=5.0):
+def predict_peaks(xrd: np.ndarray, threshold: float = 0.5,
+                  min_height: float = 5.0) -> list[tuple[int, float]]:
     """
     Predict peaks in the given intensity array using the provided model.
     """
@@ -120,7 +133,7 @@ def predict_peaks(xrd, threshold=0.5, min_height=5.0):
 
     return filtered_candidates
 
-def _infer_formula_spg(path: Path):
+def _infer_formula_spg(path: Path) -> tuple[str | None, int | None]:
     """Infer formula and space group from a file name like PXRD_<formula>_<spg>.csv."""
     tokens = path.stem.split('_')
     formula_guess, spg_guess = None, None

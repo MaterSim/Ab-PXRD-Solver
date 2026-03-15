@@ -2,11 +2,15 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")  # Non-GUI backend
 import re
+from typing import Mapping, Sequence, Any
 from .ase_opt import ASE_relax
 from pymatgen.core.periodic_table import Element
 
 
-def plot_XRD(x_obs, y_obs, x_sim, y_sim, x_peak, y_peak, title, filename):
+def plot_XRD(x_obs: Sequence[float], y_obs: Sequence[float],
+             x_sim: Sequence[float], y_sim: Sequence[float],
+             x_peak: Sequence[float], y_peak: Sequence[float],
+             title: str, filename: str) -> None:
     """
     Plot observed and simulated XRD patterns along with peak positions.
     """
@@ -23,7 +27,7 @@ def plot_XRD(x_obs, y_obs, x_sim, y_sim, x_peak, y_peak, title, filename):
     plt.close()
 
 
-def parse_formula(formula):
+def parse_formula(formula: str) -> dict[str, int]:
     """
     Parse chemical formula string to dictionary of element counts.
 
@@ -44,7 +48,7 @@ def parse_formula(formula):
 
     return result
 
-def get_volume_from_density(composition, density):
+def get_volume_from_density(composition: Mapping[str, int], density: float) -> float:
     """
     Calculate minimum volume from maximum density.
 
@@ -64,16 +68,20 @@ def get_volume_from_density(composition, density):
     min_volume = molecular_weight / density / N_A * 1e24  # in Å³
     return min_volume
 
-def relax_structure(atoms, dof):
+def relax_structure(atoms: Any, dof: int) -> Any | None:
     if dof > 0:
-        atoms = ASE_relax(atoms, opt_lat=False, step=10*dof,
-                            logfile='ase.log')
-        if atoms is None or abs(atoms.get_stress()[:3].mean()) > 5.0:
-            return None
-        atoms = ASE_relax(atoms, opt_lat=False, step=5*dof, fmax=0.1,
-                            logfile='ase.log')
+        atoms = ASE_relax(atoms, opt_lat=False, step=10 * dof, logfile='ase.log')
+        final_step = 5 * dof
+        final_fmax = 0.1
     else:
         atoms = ASE_relax(atoms, opt_lat=False, step=5, logfile='ase.log')
-        if atoms is None or abs(atoms.get_stress()[:3].mean()) > 5.0:
-            return None
+        final_step = None
+        final_fmax = None
+
+    if atoms is None or abs(atoms.get_stress()[:3].mean()) > 5.0:
+        return None
+
+    if final_step is not None:
+        atoms = ASE_relax(atoms, opt_lat=False, step=final_step, fmax=final_fmax,
+                          logfile='ase.log')
     return atoms
