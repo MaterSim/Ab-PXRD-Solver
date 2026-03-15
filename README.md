@@ -4,12 +4,12 @@
 
 PXRD-Agent is an agentic pipeline that automates the *ab initio* crystal structure determination workflow from experimental Powder X-Ray Diffraction (PXRD) data. Given a measured diffraction pattern and the chemical formula of the material, the system autonomously:
 
-1. Preprocesses and cleans the raw diffraction pattern
-2. Predicts a physical density range using a pretrained machine learning ensemble
-3. Indexes the peaks to candidate unit cells
-4. Samples Wyckoff position combinations and generates trial crystal structures
-5. Relaxes structures with a neural-network force field
-6. Matches simulated patterns against the experiment and refines promising solutions with Rietveld refinement
+1. Preprocesses and cleans the raw diffraction pattern to get peaks and space group symmetry (a pretrained CNN model)
+2. Predicts a physical density range from the given chemical formula (a pretrained ML ensemble model).
+3. Indexes the peaks to candidate unit cells (tools.solver)
+4. Samples Wyckoff position combinations and generates trial crystal structures (`PyXtal` or others)
+5. Relaxes structures with a neural-network force field (Foundational `MACE-MLFF`)
+6. Matches simulated patterns against the experiment and refines promising solutions with Rietveld refinement (`GSAS2` utility)
 
 The pipeline is implemented with the [Strands](https://github.com/strands-agents/sdk-python) agentic framework and uses a **Gemini 2.5 Pro** LLM as the reasoning backbone for each specialist agent.
 
