@@ -1,4 +1,4 @@
-# PXRD-Agent: Automated Crystal Structure Determination from Powder X-Ray Diffraction
+# PXRD-Agent: Automated Crystal Determination from Powder X-Ray Diffraction
 
 ## Overview
 
@@ -27,6 +27,51 @@ The pipeline follows a **linear directed acyclic graph (DAG)** of three speciali
 ```
 
 All three agents share a single mutable `invocation_state` dictionary (`share_state`) that carries every intermediate result from one stage to the next without re-serialising through the LLM context.
+
+### Runtime Robustness (new)
+
+The default execution path is still the Strands graph, but `single_agent.py` now includes a **deterministic fallback pipeline** for runtime reliability:
+
+- It first attempts graph execution.
+- If a known Strands Gemini streaming bug is detected (the `candidate` `UnboundLocalError`), it automatically falls back to sequential stage execution:
+  1. data preprocessing,
+  2. cell solving,
+  3. Wyckoff/structure search.
+
+The script also prints startup runtime-control flags and selected mode for reproducibility.
+
+#### Environment flags
+
+- `STRANDS_FORCE_FALLBACK=1`: always run deterministic fallback mode.
+- `STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=1`: allow graph mode even if vulnerable Strands code is detected.
+
+### Quick Start / Run
+
+Run from the repository root:
+
+```bash
+python single_agent.py
+```
+
+The script prints startup flags, selected runtime mode (`graph` or `fallback`), and progress logs.
+
+#### Force deterministic fallback mode
+
+```bash
+STRANDS_FORCE_FALLBACK=1 python single_agent.py
+```
+
+#### Force graph mode even when known bug signature is detected
+
+```bash
+STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=1 python single_agent.py
+```
+
+#### Optional: show both runtime flags explicitly
+
+```bash
+STRANDS_FORCE_FALLBACK=0 STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=0 python single_agent.py
+```
 
 ### Shared State (`share_state`)
 
@@ -250,6 +295,11 @@ The solver exits **immediately** upon finding any structure meeting the acceptan
 | `Match_<formula>_<spg>.cif` | Best refined crystal structure in CIF format |
 | `Match_<formula>_<spg>.png` | Observed vs. simulated PXRD pattern comparison |
 | `single_agent.log` | Detailed run log with per-peak, per-cell, and per-structure diagnostics |
+
+Notes:
+
+- `Results/` is auto-created if missing.
+- `tmp/` (for GSAS project/log intermediates) is auto-created if missing.
 
 ---
 
