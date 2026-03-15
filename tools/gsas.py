@@ -26,6 +26,9 @@ class RedirectG2Output:
     def __enter__(self):
         self.original_stdout = sys.stdout
         self.original_stderr = sys.stderr
+        log_dir = os.path.dirname(self.log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
         self.file_handle = open(self.log_file, 'a')
         sys.stdout = self.file_handle
         sys.stderr = self.file_handle
@@ -55,6 +58,7 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
         max_counts: Counts scaling for Poisson noise
     """
     # Create project and add phase
+    os.makedirs('tmp', exist_ok=True)
     gpx = G2sc.G2Project(newgpx='tmp/simulation.gpx')
     phase = gpx.add_phase(cif_file, phasename='MyPhase')
 
@@ -134,6 +138,10 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
         R2: Coefficient of determination between observed and calculated
         weighted_chi2: Weighted chi² value
     """
+
+    gpx_dir = os.path.dirname(gpx_name)
+    if gpx_dir:
+        os.makedirs(gpx_dir, exist_ok=True)
 
     with RedirectG2Output(gsas_log):
         # --------------------------------------------------

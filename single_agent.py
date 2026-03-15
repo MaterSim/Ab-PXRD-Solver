@@ -197,6 +197,8 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     N1, N2, N3 = 5, 20, 9
     eng_min, sim_max = 1e10, 0.90
 
+    os.makedirs("Results", exist_ok=True)
+
     title = f'{formula} PXRD Prediction: Space Group {spg}'
     match_png = f"Results/Match_{formula}_{spg}.png"
     match_cif = f'Results/Match_{formula}_{spg}.cif'

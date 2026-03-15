@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")  # Non-GUI backend
 import re
+from pathlib import Path
 from typing import Mapping, Sequence, Any
 from .ase_opt import ASE_relax
 from pymatgen.core.periodic_table import Element
@@ -23,6 +24,8 @@ def plot_XRD(x_obs: Sequence[float], y_obs: Sequence[float],
     plt.xlabel('2θ (degrees)')
     plt.ylabel('Intensity (a.u.)')
     plt.legend()
+    output_path = Path(filename)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(filename, dpi=300)
     plt.close()
 
