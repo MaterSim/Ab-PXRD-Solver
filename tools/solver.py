@@ -1,0 +1,1137 @@
+"""
+Module for PXRD indexing and lattice parameter estimation.
+"""
+import numpy as np
+from itertools import combinations
+from pyxtal.symmetry import Group, get_bravais_lattice, get_lattice_type, generate_possible_hkls
+from .manager import RawDataManager, CellManager, WPManager, XtalManager
+from .utils import plot_XRD, relax_structure
+from .XRD import Similarity, XRD
+from .gsas import refine_pxrd
+
+def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, min_volume):
+    """
+    Calculate cell parameters for a given set of hkls.
+
+    Args:
+        bravais (int): Bravais lattice type (0-13)
+        hkls: list of (h, k, l) tuples
+        two_thetas: list of 2theta values
+        wave_length: X-ray wavelength
+        min_abc: minimum allowed cell parameter value
+        max_abc: maximum allowed cell parameter value
+        min_volume: minimum allowed cell volume
+
+    Returns:
+        cells: list of cell parameters
+        hkls_out: filtered list of hkls corresponding to cells
+    """
+    hkls = np.array(hkls)
+    two_thetas = np.array(two_thetas)
+
+    # Convert to d-spacings
+    thetas = np.radians(two_thetas / 2)
+    d_spacings = wave_length / (2 * np.sin(thetas))
+
+    cells = []
+    ltype = get_lattice_type(bravais)
+    if ltype == 6:  # cubic, only need a
+        h_sq_sum = np.sum(hkls**2, axis=1)
+        cells = d_spacings * np.sqrt(h_sq_sum)
+        vols = cells ** 3
+        mask = (cells < max_abc) & (cells > min_abc) & (vols > min_volume)
+        cells = cells[mask]
+        cells = np.reshape(cells, [len(cells), 1])
+        hkls_out = hkls[mask]
+
+    elif ltype == 5:  #  hexagonal, need a and c
+        # need two hkls to determine a and c
+        len_solutions = len(hkls) // 2
+        ds = (2 * np.sin(thetas) / wave_length)**2
+        A = np.zeros([len(hkls), 2])
+        A[:, 0] = 4/3 * (hkls[:, 0] ** 2 + hkls[:, 0] * hkls[:, 1] + hkls[:, 1] ** 2)
+        A[:, 1] = hkls[:, 2] ** 2
+        B = np.reshape(ds, [len_solutions, 2])
+        A = np.reshape(A, [len_solutions, 2, 2])#; print(A.shape, B.shape)
+        xs = np.linalg.solve(A, B)#; print(xs); import sys; sys.exit()
+        mask1 = np.all(xs[:, :] > 0, axis=1)
+        hkls_out = np.reshape(hkls, (len_solutions, 6))
+        hkls_out = hkls_out[mask1]
+        xs = xs[mask1]
+        cells = np.sqrt(1/xs)
+        vols = (np.sqrt(3)/2) * cells[:, 0]**2 * cells[:, 1]
+        mask2 = (cells[:, 0] < max_abc) & (cells[:, 0] > min_abc) & (vols > min_volume)
+        cells = cells[mask2]
+        hkls_out = hkls_out[mask2]
+
+    elif ltype == 4:  # tetragonal, need a and c
+        # need two hkls to determine a and c
+        len_solutions = len(hkls) // 2
+        ds = (2 * np.sin(thetas) / wave_length)**2
+        A = np.zeros([len(hkls), 2])
+        A[:, 0] = hkls[:, 0] ** 2 + hkls[:, 1] ** 2
+        A[:, 1] = hkls[:, 2] ** 2
+        B = np.reshape(ds, [len_solutions, 2])
+        A = np.reshape(A, [len_solutions, 2, 2])#; print(A.shape, B.shape)
+        xs = np.linalg.solve(A, B)#; print(xs); import sys; sys.exit()
+        mask1 = np.all(xs[:, :] > 0, axis=1)
+        hkls_out = np.reshape(hkls, (len_solutions, 6))
+        hkls_out = hkls_out[mask1]
+        xs = xs[mask1]
+        cells = np.sqrt(1/xs)
+        vols = cells[:, 0]**2 * cells[:, 1]
+        mask2 = np.all((cells[:, :2] < max_abc) & (cells[:, :2] > min_abc), axis=1) & (vols > min_volume)
+        cells = cells[mask2]
+        hkls_out = hkls_out[mask2]
+
+    elif ltype == 3:  # orthorhombic, need a, b, c
+        # need three hkls to determine a, b, c
+        len_solutions = len(hkls) // 3
+        ds = (2 * np.sin(thetas) / wave_length)**2
+        A = np.zeros([len(hkls), 3])
+        A[:, 0] = hkls[:, 0] ** 2
+        A[:, 1] = hkls[:, 1] ** 2
+        A[:, 2] = hkls[:, 2] ** 2
+        B = np.reshape(ds, [len_solutions, 3])
+        A = np.reshape(A, [len_solutions, 3, 3])
+        xs = np.linalg.solve(A, B)#; print(xs); import sys; sys.exit()
+        mask1 = np.all(xs[:, :] > 0, axis=1)
+        hkls_out = np.reshape(hkls, (len_solutions, 9))
+        hkls_out = hkls_out[mask1]
+        xs = xs[mask1]
+        cells = np.sqrt(1/xs)
+        vols = cells[:, 0] * cells[:, 1] * cells[:, 2]
+        mask2 = np.all((cells[:, :3] < max_abc) & (cells[:, :3] > min_abc), axis=1) & (vols > min_volume)
+        cells = cells[mask2]
+        hkls_out = hkls_out[mask2]
+
+    elif ltype == 2:  # monoclinic, need a, b, c, beta
+        # need four hkls to determine a, b, c, beta
+        len_solutions = len(hkls) // 4
+        thetas = np.radians(two_thetas/2)
+        ds = (2 * np.sin(thetas) / wave_length)**2
+        # hkls (4*N, 3) A=> N, 4, 4
+        A = np.zeros([len(hkls), 4])
+        A[:, 0] = hkls[:, 0] ** 2
+        A[:, 1] = hkls[:, 1] ** 2
+        A[:, 2] = hkls[:, 2] ** 2
+        A[:, 3] = hkls[:, 0] * hkls[:, 2]
+        B = np.reshape(ds, [len_solutions, 4])
+        A = np.reshape(A, [len_solutions, 4, 4])#; print(A.shape, B.shape)
+        xs = np.linalg.solve(A, B)#; print(xs); import sys; sys.exit()
+        mask1 = np.all(xs[:, :3] > 0, axis=1)
+        hkls_out = np.reshape(hkls, (len_solutions, 12))#;print(hkls.shape, mask1.shape, A.shape)
+        hkls_out = hkls_out[mask1]
+        xs = xs[mask1]
+
+        cos_betas = -xs[:, 3] / (2 * np.sqrt(xs[:, 0] * xs[:, 2]))
+        masks = np.abs(cos_betas) <= 1/np.sqrt(2)
+        xs = xs[masks]
+        hkls_out = hkls_out[masks]
+
+        cos_betas = cos_betas[masks]
+        sin_betas = np.sqrt(1 - cos_betas ** 2)
+        cells = np.zeros([len(xs), 4])
+        cells[:, 1] = np.sqrt(1/xs[:, 1])
+        cells[:, 3] = np.degrees(np.arccos(cos_betas))
+        cells[:, 0] = np.sqrt(1/xs[:, 0]) / sin_betas
+        cells[:, 2] = np.sqrt(1/xs[:, 2]) / sin_betas
+
+        # force angle to be less than 90
+        #mask = cells[:, 3] > 90.0
+        #cells[mask, 3] = 180.0 - cells[mask, 3]
+        vols = cells[:, 0] * cells[:, 1] * cells[:, 2] * np.sin(np.radians(cells[:, 3]))
+        mask2 = np.all((cells[:, :3] < max_abc) & (cells[:, :3] > min_abc), axis=1) & (vols > min_volume)
+        cells = cells[mask2]
+        hkls_out = hkls_out[mask2]
+    else:
+        msg = "Only cubic, tetragonal, hexagonal, and orthorhombic systems are supported."
+        raise NotImplementedError(msg)
+
+    return cells, hkls_out
+
+def get_d_hkl_from_cell(bravais, cells, h, k, l):
+    """
+    Estimate the maximum hkl indices to consider based on the cell parameters and maximum 2theta.
+
+    Args:
+        bravais (int): Bravais lattice type (1-15)
+        cells: cell parameters
+        h: h index
+        k: k index
+        l: l index
+
+    Returns:
+        d: d-spacing values
+    """
+    ltype = get_lattice_type(bravais)
+    if ltype == 6:  # cubic
+        d = cells[:, 0] / np.sqrt(h**2 + k**2 + l**2)
+    elif ltype == 5:  # hexagonal
+        a, c = cells[:, 0], cells[:, 1]
+        d = 1 / np.sqrt((4/3) * (h**2 + h*k + k**2) / a**2 + l**2 / c**2)
+    elif ltype == 4:  # tetragonal
+        a, c = cells[:, 0], cells[:, 1]
+        d = 1 / np.sqrt((h**2 + k**2) / a**2 + l**2 / c**2)
+    elif ltype == 3:  # orthorhombic
+        a, b, c = cells[:, 0], cells[:, 1], cells[:, 2]
+        d = 1 / np.sqrt(h**2 / a**2 + k**2 / b**2 + l**2 / c**2)
+    elif ltype == 2:  # monoclinic
+        a, b, c, beta = cells[:, 0], cells[:, 1], cells[:, 2], np.radians(cells[:, 3])
+        sin_beta = np.sin(beta)
+        d = 1 / np.sqrt((h**2 / (a**2 * sin_beta**2)) + (k**2 / b**2) + (l**2 / (c**2 * sin_beta**2)) -
+                (2 * h * l * np.cos(beta) / (a * c * sin_beta**2)))
+    else:
+        raise NotImplementedError("triclinic systems are not supported.")
+    return d
+
+def get_two_theta_from_cell(bravais, hkls, cell, wave_length=1.54184, check_unique=True):
+    """
+    Calculate expected 2theta values from hkls and cell parameters.
+
+    Args:
+        bravais (int): Bravais lattice type (1-15)
+        hkls: hkl indices (np.array)
+        cell: cell parameters
+        wave_length: X-ray wavelength, default is Cu K-alpha
+        check_unique: whether to filter unique 2theta values
+
+    Returns:
+        two_thetas: calculated 2theta values
+        hkls_out: filtered hkls corresponding to two_thetas
+    """
+    h, k, l = hkls[:, 0], hkls[:, 1], hkls[:, 2]
+    ltype = get_lattice_type(bravais)
+    if ltype == 6:  # cubic
+        a = cell[0]
+        d = a / np.sqrt(h**2 + k**2 + l**2)#; print('ddddd', d)
+    elif ltype == 5:  # hexagonal
+        a, c = cell[0], cell[1]
+        d = 1 / np.sqrt((4/3) * (h**2 + h*k + k**2) / a**2 + l**2 / c**2)
+    elif ltype == 4:  # tetragonal
+        a, c = cell[0], cell[1]
+        d = 1 / np.sqrt((h**2 + k**2) / a**2 + l**2 / c**2)
+    elif ltype == 3:  # orthorhombic
+        a, b, c = cell[0], cell[1], cell[2]
+        d = 1 / np.sqrt(h**2 / a**2 + k**2 / b**2 + l**2 / c**2)
+    elif ltype == 2:  # monoclinic
+        a, b, c, beta = cell[0], cell[1], cell[2], np.radians(cell[3])
+        sin = np.sin(beta)
+        cos = np.cos(beta)
+        d = 1 / np.sqrt((h**2 / (a**2 * sin**2)) + (k**2 / b**2) + (l**2 / (c**2 * sin**2)) -
+                (2 * h * l * cos / (a * c * sin**2)))
+    else:
+        raise NotImplementedError("triclinic systems are not supported.")
+
+    # Handle cases where sin_theta > 1
+    sin_theta = wave_length / (2 * d)
+    valid = sin_theta <= 1#; print(d[~valid]); import sys; sys.exit()
+    two_thetas = 2 * np.degrees(np.arcsin(sin_theta[valid]))
+    two_thetas = np.round(two_thetas, decimals=3)
+    if check_unique:
+        two_thetas, ids = np.unique(two_thetas, return_index=True)
+        return two_thetas, hkls[valid][ids]
+    else:
+        return two_thetas, hkls[valid]
+
+class CellSolver:
+    def __init__(self, spg, thetas, bra=None, N_add=5, max_mismatch=20, theta_tols=[0.1, 0.15, 0.5],
+                 cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
+                 total_square=50, min_abc=2.0, max_abc=30.0,
+                 min_angle=30.0, max_angle=150.0, min_volume=20.0, max_chi2=0.5,
+                 N_batch=20, wave_length=1.54184, max_guess=50000, verbose=False):
+        """
+        PXRD Cell Solver from the given spg and 2theta values.
+        The algorithm is based on generating possible hkl combinations
+        and solving the cell parameters using Bragg's law under the space group constraints.
+        Only hkl combinations that are allowed in the space group are considered.
+
+        Args:
+            spg (int): space group number (1-230)
+            thetas: list of 2theta values
+            bra: bravais lattice type (optional, can be inferred from spg)
+            N_add: number of extra peaks to consider beyond the number of hkls
+            max_mismatch: maximum number of mismatched peaks allowed
+            theta_tols: list of tolerances for matching 2theta values, default is [0.1, 0.15, 0.5] degrees
+            cell_tol: tolerance for considering two cells as the same, default is 0.25
+            max_square: maximum square of individual hkl indices
+            total_square: maximum total square of hkl indices
+            min_abc: minimum a, b, c values
+            max_abc: maximum a, b, c values
+            min_angle: minimum angle (for monoclinic)
+            max_angle: maximum angle (for monoclinic)
+            min_volume: minimum cell volume
+            max_chi2: maximum chi2 value for peak matching
+            hkl_max: maximum h, k, l indices to consider
+            N_batch: batch size for processing guesses
+            wave_length: X-ray wavelength (default Cu Kα = 1.54184 Å)
+            max_guess: maximum number of cell guesses to evaluate
+            verbose: whether to print verbose output
+        """
+        if bra is None:
+            self.spg = spg
+            self.bravais = get_bravais_lattice(spg)
+            self.group = Group(self.spg)
+            self.trial_hkls = np.array(self.group.generate_possible_hkls(50, 50, 50, 2500))
+        else:
+            self.spg = None
+            self.bravais = bra
+            self.trial_hkls = generate_possible_hkls(self.bravais, 50, 50, 50, 2500)
+        self.thetas = thetas
+        self.N_add = N_add
+        self.max_mismatch = max_mismatch
+        self.theta_tols = theta_tols
+        self.cell_tol = cell_tol
+        self.hkl_max = hkl_max
+        self.max_square = max_square
+        self.total_square = total_square
+        self.min_abc = min_abc
+        self.max_abc = max_abc
+        self.min_angle = min_angle
+        self.max_angle = max_angle
+        self.min_volume = min_volume
+        self.max_chi2 = max_chi2
+        self.N_batch = N_batch
+        self.wave_length = wave_length
+        self.verbose = verbose
+        if self.bravais > 3:
+            self.max_mismatch_hkl = 3
+        else:
+            self.max_mismatch_hkl = 2
+        self.max_guess = max_guess
+
+
+    def get_cell_from_multi_hkls(self, hkls, thetas):
+        """
+        Estimate the cell parameters from multiple (hkl, two_theta) inputs.
+        The idea is to use the Bragg's law to estimate the lattice parameters.
+        We need to run multiple trials and select the best one.
+
+        Args:
+            hkls: list of (h, k, l) tuples
+            thetas: list of 2theta values
+
+        Returns:
+            solutions: list of solutions
+        """
+        cells, hkls = get_cell_params(self.bravais, hkls, thetas,
+                                      self.wave_length,
+                                      self.min_abc,
+                                      self.max_abc,
+                                      self.min_volume)
+
+        if len(cells) == 0: return []
+        # keep cells up to 4 decimal places
+        if self.bravais <= 3:
+            cells[:, -1] = np.round(cells[:, -1], decimals=2)
+            cells[:, :3] = np.round(cells[:, :3], decimals=4)
+        elif self.bravais > 12:
+            cells = np.round(cells, decimals=5)
+
+        _, unique_ids = np.unique(cells, axis=0, return_index=True)
+        hkls = hkls[unique_ids]#; print(cells)  # remove duplicates
+        cells = cells[unique_ids]
+
+        # get the maximum h from assuming the cell[-1] is (h00)
+        d_100s = get_d_hkl_from_cell(self.bravais, cells, 1, 0, 0)
+        d_010s = get_d_hkl_from_cell(self.bravais, cells, 0, 1, 0)
+        d_001s = get_d_hkl_from_cell(self.bravais, cells, 0, 0, 1)
+        theta_100s = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_100s)))
+        theta_010s = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_010s)))
+        theta_001s = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_001s)))
+        h_maxs = np.array(self.thetas[-1] / theta_100s, dtype=int); h_maxs[h_maxs > 100] = 100
+        k_maxs = np.array(self.thetas[-1] / theta_010s, dtype=int); k_maxs[k_maxs > 100] = 100
+        l_maxs = np.array(self.thetas[-1] / theta_001s, dtype=int); l_maxs[l_maxs > 100] = 100
+
+        solutions = []
+        for i, cell in enumerate(cells):
+            if len(cell) == 4 and cell[3] > 90: cell[3] = 180 - cell[3]
+            sol, _ = self.validate_cell(cell, self.trial_hkls, hkls[i], h_maxs[i], k_maxs[i], l_maxs[i])
+            if sol is not None:
+                solutions.append(sol)
+        return solutions
+
+    def get_paras_from_cell(self, cell):
+        """
+        Get the cell parameters in a consistent format.
+
+        Args:
+            cell: cell parameters in the format of [a, b, c] or [a, b, c, alpha, beta, gamma]
+
+        Returns:
+            paras: cell parameters in the format of [a, b, c, alpha, beta, gamma]
+        """
+        # get the maximum h from assuming the cell[-1] is (h00)
+        cell = np.reshape(cell, [1, -1])
+        d_100 = get_d_hkl_from_cell(self.bravais, cell, 1, 0, 0)[0]
+        d_010 = get_d_hkl_from_cell(self.bravais, cell, 0, 1, 0)[0]
+        d_001 = get_d_hkl_from_cell(self.bravais, cell, 0, 0, 1)[0]
+        theta_100 = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_100)))
+        theta_010 = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_010)))
+        theta_001 = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_001)))
+        h_max = self.thetas[-1] // theta_100
+        k_max = self.thetas[-1] // theta_010
+        l_max = self.thetas[-1] // theta_001
+        return h_max, k_max, l_max
+
+    def validate_cell(self, cell, trial_hkls=None, hkl=None, h_max=None, k_max=None, l_max=None):
+        """
+        Validate the cell parameters by comparing the expected 2theta values with the observed ones.
+
+        Args:
+            cell: cell parameters to validate
+            trial_hkls: list of hkls to consider for this cell
+            hkl: the original hkl used to generate the cell (for reference)
+            h_max, k_max, l_max: maximum h, k, l indices to consider based on the cell parameters
+
+        Returns:
+            solution: dict containing the cell parameters, (mis)matched peaks and chi2
+            remark: any remark or reason for rejection (if applicable)
+        """
+        #print("Testing cell:", cell)
+        cell_str = ", ".join([f"{c:.4f}" for c in cell])
+        if trial_hkls is None: trial_hkls = self.trial_hkls
+        if h_max is None: h_max, k_max, l_max = self.get_paras_from_cell(cell)
+        if cell[:3].min() <= self.min_abc or cell[:3].max() >= self.max_abc:
+            return None, f"Rejected cell due to abc parameters out of range: {cell_str}"
+        if self.bravais == 3 and (cell[3] < self.min_angle or cell[3] > self.max_angle):
+            return None, f"Rejected cell due to angle parameters out of range: {cell_str}"
+
+        mask = (np.abs(trial_hkls[:,0]) <= h_max) & (np.abs(trial_hkls[:,1]) <= k_max) & (np.abs(trial_hkls[:,2]) <= l_max)
+        test_hkls = trial_hkls[mask]
+        exp_thetas, exp_hkls = get_two_theta_from_cell(self.bravais, test_hkls, cell, self.wave_length)
+        #print("Generated", len(exp_thetas), "peaks for cell", cell)
+        if len(exp_thetas) == 0:
+            msg = f"Rejected cell due to no expected peaks within the theta range: {cell_str}"
+            return None, msg
+
+        errors_matrix_raw = self.thetas[:, np.newaxis] - exp_thetas[np.newaxis, :]
+        errors_matrix = np.abs(errors_matrix_raw)
+        within_tolerance = errors_matrix < self.theta_tols[-1]
+        has_obs_match = np.any(within_tolerance, axis=1)
+        ids_matched = np.where(has_obs_match)[0]
+        if len(ids_matched) == len(self.thetas):
+            # Get the obs. peaks
+            matched_peaks = []
+            exp_theta_list = []
+            obs_theta_list = []
+            hkl_ids = []
+            for id in ids_matched:
+                errors = errors_matrix[id]
+                obs_theta = self.thetas[id]
+                hkl_id = np.argsort(errors)
+                # find the first unmatched hkl_id
+                for j in range(len(hkl_id)):
+                    if hkl_id[j] in hkl_ids:
+                        continue
+                    else:
+                        hkl_id = hkl_id[j]
+                        break
+                exp_theta = exp_thetas[hkl_id]
+                matched_peaks.append((exp_hkls[hkl_id], exp_theta, obs_theta))
+                exp_theta_list.append(exp_theta)
+                obs_theta_list.append(obs_theta)
+                hkl_ids.append(hkl_id)
+
+            exp_arr = np.array(exp_theta_list)
+            obs_arr = np.array(obs_theta_list)
+            # Weighted chi² using theta_tol as uncertainty
+            # χ² = Σ[(obs - exp)² / σ²] where σ = theta_tol
+            errs = obs_arr - exp_arr
+            chi2 = np.sum((errs)**2) / (self.theta_tols[-1]**2 * len(obs_arr))
+            half = len(self.thetas) // 2
+            chi2_half = np.sum(errs[:half]**2) / (self.theta_tols[-1]**2 * half)
+            N_50 = len(self.thetas[self.thetas < 50])
+            N_30 = len(self.thetas[self.thetas < 30])
+            max_error = np.abs(errs).max()
+            max_error_50 = np.abs(errs[:N_50]).max() if N_50 > 0 else 0
+            max_error_30 = np.abs(errs[:N_30]).max() if N_30 > 0 else 0
+            if max_error_30 > self.theta_tols[0] or \
+                max_error_50 > self.theta_tols[1] or \
+                max_error > self.theta_tols[2]:
+                msg = f"Rejected cell: {cell_str}, error: {max_error_30:.4f} {max_error_50:.4f} {max_error:.4f}"
+                return None, msg
+
+            if chi2 > self.max_chi2 or chi2_half > max(chi2, 0.01):
+                msg = f"Rejected cell: {cell_str}, chi2: {chi2_half:.4f} {chi2:.4f}"
+                return None, msg
+
+            mis_obs_match = np.any(within_tolerance, axis=0)
+            ids_mis_matched = np.where(~mis_obs_match)[0]
+
+            mis_matched_peaks = []
+            for id in ids_mis_matched:
+                _hkl = exp_hkls[id]
+                theta = exp_thetas[id]
+                #if theta < min(self.thetas[-1], 50) and abs(_hkl).max() <= self.max_mismatch_hkl:
+                if theta < self.thetas[-1] and abs(_hkl).max() <= self.max_mismatch_hkl:
+                    mis_matched_peaks.append((_hkl, theta))
+
+            if len(mis_matched_peaks) <= self.max_mismatch: #and chi2_half < chi2:
+                solution = {
+                    'cell': cell,
+                    'match': matched_peaks,
+                    'mismatch': mis_matched_peaks,
+                    'errors': [max_error_30, max_error_50, max_error],
+                    'chi2': [chi2_half, chi2],
+                    'id': hkl,
+                }
+                return solution, None
+            else:
+                msg = f"Rejected cell: {cell_str}, mismatch {len(mis_matched_peaks)}/{self.max_mismatch}"
+        else:
+            msg = f"Rejected cell: {cell_str}, matched {len(ids_matched)}/{len(self.thetas)} peaks"
+        return None, msg
+
+
+    def validate_cell_loose(self, cell, trial_hkls=None, hkl=None, h_max=None, k_max=None, l_max=None):
+        """
+        Validate the cell parameters by comparing the expected 2theta values with the observed ones.
+        We ignore the restriction of matching all peaks and allow some mismatches
+
+        Args:
+            cell: cell parameters to validate
+            trial_hkls: list of hkls to consider for this cell
+            hkl: the original hkl used to generate the cell (for reference)
+            h_max, k_max, l_max: maximum h, k, l indices to consider based on the cell parameters
+
+        Returns:
+            solution: dict containing the cell parameters, (mis)matched peaks, and chi2
+            remark: any remark or reason for rejection (if applicable)
+        """
+        #print("Testing cell:", cell)
+        cell_str = ", ".join([f"{c:.4f}" for c in cell])
+        if trial_hkls is None: trial_hkls = self.trial_hkls
+        if h_max is None: h_max, k_max, l_max = self.get_paras_from_cell(cell)
+
+        mask = (np.abs(trial_hkls[:,0]) <= h_max) & (np.abs(trial_hkls[:,1]) <= k_max) & (np.abs(trial_hkls[:,2]) <= l_max)
+        test_hkls = trial_hkls[mask]
+        exp_thetas, exp_hkls = get_two_theta_from_cell(self.bravais, test_hkls, cell,
+                                                       self.wave_length, False)
+        #print("Generated", len(exp_thetas), "peaks for cell", cell)
+        msg = ''
+        if len(exp_thetas) == 0:
+            msg += f"Rejected cell due to no expected peaks: {cell_str}"
+
+        errors_matrix_raw = self.thetas[:, np.newaxis] - exp_thetas[np.newaxis, :]
+        errors_matrix = np.abs(errors_matrix_raw)
+        within_tolerance = errors_matrix < self.theta_tols[-1]
+        has_obs_match = np.any(within_tolerance, axis=1)
+        ids_matched = np.where(has_obs_match)[0]
+
+        # Get the obs. peaks
+        if len(ids_matched) < len(self.thetas):
+             msg += f"\nMatched {len(ids_matched)}/{len(self.thetas)} peaks"
+             for id in range(len(self.thetas)):
+                 if id not in ids_matched:
+                     msg += f"{self.thetas[id]:.2f} "
+                     #print(self.thetas[id])
+                     #for e, sim, hkl in zip(errors_matrix_raw[id], exp_thetas, exp_hkls):
+                     #    if hkl[0] **2 + hkl[1] **2 + hkl[2] **2 == 8:
+                     #       print(f"({hkl}, {self.thetas[id]:.2f}, {sim:.2f}, {e:.2f}) ")
+                     #import sys; sys.exit()
+        matched_peaks = []
+        exp_theta_list = []
+        obs_theta_list = []
+        hkl_ids = []
+        for id in ids_matched:
+            errors = errors_matrix[id]
+            obs_theta = self.thetas[id]
+            hkl_id = np.argsort(errors)
+            # find the first unmatched hkl_id
+            for j in range(len(hkl_id)):
+                if hkl_id[j] in hkl_ids:
+                    continue
+                else:
+                    hkl_id = hkl_id[j]
+                    break
+            exp_theta = exp_thetas[hkl_id]
+            matched_peaks.append((exp_hkls[hkl_id], exp_theta, obs_theta))
+            exp_theta_list.append(exp_theta)
+            obs_theta_list.append(obs_theta)
+            hkl_ids.append(hkl_id)
+
+        exp_arr = np.array(exp_theta_list)
+        obs_arr = np.array(obs_theta_list)
+        # Weighted chi² using theta_tol as uncertainty
+        # χ² = Σ[(obs - exp)² / σ²] where σ = theta_tol
+        errs = obs_arr - exp_arr
+        chi2 = np.sum((errs)**2) / (self.theta_tols[-1]**2 * len(obs_arr))
+        half = len(self.thetas) // 2
+        chi2_half = np.sum(errs[:half]**2) / (self.theta_tols[-1]**2 * half)
+        N_50 = len(self.thetas[self.thetas < 50])
+        N_30 = len(self.thetas[self.thetas < 30])
+        max_error = np.abs(errs).max()
+        max_error_50 = np.abs(errs[:N_50]).max() if N_50 > 0 else 0
+        max_error_30 = np.abs(errs[:N_30]).max() if N_30 > 0 else 0
+        if max_error_30 > self.theta_tols[0] or \
+            max_error_50 > self.theta_tols[1] or \
+                max_error > self.theta_tols[2]:
+            msg = f"\nmax error: {max_error_30:.4f} {max_error_50:.4f} {max_error:.4f}"
+
+        if chi2_half > max(chi2, 0.01) or chi2 > self.max_chi2:
+            msg += f"\nLarge chi2: {chi2_half:.4f} {chi2:.4f}"
+
+        mis_obs_match = np.any(within_tolerance, axis=0)
+        ids_mis_matched = np.where(~mis_obs_match)[0]
+
+        mis_matched_peaks = []
+        for id in ids_mis_matched:
+            _hkl = exp_hkls[id]
+            theta = exp_thetas[id]
+            if theta < self.thetas[-1] and abs(_hkl).max() < 3:
+                mis_matched_peaks.append((_hkl, theta))
+
+        if len(mis_matched_peaks) <= self.max_mismatch:
+            msg += f"\nLarge mismatches: {len(mis_matched_peaks)}/{self.max_mismatch}"
+
+        solution = {
+            'cell': cell,
+            'match': matched_peaks,
+            'mismatch': mis_matched_peaks,
+            'chi2': [chi2_half, chi2],
+            'errors': [max_error_30, max_error_50, max_error],
+            'id': hkl,
+            'bravais': self.bravais,
+            'wave_length': self.wave_length,
+        }
+        return solution, msg
+
+    def refine_cell_parameters(self, cell_init, obs_hkls,
+                               max_iterations=100, verbose=False):
+        """
+        Refine unit cell parameters by minimizing chi² between calculated and observed peak positions.
+
+        Args:
+            cell_init: Initial cell parameters [a, b, c] or [a, b, c, α, β, γ]
+            obs_hkls: Array of observed Miller indices corresponding to obs_thetas
+            max_iterations: Max iterations for optimizer
+            verbose: Print refinement progress
+
+        Returns:
+            cell_refined: Optimized cell parameters
+            chi2_final: Final chi² value
+        """
+        from scipy.optimize import minimize
+
+        def objective(cell_params, obs_hkls):
+            N = len(obs_hkls)
+            calc_thetas, _ = get_two_theta_from_cell(self.bravais,
+                                                     obs_hkls,
+                                                     cell_params,
+                                                     self.wave_length,
+                                                     False)
+            chi2 = np.sum((self.thetas[:N] - calc_thetas)**2) / (self.theta_tols[-1]**2 * len(self.thetas))
+
+            return chi2
+
+        # Optimize
+        result = minimize(objective, cell_init, args=(obs_hkls),
+                          method='Nelder-Mead',
+                          options={'maxiter': max_iterations})
+
+        cell_refined = result.x
+        chi2_final = result.fun
+        chi2_half = objective(cell_refined, obs_hkls[:len(obs_hkls)//2])
+
+        if verbose:
+            chi2_init = objective(cell_init, obs_hkls)
+            print(f"Refinement: {cell_init}  {chi2_init:.4f} -> {cell_refined} {chi2_final:.4f}")
+        return cell_refined, chi2_final, chi2_half
+
+    def solve(self, max_solutions=10, max_count=50):
+        """
+        Solve for possible cell parameters based on the provided 2theta values.
+
+        Args:
+            max_solutions: Maximum number of unique cell solutions to return.
+            max_count: Maximum number of solutions with perfect peak matches (i.e., all observed peaks matched) to consider
+
+        Returns:
+            results: list of solution dictionaries containing cell parameters and matched peaks
+        """
+
+        h, k, l = self.hkl_max
+        guesses = self.group.generate_hkl_guesses(h, k, l, max_square=self.max_square,
+                                              total_square=self.total_square,
+                                              verbose=self.verbose)
+        guesses = np.array(guesses)
+        if self.verbose: print("Total guesses:", len(guesses))
+        sum_squares = np.sum(guesses**2, axis=(1,2))
+        sorted_indices = np.argsort(sum_squares)
+        guesses = guesses[sorted_indices]
+        if len(guesses) > self.max_guess:
+            guesses = guesses[:self.max_guess]
+
+        n_peaks = len(guesses[0])
+        N = min([n_peaks + self.N_add, len(self.thetas)])
+        available_peaks = self.thetas[:N]
+
+        thetas = []
+        for peak_combo in combinations(range(N), n_peaks):
+            thetas.extend(available_peaks[list(peak_combo)])
+        N_thetas = len(thetas) // n_peaks
+        thetas = np.array(thetas)
+        thetas = np.tile(thetas, self.N_batch)
+
+        results = []
+        cell_all = []
+
+        for i in range(len(guesses)//self.N_batch + 1):
+            if i == len(guesses)//self.N_batch:
+                N_batch = len(guesses) - self.N_batch * i
+                if N_batch == 0:
+                    break
+                else:
+                    thetas = thetas[:N_thetas * n_peaks * N_batch]
+            hkls_t = np.tile(guesses[self.N_batch*i:self.N_batch*(i+1)], (1, N_thetas, 1))
+            hkls_t = np.reshape(hkls_t, (-1, 3))
+
+            sols = self.get_cell_from_multi_hkls(hkls_t, thetas)
+            count = 0
+            for sol in sols:
+                guess, match, unmatch, chi2 = sol['id'], len(sol['match']), len(sol['mismatch']), sol['chi2'][1]
+                if match == len(self.thetas):
+                    count += 1
+                    cell1 = sol['cell'] #np.sort(np.array(sol['cell']))
+                    vol = self.get_volume_from_cell(cell1)
+                    d2 = np.sum(guess**2)
+                    add = False
+
+                    if len(cell_all) == 0:
+                        add = True
+                    else:
+                        diffs = np.sqrt(np.sum((cell_all - cell1)**2, axis=1))
+                        if len(cell_all[diffs < self.cell_tol]) == 0:
+                            add = True
+                        else:
+                            ids = np.where(diffs < self.cell_tol)[0]
+                            # keep the one with lower chi2
+                            if chi2 < np.array([results[i]['chi2'][1] for i in ids]).min():
+                                # remove the old one
+                                for j in sorted(ids, reverse=True):
+                                    del results[j]
+                                    cell_all = np.delete(cell_all, j, axis=0)
+                                add = True
+                                #if self.verbose:
+                                #    print(f"Found better cell for similar solution, χ²: {chi2:.4f}")
+
+                    if add:
+                        results.append(sol)
+                        if len(cell_all) == 0:
+                            cell_all = np.array([cell1])
+                        else:
+                            cell_all = np.vstack([cell_all, cell1])
+
+                    if self.verbose:
+                        cell1_str = ' '.join([f'{p:6.3f}' for p in cell1]) + f" [{vol:7.1f}]"
+                        guess_str = ' '.join([f'{g:2d}' for g in guess])
+                        strs = f"{guess_str} [{d2:2d}] {cell1_str} {unmatch:2d}/{len(self.thetas):3d} "
+                        strs += f"χ²: {chi2:.4f} "
+                        strs += ' '.join([f"{e:.3f}" for e in sol['errors']])
+                        strs += f" {len(results):3d}/{add}"
+                        print(strs)
+
+                    if len(cell_all) >= max_solutions or count >= max_count:
+                        print(f"Reached maximum number of solutions ({max_solutions}). Stop!")
+                        return results
+
+            if self.verbose and i % 100 == 0:
+                d2 = (guesses[i*self.N_batch]**2).sum()
+                print(f"Processed {i*self.N_batch}/{len(guesses)} guesses, d2={d2}.")
+
+        return results
+
+    def get_volume_from_cell(self, cell):
+        """
+        Calculate the volume of the unit cell based on the cell parameters.
+
+        Args:
+            cell (list): Cell parameters
+
+        Returns:
+            volume (float): Volume of the unit cell
+        """
+        if self.bravais >= 13:
+            volume = cell[0] ** 3
+        elif self.bravais >= 11:
+            volume = cell[0] ** 2 * cell[1] * np.sqrt(3) / 2
+        elif self.bravais >= 9:
+            volume = cell[0] ** 2 * cell[1]
+        elif self.bravais >= 4:
+            volume = cell[0] * cell[1] * cell[2]
+        elif self.bravais >= 2:
+            beta = np.radians(cell[3])
+            volume = cell[0] * cell[1] * cell[2] * np.sin(beta)
+        else:
+            raise NotImplementedError("Triclinic system not supported.")
+        return volume
+
+    def plot_solution(self, solution):
+        """
+        Plot the calculated vs observed PXRD pattern for a given solution.
+
+        Args:
+            solution (dict): Solution dictionary containing cell parameters and matched peaks
+        """
+        import matplotlib.pyplot as plt
+
+        cell = solution['cell']
+        matched_peaks = solution['matched_peaks']
+        hkl_list = [m[0] for m in matched_peaks]
+
+        calc_thetas, _ = get_two_theta_from_cell(self.bravais,
+                                                 np.array(hkl_list),
+                                                 cell,
+                                                 self.wave_length,
+                                                 False)
+
+        plt.figure(figsize=(8, 5))
+        plt.plot(self.thetas, calc_thetas-self.thetas, 'o', alpha=0.3)
+        cell_str = ', '.join([f'{p:.4f}' for p in cell])
+        chi2_str = f"χ²: {solution['chi2'][0]:.4f} {solution['chi2'][1]:.4f}"
+        for i in range(3):
+            plt.bar(self.thetas[i], calc_thetas[i]-self.thetas[i],
+                    label=f'Peak {i+1}: {hkl_list[i]}', width=0.1, alpha=0.5)
+        plt.title(f'Solution Cell: {cell_str}, {chi2_str}')
+        plt.xlabel('Observed 2θ (degrees)')
+        plt.ylabel('Calculated 2θ (degrees)')
+        plt.legend()
+        plt.show()
+
+def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=20, total_square=25,
+                    theta_tols=[0.1, 0.15, 0.5], min_abc=2.0, max_abc=30.0, min_volume=20.0, verbose=False):
+        """
+        A smarter version of CellSolver that automatically guess the space group and uses
+        more intelligent heuristics to generate hkl guesses.
+        1. Check the possible crystal systems using (195, 143, 75, 16, 3) as thresholds for space group numbers.
+        2. Analyze possible A/C/F/I centering based on the presence of certain peaks. For example,
+            - if (001) is present, it's likely not a C-centered lattice.
+            - If (110) is absent but (200) is present, it might indicate a body-centered lattice.
+        3. For each Bravis lattice, loop over all space groups to filter incompatible extinction rules.
+        4. Output feaisble solutions based volume, chi_2 and number of missing calculated peaks.
+
+        Args:
+            thetas: list of observed 2theta values
+            max_mismatch: maximum number of mismatched peaks between observed and calculated peaks
+            hkl_max: maximum h, k, l indices to consider for generating guesses
+            max_chi2: maximum chi² value for peak matching to consider a solution valid
+            max_square: maximum square of individual hkl indices to consider when generating guesses
+            total_square: maximum total square of hkl indices to consider when generating guesses (i.e
+            theta_tol: tolerance for matching 2theta values, default is 0.5 degrees.
+            min_abc: minimum lattice parameter to consider for valid solutions
+            max_abc: maximum lattice parameter to consider for valid solutions
+            min_volume: minimum unit cell volume to consider for valid solutions
+            verbose: whether to print detailed information during the solving process
+
+        Returns:
+            results: list of solution dictionaries containing cell parameters, matched peaks, mis-matched peaks,
+        """
+        bra_list = [
+            ('cubic-F', 15, 0, [196, 202, 203, 209, 210, 216, 219, 225, 226, 227, 228]),
+            ('cubic-I', 14, 0, [197, 199, 204, 206, 211, 214, 217, 220, 229, 230]),
+            ('cubic-P', 13, 0, [195, 198, 200, 201, 205, 207, 208, 212, 213, 215, 218, 221, 222, 223, 224]),
+            ('hexagonal-R', 12, 0, [146, 148, 155, 160, 161, 166, 167]),
+            ('hexagonal-P', 11, 0, [143, 144, 145, 147, 149, 150, 151, 152, 153, 154, 156, 157, 158, 159,
+                                    162, 163, 164, 165, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
+                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194]),
+            ('tetragonal-I', 10, 0, [79, 80, 82, 87, 88, 97, 98, 107, 108, 109, 110,
+                                     119, 120, 121, 122, 139, 140, 141, 142]),
+            ('tetragonal-P', 9, 0, [75, 76, 77, 78, 81, 83, 84, 85, 86, 89, 90, 91, 92, 93, 94, 95, 96, 99,
+                            100, 101, 102, 103, 104, 105, 106, 111, 112, 113, 114, 115, 116, 117, 118,
+                            123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138]),
+            ('orthorhombic-F', 8, 2, [22, 42, 43, 69, 70]),
+            ('orthorhombic-I', 7, 2, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
+            ('orthorhombic-C', 6, 2, [20, 21, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
+            ('orthorhombic-A', 5, 2, [38, 39, 40, 41]),
+            ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 33, 34, 47, 48, 49,
+                                      50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]),
+            ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
+            ('monoclinic-P', 2, 4, [3, 4, 6, 7, 10, 11, 13, 14]),
+        ]
+        min_mismatch = max_mismatch + 1
+        solutions = []
+        for (bra_type, bra_index, ideal_mismatch, spgs) in bra_list:
+            print(f"Trying {bra_type} ...")
+            # use very strict criteria to get initial cell solutions for each space group,
+            # then use those solutions to determine the centering and possible space groups.
+            # This way we can significantly reduce the number of space groups we need to check in the later steps,
+            # and also increase the chances of finding the correct solution by starting with a more accurate initial guess.
+            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=hkl_max, max_mismatch=max_mismatch,
+                                max_chi2=max_chi2, max_square=max_square, total_square=total_square,
+                                min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
+                                theta_tols=theta_tols, verbose=verbose)
+            base_solutions = solver.solve(max_solutions=15, max_count=20)
+            if len(base_solutions) == 0: continue
+
+            count = 0
+            for base_solution in base_solutions:
+                if bra_index in [4, 7, 8]:
+                    axis_orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+                elif bra_index in [5]: #A-center
+                    axis_orders = [(0, 1, 2), (0, 2, 1)]
+                elif bra_index in [6]: #C-center
+                    axis_orders = [(0, 1, 2), (1, 0, 2)]
+                else:
+                    axis_orders = [(0, 1, 2)]
+
+                matched_hkls = [m[0] for m in base_solution['match']]
+
+                for axis_order in axis_orders:
+                    #permuted_hkls = [tuple(m[0][i] for i in axis_order) for m in matched_hkls]
+                    #if len(axis_orders)==6: print(f"Permuted hkls: {permuted_hkls}"); import sys; sys.exit("Debugging stop.")
+                    for spg in spgs:
+                        match, unmatch = check_space_group(spg, matched_hkls,
+                                                           base_solution['mismatch'],
+                                                           axis_order)
+                        if match:
+                            #if verbose:
+                            #    print(f"Adding Space group {spg}: Match: {match} {len(unmatch)}")
+                            if 15 < spg < 75:
+                                cell = [base_solution['cell'][i] for i in axis_order]
+                                peaks = [(tuple(m[0][i] for i in axis_order), m[1], m[2]) for m in base_solution['match']]
+                                mis_peaks = [(tuple(m[0][i] for i in axis_order), m[1]) for m in base_solution['mismatch']]
+                            else:
+                                cell = base_solution['cell']
+                                peaks = base_solution['match']
+                                mis_peaks = base_solution['mismatch']
+                            solution = {
+                                'spg': spg,
+                                'cell': cell,
+                                'match': peaks,
+                                'mismatch': mis_peaks,
+                                'chi2': base_solution['chi2'],
+                                'errors': base_solution['errors'],
+                                'id': base_solution['id'],
+                            }
+                            solutions.append(solution)
+                            count += 1
+                            if min_mismatch > len(unmatch):
+                                min_mismatch = len(unmatch)
+            # Early stop with high confidence
+            if count > 0 and min_mismatch <= ideal_mismatch:
+                return solutions
+        return solutions
+
+def check_centering(matched_hkls, centering):
+    """
+    Check if the presence of certain hkls is consistent with the given centering type.
+
+    Args:
+        matched_hkls: List of matched (h, k, l) tuples
+        centering: Centering type ('P', 'C', 'A', 'F', 'I', 'R')
+
+    Returns:
+        bool: True if the matched hkls are consistent with the centering type, False otherwise
+    """
+    for hkl in matched_hkls:
+        if centering == 'C':
+            if (hkl[0] + hkl[1]) % 2 != 0:
+                return False
+        elif centering == 'A':
+            if (hkl[1] + hkl[2]) % 2 != 0:
+                return False
+        elif centering == 'F':
+            if not (hkl[0]%2 == hkl[1]%2 == hkl[2]%2):
+                return False
+        elif centering == 'I':
+            if (hkl[0] + hkl[1] + hkl[2]) % 2 != 0:
+                return False
+        elif centering == 'R':
+            if (hkl[0] - hkl[1] - hkl[2]) % 3 != 0 and (hkl[1] - hkl[0] - hkl[2]) % 3 != 0:
+                #print(hkl); import sys; sys.exit("R-centering requires (h-k-l) to be a multiple of 3. The presence of the peak with hkl = {} is inconsistent with R-centering.".format(hkl))
+                return False
+    return True
+
+
+def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
+    """
+    Check if the given space group is compatible with the observed matched and unmatched hkls based on extinction rules.
+
+    Args:
+        spg: Space group number
+        matched_hkls: List of matched (h, k, l) tuples
+        unmatched_hkls: List of unmatched (h, k, l) tuples
+        axis_order: order of axes to consider for the hkls (e.g., (0, 1, 2) for (h, k, l))
+
+    Returns:
+        bool: True if the space group is compatible with the observed hkls, False otherwise
+    """
+    group = Group(spg)
+
+    # Check if all matched hkls are allowed by the space group
+    # This won't be permuted
+    if spg in [148, 155, 160, 161, 166, 167]:
+        for hkl in matched_hkls:
+            if (hkl[0] - hkl[1] - hkl[2]) % 3 != 0 and (hkl[1] - hkl[0] - hkl[2]) % 3 != 0:
+                #print(hkl); import sys; sys.exit("R-centering requires (h-k-l) to be a multiple of 3.")
+                return False, []
+    else:
+        for hkl in matched_hkls:
+            h, k, l = hkl[axis_order[0]], hkl[axis_order[1]], hkl[axis_order[2]]
+            if not group.is_valid_hkl(h, k, l):
+                #print(f"Space group {spg} does not allow {hkl}.")
+                return False, []
+
+    # Check if any unmatched hkls are allowed by the space group
+    unmatched = []
+    for (hkl, peak) in unmatched_hkls:
+        h, k, l = hkl[axis_order[0]], hkl[axis_order[1]], hkl[axis_order[2]]
+        if group.is_valid_hkl(h, k, l):
+            unmatched.append((hkl, peak))
+    return True, unmatched
+
+def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
+                    match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, max_force,
+                    max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
+                    INST_FILE, logger, min_r2=0.95, max_chi2=0.12):
+    """
+    Explore candidates and return first satisfactory refinement result.
+
+    Args:
+        cells: List of candidate cells.
+        spg: Space group number.
+        composition: Dictionary of element counts.
+        ref_den: Tuple of (min_density, max_density).
+        title: Title for plots.
+        match_png: Path to save match plot.
+        match_cif: Path to save match CIF.
+        match_csv: Path to save match CSV.
+        peaks: Indices of peaks used for indexing.
+        x1, y1: Simulated PXRD data arrays.
+        eng_min: Current minimum energy.
+        sim_max: Current maximum similarity.
+        N1, N2, N3: Limits for loops.
+        max_force: Maximum allowed force for relaxed structures.
+        max_stress: Maximum allowed stress for relaxed structures.
+        wavelength: X-ray wavelength for XRD simulation.
+        thetas: 2theta values for XRD simulation.
+        resolution: Resolution for XRD simulation.
+        SCALED_INTENSITY_TOL: Tolerance for scaled intensity in XRD simulation.
+        INST_FILE: Instrument file for refinement.
+        min_r2: Minimum R² value for a good fit.
+        max_chi2: Maximum chi² value for a good fit.
+        logger: Logger for recording results.
+
+    Returns:
+        Tuple of (wr, r2, chi2, xtal, eng_best)
+    """
+
+    eng_best = eng_min
+    for cell in cells[:N1]:
+        logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
+        wp_manager = WPManager(spg, cell.dims, composition, ref_den=ref_den)
+        sols = wp_manager.get_wyckoff_positions()
+        for sol in sols[:N2]:
+            (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
+            if dof > N3:
+                continue
+            xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids)
+            N4 = xm.dof * 3 if xm.dof != 1 else 4
+            N_false = 0
+            logger.info(f"{cell.chi2:.3f}, {xm.sites}, {N4} trials")
+            for _ in range(N4 + 1):
+                if N_false > max([4, N4 // 2]):
+                    logger.info("Too many invalid structures, skip to next WP set.")
+                    break
+                xtal = xm.generate_structure()
+                if not xtal.valid:
+                    N_false += 1
+                    continue
+                atoms = relax_structure(xtal.to_ase(), xm.dof)
+                if atoms is None:
+                    N_false += 1
+                    continue
+
+                eng = atoms.get_potential_energy() / len(atoms)
+                if eng < eng_best: eng_best = eng
+                stress = abs(atoms.get_stress()[:3].mean())
+                fmax = abs(atoms.get_forces()).max()
+                if stress > max_stress or fmax > max_force:
+                    N_false += 1
+                    continue
+
+                xrd = XRD(atoms, wavelength=wavelength, thetas=thetas,
+                          res=resolution, SCALED_INTENSITY_TOL=SCALED_INTENSITY_TOL)
+                x2, y2 = xrd.get_plot_gsas2(U=0.1, V=-0.1, W=0.5, X=0.1, Y=0.1,
+                                            bg_ratio=0.0, mix_ratio=0.0)
+
+                y2 = RawDataManager(x2, y2, bg_subtract=False).y
+                sim = Similarity((x1, y1), (x2, y2)).value
+                msg = f"{xtal.get_xtal_string()}, {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+
+                print(msg)
+
+                if sim > sim_max:
+                    title0 = title + f' {eng:.3f}/{eng_best:.3f}'
+                    plot_XRD(x1, y1, x2, y2, x1[peaks], y1[peaks], title0, match_png)
+                    xtal.from_seed(atoms)
+                    xtal.to_file(match_cif)
+                    wr, r2, chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
+                    msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
+                else:
+                    wr = None
+
+                if eng < eng_best:
+                    eng_best = eng
+                    msg += ' +++++'
+                logger.info(msg)
+
+                if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
+                    return (wr, r2, chi2, xtal, eng_best)
+
+    return (None, None, None, None, eng_best)
+
+
+
+if __name__ == "__main__":
+    # Example usage
+    import pandas as pd
+    from pathlib import Path
+
+    def _infer_formula_spg(path: Path):
+        """Infer formula and space group from a file name like PXRD_<formula>_<spg>.csv."""
+        tokens = path.stem.split('_')
+        formula_guess, spg_guess = None, None
+        if len(tokens) >= 2:
+            try:
+                spg_guess = int(tokens[-1])
+                # Join middle tokens to support names with extra underscores.
+                formula_guess = '_'.join(tokens[1:-1]) if len(tokens) > 2 else None
+            except ValueError:
+                pass
+        return formula_guess, spg_guess
+
+    for match_csv in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
+                      #f'Examples/PXRD_Be2SiBi_119.csv',
+                      #f'Examples/PXRD_K2SnO6_148.csv',
+                      #f'Examples/PXRD_HgC2N2_122.csv',
+                      #f'Examples/PXRD_Mg9Si5_176.csv',
+                      f'Examples/hardPXRD_HfTlCuS3_63.csv',
+                    ]:
+        formula, ref_spg = _infer_formula_spg(Path(match_csv))
+        df = pd.read_csv(match_csv)
+        x1 = df.iloc[:, 0].values
+        y1 = df.iloc[:, 1].values
+        data = RawDataManager(x1, y1, bg_subtract=False)
+        data.get_peaks_from_scipy_adaptive()
+        data.plot()
+        min_abc = 2.0
+        max_abc = 35.0
+        solutions = SmartCellSolver(x1[data.peaks],
+                        max_mismatch=30,
+                        hkl_max=(4, 4, 4),
+                        max_square=20,
+                        total_square=25,
+                        theta_tols=[0.1, 0.15, 0.5],
+                        min_abc=min_abc,
+                        max_abc=max_abc,
+                        verbose=True,
+                        )
+        sols = [(sol['spg'], sol['cell'], len(sol['mismatch']), sol['chi2'][1], sol['errors'], sol['id']) for sol in solutions]
+        cells = CellManager.consolidate(sols,
+                                        max_solutions=200,
+                                        merge_tol=0.02,
+                                        ref_spg=ref_spg,
+                                        max_mismatch=20)
+        print(f"Final consolidated solutions for {match_csv}\n")
