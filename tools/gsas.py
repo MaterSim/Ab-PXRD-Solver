@@ -236,12 +236,12 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
 
         refined_cif = cif_file.replace('.cif', '_refined.cif')
         phase.export_CIF(refined_cif)
-        print(f"Saved refined structure to {refined_cif}")
+        # print(f"Saved refined structure to {refined_cif}")
 
     # Outside the context manager - these prints go to normal stdout
-    print(f"wR: {wR:.3f}")
-    print(f"R2: {R2:.4f}")
-    print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
+    # print(f"wR: {wR:.3f}")
+    # print(f"R2: {R2:.4f}")
+    # print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
 
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(x, yobs, 'k.', markersize=2, label='Observed')
@@ -266,7 +266,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     out_png = cif_file.replace('.cif', '_refinement.png')
     fig.savefig(out_png, dpi=300)
     plt.close(fig)
-    print(f"Saved plot to {out_png}")
+    # print(f"Saved plot to {out_png}")
 
     return wR, R2, weighted_chi2, refined_cif
 

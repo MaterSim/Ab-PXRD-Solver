@@ -27,7 +27,10 @@ def _get_peak_model() -> tuple[PeakFinderCNN, int, torch.device]:
     cfg = Config()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = PeakFinderCNN(window_size=cfg.WINDOW_SIZE).to(device)
-    checkpoint = torch.load(chkpt, map_location=device)
+    try:
+        checkpoint = torch.load(chkpt, map_location=device, weights_only=True)
+    except TypeError:
+        checkpoint = torch.load(chkpt, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     return model, cfg.WINDOW_SIZE, device
@@ -152,14 +155,15 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     from XRD import Profile
 
-    pxrd_csvs = [#'Examples/PXRD_Ba14Na14LiN6_225.csv',
+    pxrd_csvs = ['Examples/PXRD_Ba14Na14LiN6_225.csv',
+                 'Examples/PXRD_Ba4YCu3O9_223.csv',
                  #'Examples/PXRD_Ba4NaBi_216.csv',
                  #'Examples/PXRD_DyB6_221.csv',
                  #'Examples/PXRD_PbS_186.csv',
                  #'Examples/PXRD_Mg9Si5_176.csv',
                  #'Examples/PXRD_PrYMg2_123.csv',
                  #'Examples/PXRD_TbMnSi_62.csv',
-                 'Examples/PXRD_TiCuSiAs_129.csv',
+                 #'Examples/PXRD_TiCuSiAs_129.csv',
                  #'Examples/PXRD_Be2SiBi_119.csv'
                  ]
 

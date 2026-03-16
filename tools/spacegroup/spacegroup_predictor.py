@@ -10,6 +10,13 @@ from .model_network import (
 
 # prepare the data and model for prediction
 
+
+def _load_checkpoint(checkpoint_path, map_location):
+    try:
+        return torch.load(checkpoint_path, map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(checkpoint_path, map_location=map_location)
+
 class XRDPredictor:
     """Simple XRD prediction interface"""
 
@@ -23,7 +30,7 @@ class XRDPredictor:
         self.checkpoint_path = checkpoint_path
 
         # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = _load_checkpoint(checkpoint_path, map_location=self.device)
 
         # Load class mappings from JSON
         with open(mapping_json, 'r') as f:
@@ -54,9 +61,9 @@ class XRDPredictor:
             self.model.load_state_dict(checkpoint)
 
         self.model.eval()
-        print(f"\nModel loaded")
-        print(f"Device: {self.device}")
-        print(f"Classes: {self.num_classes}\n")
+        # print(f"\nModel loaded")
+        # print(f"Device: {self.device}")
+        # print(f"Classes: {self.num_classes}\n")
 
 
 

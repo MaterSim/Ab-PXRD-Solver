@@ -542,7 +542,8 @@ class CellManager:
 
     @classmethod
     def consolidate(cls, raw_data, merge_tol=0.15, max_solutions=10, ref_cell=None,
-                    verbose=False, debug=False, ref_spg=None, max_mismatch=30):
+                    verbose=False, debug=False, ref_spg=None, max_mismatch=30,
+                    chi2_tie_tol=5e-4):
         """
         Class method: Takes raw list of [spg, dims, missing, chi2, d2, error], instantiates objects,
         sorts, merges duplicates, removes supercells, and returns the clean list.
@@ -566,11 +567,18 @@ class CellManager:
         if ref_cell is not None:
             ref_lattice = Lattice.from_1d_representation(ref_cell, Group(spg).lattice_type)
             ref_volume = ref_lattice.volume
-        # 2. Sort: Primary = Fewest Missing (Quality), Secondary = Smallest Size (Parsimony)
+        # 2. Sort with chi2 tie-bucketing:
+        #    when chi2 values are very close (within `chi2_tie_tol`), prioritize
+        #    fewer missing peaks before fine-grained chi2 differences.
+        def _chi2_bucket(value):
+            if chi2_tie_tol is None or chi2_tie_tol <= 0:
+                return value
+            return int(np.round(value / chi2_tie_tol))
+
         if ref_cell is not None:
             solutions.sort(key=lambda x: (x.size, x.chi2, x.missing, -x.spg))
         else:
-            solutions.sort(key=lambda x: (x.chi2, x.missing, x.size, -x.spg))
+            solutions.sort(key=lambda x: (_chi2_bucket(x.chi2), x.missing, x.chi2, x.size, -x.spg))
 
         kept_solutions = []
         indices_to_skip = set()
@@ -894,7 +902,9 @@ class XtalManager:
                 sites[i].append(self.spg[_wp].get_label())
         self.dof = dof
         self.sites = sites
-        print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}")
+        volume = self.cell.volume if hasattr(self.cell, 'volume') else None
+        vol_str = f", Volume: {volume:.2f}" if volume is not None else ""
+        print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}{vol_str}")
 
     def generate_structure(self, use_asu=False):
         """
