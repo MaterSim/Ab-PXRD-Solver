@@ -143,100 +143,104 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     if gpx_dir:
         os.makedirs(gpx_dir, exist_ok=True)
 
-    with RedirectG2Output(gsas_log):
-        # --------------------------------------------------
-        # Create GSAS-II project
-        # --------------------------------------------------
-        if os.path.exists(gpx_name): os.remove(gpx_name)
-        gpx = G2sc.G2Project(newgpx=gpx_name)
-        gpx.data['Controls']['data']['max cyc'] = 100
+    try:
+        with RedirectG2Output(gsas_log):
+            # --------------------------------------------------
+            # Create GSAS-II project
+            # --------------------------------------------------
+            if os.path.exists(gpx_name): os.remove(gpx_name)
+            gpx = G2sc.G2Project(newgpx=gpx_name)
+            gpx.data['Controls']['data']['max cyc'] = 100
 
-        # --------------------------------------------------
-        # Import PXRD data and phase
-        # --------------------------------------------------
-        hist = gpx.add_powder_histogram(pxrd_file, instprm)
-        phase = gpx.add_phase(cif_file, phasename='Phase1', histograms=[hist])
+            # --------------------------------------------------
+            # Import PXRD data and phase
+            # --------------------------------------------------
+            hist = gpx.add_powder_histogram(pxrd_file, instprm)
+            phase = gpx.add_phase(cif_file, phasename='Phase1', histograms=[hist])
 
-        print("Phase loaded:", phase.name)
-        print("Histogram:", hist.name)
+            print("Phase loaded:", phase.name)
+            print("Histogram:", hist.name)
 
-        hist.set_refinements({'Background': {'type': 'chebyschev',
-                                             'no. coeffs': 8,
-                                             'refine': True}})
-        gpx.do_refinements()
-
-        # 2) Scale only
-        gpx.set_refinement({"set": {'Sample Parameters': ['Scale']}}, phase=phase)
-        gpx.do_refinements()
-
-        # 3) Zero + basic profile (U,V,W)
-        hist.set_refinements({'Instrument Parameters': ['Zero', 'U', 'V', 'W']})
-        gpx.do_refinements()
-
-        # 3b) Add Lorentzian terms to fix peak shape (no asymmetry)
-        hist.set_refinements({'Instrument Parameters': ['Zero', 'U', 'V', 'W', 'X', 'Y']})
-        gpx.do_refinements()
-
-        # 3c) Refine Kα2 fraction, polarization, and additional Lorentzian term
-        hist.set_refinements({'Instrument Parameters': ['Zero', 'Polariz.', 'U', 'V', 'W', 'X', 'Y', 'Z']})
-        gpx.do_refinements()
-
-        # 3d) Refine axial asymmetry terms
-        hist.set_refinements({'Instrument Parameters': ['Zero', 'Polariz.', 'U', 'V', 'W', 'X', 'Y', 'Z', 'SH/L', 'Azimuth']})
-        gpx.do_refinements()
-
-        # 3e) Refine unit cell parameters
-        phase.set_refinements({'Cell': True})
-        gpx.do_refinements()
-
-        # 4) atomic positions (all atoms)
-        try:
-            phase.set_refinements({'Atoms': {'all': ['X']}})
+            hist.set_refinements({'Background': {'type': 'chebyschev',
+                                                 'no. coeffs': 8,
+                                                 'refine': True}})
             gpx.do_refinements()
 
-            phase_hist_key = hist.name
-            hdict = phase.data['Histograms'][phase_hist_key]
-            # HStrain is typically [values, refineFlags]; enable all flags
-            hvals, hflags = hdict['HStrain']
-            hdict['HStrain'][1] = [True] * len(hflags)
+            # 2) Scale only
+            gpx.set_refinement({"set": {'Sample Parameters': ['Scale']}}, phase=phase)
             gpx.do_refinements()
-            print("Enabled HStrain refinement (thermal strain).")
 
-        except Exception as e:
-            print("Failed to refine atomic positions or HStrain:", e)
-            return None, None, None, None
+            # 3) Zero + basic profile (U,V,W)
+            hist.set_refinements({'Instrument Parameters': ['Zero', 'U', 'V', 'W']})
+            gpx.do_refinements()
 
-        wR = hist.get_wR()
-        print(f"wR: {wR:.3f}")
+            # 3b) Add Lorentzian terms to fix peak shape (no asymmetry)
+            hist.set_refinements({'Instrument Parameters': ['Zero', 'U', 'V', 'W', 'X', 'Y']})
+            gpx.do_refinements()
 
-        # Plot the final fit using GSAS-II powder histogram arrays
-        data = hist.data.get('data')
-        arrays = data[1]
-        x = arrays[0]
-        yobs = arrays[1]
-        wt = arrays[2] if len(arrays) > 2 else None
-        ycalc = arrays[3] if len(arrays) > 3 else None
-        ybkg = arrays[4] if len(arrays) > 4 else None
-        ydiff = yobs - ycalc if ycalc is not None else None
+            # 3c) Refine Kα2 fraction, polarization, and additional Lorentzian term
+            hist.set_refinements({'Instrument Parameters': ['Zero', 'Polariz.', 'U', 'V', 'W', 'X', 'Y', 'Z']})
+            gpx.do_refinements()
 
-        # Compute R^2 between observed and calculated
-        R2 = None
-        if ycalc is not None:
-            ss_res = float(((yobs - ycalc)**2).sum())
-            ss_tot = float(((yobs - yobs.mean())**2).sum())
-            R2 = 1.0 - (ss_res / ss_tot if ss_tot > 0 else 0.0)
-            print(f"R2: {R2:.4f}")
+            # 3d) Refine axial asymmetry terms
+            hist.set_refinements({'Instrument Parameters': ['Zero', 'Polariz.', 'U', 'V', 'W', 'X', 'Y', 'Z', 'SH/L', 'Azimuth']})
+            gpx.do_refinements()
 
-        # Compute chi² from weighted residuals
-        weighted_chi2 = None
-        if ycalc is not None and wt is not None:
-            weighted_res = (yobs - ycalc) * np.sqrt(wt)
-            weighted_chi2 = float((weighted_res**2).sum() / (len(yobs) - 1))
-            print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
+            # 3e) Refine unit cell parameters
+            phase.set_refinements({'Cell': True})
+            gpx.do_refinements()
 
-        refined_cif = cif_file.replace('.cif', '_refined.cif')
-        phase.export_CIF(refined_cif)
-        # print(f"Saved refined structure to {refined_cif}")
+            # 4) atomic positions (all atoms)
+            try:
+                phase.set_refinements({'Atoms': {'all': ['X']}})
+                gpx.do_refinements()
+
+                phase_hist_key = hist.name
+                hdict = phase.data['Histograms'][phase_hist_key]
+                # HStrain is typically [values, refineFlags]; enable all flags
+                hvals, hflags = hdict['HStrain']
+                hdict['HStrain'][1] = [True] * len(hflags)
+                gpx.do_refinements()
+                print("Enabled HStrain refinement (thermal strain).")
+
+            except Exception as e:
+                print("Failed to refine atomic positions or HStrain:", e)
+                return None, None, None, None
+
+            wR = hist.get_wR()
+            print(f"wR: {wR:.3f}")
+
+            # Plot the final fit using GSAS-II powder histogram arrays
+            data = hist.data.get('data')
+            arrays = data[1]
+            x = arrays[0]
+            yobs = arrays[1]
+            wt = arrays[2] if len(arrays) > 2 else None
+            ycalc = arrays[3] if len(arrays) > 3 else None
+            ybkg = arrays[4] if len(arrays) > 4 else None
+            ydiff = yobs - ycalc if ycalc is not None else None
+
+            # Compute R^2 between observed and calculated
+            R2 = None
+            if ycalc is not None:
+                ss_res = float(((yobs - ycalc)**2).sum())
+                ss_tot = float(((yobs - yobs.mean())**2).sum())
+                R2 = 1.0 - (ss_res / ss_tot if ss_tot > 0 else 0.0)
+                print(f"R2: {R2:.4f}")
+
+            # Compute chi² from weighted residuals
+            weighted_chi2 = None
+            if ycalc is not None and wt is not None:
+                weighted_res = (yobs - ycalc) * np.sqrt(wt)
+                weighted_chi2 = float((weighted_res**2).sum() / (len(yobs) - 1))
+                print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
+
+            refined_cif = cif_file.replace('.cif', '_refined.cif')
+            phase.export_CIF(refined_cif)
+            # print(f"Saved refined structure to {refined_cif}")
+    except Exception as e:
+        print(f"GSAS refinement failed for {os.path.basename(cif_file)}: {e}")
+        return None, None, None, None
 
     # Outside the context manager - these prints go to normal stdout
     # print(f"wR: {wR:.3f}")

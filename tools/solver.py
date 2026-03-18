@@ -1,13 +1,24 @@
 """
 Module for PXRD indexing and lattice parameter estimation.
 """
+import os
+import sys
 import numpy as np
 from itertools import combinations
 from pyxtal.symmetry import Group, get_bravais_lattice, get_lattice_type, generate_possible_hkls
-from .manager import RawDataManager, CellManager, WPManager, XtalManager
-from .utils import plot_XRD, relax_structure
-from .XRD import Similarity, XRD
-from .gsas import refine_pxrd
+try:
+    from .manager import RawDataManager, CellManager, WPManager, XtalManager
+    from .utils import plot_XRD, relax_structure
+    from .XRD import Similarity, XRD
+    from .gsas import refine_pxrd
+except ImportError:
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    from tools.manager import RawDataManager, CellManager, WPManager, XtalManager
+    from tools.utils import plot_XRD, relax_structure
+    from tools.XRD import Similarity, XRD
+    from tools.gsas import refine_pxrd
 
 def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, min_volume):
     """
@@ -277,7 +288,10 @@ class CellSolver:
             self.spg = None
             self.bravais = bra
             self.trial_hkls = generate_possible_hkls(self.bravais, 50, 50, 50, 2500)
-        self.thetas = thetas
+        self.thetas = np.asarray(thetas)
+        self.theta_count = len(self.thetas)
+        self.theta_max = float(self.thetas[-1]) if self.theta_count > 0 else 0.0
+        self.trial_hkls_abs = np.abs(self.trial_hkls)
         self.N_add = N_add
         self.max_mismatch = max_mismatch
         self.theta_tols = theta_tols
@@ -339,9 +353,9 @@ class CellSolver:
         theta_100s = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_100s)))
         theta_010s = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_010s)))
         theta_001s = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_001s)))
-        h_maxs = np.array(self.thetas[-1] / theta_100s, dtype=int); h_maxs[h_maxs > 100] = 100
-        k_maxs = np.array(self.thetas[-1] / theta_010s, dtype=int); k_maxs[k_maxs > 100] = 100
-        l_maxs = np.array(self.thetas[-1] / theta_001s, dtype=int); l_maxs[l_maxs > 100] = 100
+        h_maxs = np.array(self.theta_max / theta_100s, dtype=int); h_maxs[h_maxs > 100] = 100
+        k_maxs = np.array(self.theta_max / theta_010s, dtype=int); k_maxs[k_maxs > 100] = 100
+        l_maxs = np.array(self.theta_max / theta_001s, dtype=int); l_maxs[l_maxs > 100] = 100
 
         solutions = []
         for i, cell in enumerate(cells):
@@ -369,9 +383,9 @@ class CellSolver:
         theta_100 = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_100)))
         theta_010 = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_010)))
         theta_001 = 2*np.degrees(np.arcsin(self.wave_length / (2 * d_001)))
-        h_max = self.thetas[-1] // theta_100
-        k_max = self.thetas[-1] // theta_010
-        l_max = self.thetas[-1] // theta_001
+        h_max = self.theta_max // theta_100
+        k_max = self.theta_max // theta_010
+        l_max = self.theta_max // theta_001
         return h_max, k_max, l_max
 
     def validate_cell(self, cell, trial_hkls=None, hkl=None, h_max=None, k_max=None, l_max=None):
@@ -390,14 +404,24 @@ class CellSolver:
         """
         #print("Testing cell:", cell)
         cell_str = ", ".join([f"{c:.4f}" for c in cell])
-        if trial_hkls is None: trial_hkls = self.trial_hkls
+        if trial_hkls is None:
+            trial_hkls = self.trial_hkls
+            trial_hkls_abs = self.trial_hkls_abs
+        elif trial_hkls is self.trial_hkls:
+            trial_hkls_abs = self.trial_hkls_abs
+        else:
+            trial_hkls_abs = np.abs(trial_hkls)
         if h_max is None: h_max, k_max, l_max = self.get_paras_from_cell(cell)
         if cell[:3].min() <= self.min_abc or cell[:3].max() >= self.max_abc:
             return None, f"Rejected cell due to abc parameters out of range: {cell_str}"
         if self.bravais == 3 and (cell[3] < self.min_angle or cell[3] > self.max_angle):
             return None, f"Rejected cell due to angle parameters out of range: {cell_str}"
 
-        mask = (np.abs(trial_hkls[:,0]) <= h_max) & (np.abs(trial_hkls[:,1]) <= k_max) & (np.abs(trial_hkls[:,2]) <= l_max)
+        mask = (
+            (trial_hkls_abs[:, 0] <= h_max)
+            & (trial_hkls_abs[:, 1] <= k_max)
+            & (trial_hkls_abs[:, 2] <= l_max)
+        )
         test_hkls = trial_hkls[mask]
         exp_thetas, exp_hkls = get_two_theta_from_cell(self.bravais, test_hkls, cell, self.wave_length)
         #print("Generated", len(exp_thetas), "peaks for cell", cell)
@@ -405,12 +429,26 @@ class CellSolver:
             msg = f"Rejected cell due to no expected peaks within the theta range: {cell_str}"
             return None, msg
 
+        # Fast precheck: each observed peak must have at least one calculated peak
+        # within tolerance. Rejecting here avoids building a full N_obs x N_exp matrix.
+        tol = self.theta_tols[-1]
+        ins = np.searchsorted(exp_thetas, self.thetas)
+        left_ids = np.clip(ins - 1, 0, len(exp_thetas) - 1)
+        right_ids = np.clip(ins, 0, len(exp_thetas) - 1)
+        left_err = np.abs(self.thetas - exp_thetas[left_ids])
+        right_err = np.abs(self.thetas - exp_thetas[right_ids])
+        nearest_err = np.minimum(left_err, right_err)
+        matched_count = int(np.sum(nearest_err < tol))
+        if matched_count < self.theta_count:
+            msg = f"Rejected cell: {cell_str}, matched {matched_count}/{self.theta_count} peaks"
+            return None, msg
+
         errors_matrix_raw = self.thetas[:, np.newaxis] - exp_thetas[np.newaxis, :]
         errors_matrix = np.abs(errors_matrix_raw)
-        within_tolerance = errors_matrix < self.theta_tols[-1]
+        within_tolerance = errors_matrix < tol
         has_obs_match = np.any(within_tolerance, axis=1)
         ids_matched = np.where(has_obs_match)[0]
-        if len(ids_matched) == len(self.thetas):
+        if len(ids_matched) == self.theta_count:
             # Get the obs. peaks
             matched_peaks = []
             exp_theta_list = []
@@ -439,7 +477,7 @@ class CellSolver:
             # χ² = Σ[(obs - exp)² / σ²] where σ = theta_tol
             errs = obs_arr - exp_arr
             chi2 = np.sum((errs)**2) / (self.theta_tols[-1]**2 * len(obs_arr))
-            half = len(self.thetas) // 2
+            half = self.theta_count // 2
             chi2_half = np.sum(errs[:half]**2) / (self.theta_tols[-1]**2 * half)
             N_50 = len(self.thetas[self.thetas < 50])
             N_30 = len(self.thetas[self.thetas < 30])
@@ -464,7 +502,7 @@ class CellSolver:
                 _hkl = exp_hkls[id]
                 theta = exp_thetas[id]
                 #if theta < min(self.thetas[-1], 50) and abs(_hkl).max() <= self.max_mismatch_hkl:
-                if theta < self.thetas[-1] and abs(_hkl).max() <= self.max_mismatch_hkl:
+                if theta < self.theta_max and abs(_hkl).max() <= self.max_mismatch_hkl:
                     mis_matched_peaks.append((_hkl, theta))
 
             if len(mis_matched_peaks) <= self.max_mismatch: #and chi2_half < chi2:
@@ -480,7 +518,7 @@ class CellSolver:
             else:
                 msg = f"Rejected cell: {cell_str}, mismatch {len(mis_matched_peaks)}/{self.max_mismatch}"
         else:
-            msg = f"Rejected cell: {cell_str}, matched {len(ids_matched)}/{len(self.thetas)} peaks"
+            msg = f"Rejected cell: {cell_str}, matched {len(ids_matched)}/{self.theta_count} peaks"
         return None, msg
 
 
@@ -501,10 +539,20 @@ class CellSolver:
         """
         #print("Testing cell:", cell)
         cell_str = ", ".join([f"{c:.4f}" for c in cell])
-        if trial_hkls is None: trial_hkls = self.trial_hkls
+        if trial_hkls is None:
+            trial_hkls = self.trial_hkls
+            trial_hkls_abs = self.trial_hkls_abs
+        elif trial_hkls is self.trial_hkls:
+            trial_hkls_abs = self.trial_hkls_abs
+        else:
+            trial_hkls_abs = np.abs(trial_hkls)
         if h_max is None: h_max, k_max, l_max = self.get_paras_from_cell(cell)
 
-        mask = (np.abs(trial_hkls[:,0]) <= h_max) & (np.abs(trial_hkls[:,1]) <= k_max) & (np.abs(trial_hkls[:,2]) <= l_max)
+        mask = (
+            (trial_hkls_abs[:, 0] <= h_max)
+            & (trial_hkls_abs[:, 1] <= k_max)
+            & (trial_hkls_abs[:, 2] <= l_max)
+        )
         test_hkls = trial_hkls[mask]
         exp_thetas, exp_hkls = get_two_theta_from_cell(self.bravais, test_hkls, cell,
                                                        self.wave_length, False)
@@ -659,6 +707,8 @@ class CellSolver:
         if self.spg is not None:
             print(f"Generated {raw_guess_count} hkl guess sets for space group {self.spg}.")
         guesses = np.array(guesses)
+        if len(guesses) == 0:
+            return []
         if self.verbose: print("Total guesses:", len(guesses))
         sum_squares = np.sum(guesses**2, axis=(1,2))
         sorted_indices = np.argsort(sum_squares)
@@ -672,34 +722,34 @@ class CellSolver:
             guesses = guesses[:self.max_guess]
 
         n_peaks = len(guesses[0])
-        N = min([n_peaks + self.N_add, len(self.thetas)])
+        N = min([n_peaks + self.N_add, self.theta_count])
         available_peaks = self.thetas[:N]
 
-        thetas = []
-        for peak_combo in combinations(range(N), n_peaks):
-            thetas.extend(available_peaks[list(peak_combo)])
-        N_thetas = len(thetas) // n_peaks
-        thetas = np.array(thetas)
-        thetas = np.tile(thetas, self.N_batch)
+        peak_combos = np.array(list(combinations(range(N), n_peaks)), dtype=int)
+        if len(peak_combos) == 0:
+            return []
+        N_thetas = len(peak_combos)
+        thetas_base = available_peaks[peak_combos].reshape(-1)
 
         results = []
         cell_all = []
 
-        for i in range(len(guesses)//self.N_batch + 1):
-            if i == len(guesses)//self.N_batch:
-                N_batch = len(guesses) - self.N_batch * i
-                if N_batch == 0:
-                    break
-                else:
-                    thetas = thetas[:N_thetas * n_peaks * N_batch]
-            hkls_t = np.tile(guesses[self.N_batch*i:self.N_batch*(i+1)], (1, N_thetas, 1))
-            hkls_t = np.reshape(hkls_t, (-1, 3))
+        for start in range(0, len(guesses), self.N_batch):
+            end = min(start + self.N_batch, len(guesses))
+            batch_guesses = guesses[start:end]
+            batch_size = len(batch_guesses)
+            if batch_size == 0:
+                continue
+
+            # Repeat each guess for each peak-combination candidate.
+            hkls_t = np.repeat(batch_guesses, N_thetas, axis=0).reshape(-1, 3)
+            thetas = np.tile(thetas_base, batch_size)
 
             sols = self.get_cell_from_multi_hkls(hkls_t, thetas)
             count = 0
             for sol in sols:
                 guess, match, unmatch, chi2 = sol['id'], len(sol['match']), len(sol['mismatch']), sol['chi2'][1]
-                if match == len(self.thetas):
+                if match == self.theta_count:
                     count += 1
                     cell1 = sol['cell'] #np.sort(np.array(sol['cell']))
                     vol = self.get_volume_from_cell(cell1)
@@ -734,7 +784,7 @@ class CellSolver:
                     if self.verbose:
                         cell1_str = ' '.join([f'{p:6.3f}' for p in cell1]) + f" [{vol:7.1f}]"
                         guess_str = ' '.join([f'{g:2d}' for g in guess])
-                        strs = f"{guess_str} [{d2:2d}] {cell1_str} {unmatch:2d}/{len(self.thetas):3d} "
+                        strs = f"{guess_str} [{d2:2d}] {cell1_str} {unmatch:2d}/{self.theta_count:3d} "
                         strs += f"χ²: {chi2:.4f} "
                         strs += ' '.join([f"{e:.3f}" for e in sol['errors']])
                         strs += f" {len(results):3d}/{add}"
@@ -744,9 +794,9 @@ class CellSolver:
                         print(f"Reached maximum number of solutions ({max_solutions}). Stop!")
                         return results
 
-            if self.verbose and i % 100 == 0:
-                d2 = (guesses[i*self.N_batch]**2).sum()
-                print(f"Processed {i*self.N_batch}/{len(guesses)} guesses, d2={d2}.")
+            if self.verbose and (start // self.N_batch) % 100 == 0:
+                d2 = (guesses[start]**2).sum()
+                print(f"Processed {start}/{len(guesses)} guesses, d2={d2}.")
 
         return results
 
@@ -807,8 +857,9 @@ class CellSolver:
         plt.legend()
         plt.show()
 
-def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=20, total_square=25,
-                    theta_tols=[0.1, 0.15, 0.5], min_abc=2.0, max_abc=30.0, min_volume=20.0, verbose=False):
+def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, total_square=25,
+                    theta_tols=[0.1, 0.15, 0.5], min_abc=2.0, max_abc=30.0,
+                    min_volume=20.0, max_volume=None, verbose=False):
         """
         A smarter version of CellSolver that automatically guess the space group and uses
         more intelligent heuristics to generate hkl guesses.
@@ -830,6 +881,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=20, 
             min_abc: minimum lattice parameter to consider for valid solutions
             max_abc: maximum lattice parameter to consider for valid solutions
             min_volume: minimum unit cell volume to consider for valid solutions
+            max_volume: maximum unit cell volume to consider for valid solutions
             verbose: whether to print detailed information during the solving process
 
         Returns:
@@ -840,40 +892,129 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=20, 
             ('cubic-I', 14, 0, [197, 199, 204, 206, 211, 214, 217, 220, 229, 230]),
             ('cubic-P', 13, 0, [195, 198, 200, 201, 205, 207, 208, 212, 213, 215, 218, 221, 222, 223, 224]),
             ('hexagonal-R', 12, 0, [146, 148, 155, 160, 161, 166, 167]),
-            ('hexagonal-P', 11, 0, [143, 144, 145, 147, 149, 150, 151, 152, 153, 154, 156, 157, 158, 159,
-                                    162, 163, 164, 165, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
-                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194]),
             ('tetragonal-I', 10, 0, [79, 80, 82, 87, 88, 97, 98, 107, 108, 109, 110,
                                      119, 120, 121, 122, 139, 140, 141, 142]),
-            ('tetragonal-P', 9, 0, [75, 76, 77, 78, 81, 83, 84, 85, 86, 89, 90, 91, 92, 93, 94, 95, 96, 99,
-                            100, 101, 102, 103, 104, 105, 106, 111, 112, 113, 114, 115, 116, 117, 118,
-                            123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138]),
             ('orthorhombic-F', 8, 2, [22, 42, 43, 69, 70]),
             ('orthorhombic-I', 7, 2, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
             ('orthorhombic-C', 6, 2, [20, 21, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
             ('orthorhombic-A', 5, 2, [38, 39, 40, 41]),
+            ('hexagonal-P', 11, 0, [168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
+                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194]),
+            ('tetragonal-P', 9, 0, [75, 76, 77, 78, 81, 83, 84, 85, 86, 89, 90, 91, 92, 93, 94, 95, 96, 99,
+                            100, 101, 102, 103, 104, 105, 106, 111, 112, 113, 114, 115, 116, 117, 118,
+                            123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138]),
+            ('trigonal-P', 11, 0, [143, 144, 145, 147, 149, 150, 151, 152, 153, 154, 156, 157, 158, 159,
+                                    162, 163, 164, 165]),
             ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 33, 34, 47, 48, 49,
                                       50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]),
             ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
             ('monoclinic-P', 2, 4, [3, 4, 6, 7, 10, 11, 13, 14]),
         ]
+        max_volume_cap = None if max_volume is None else float(max_volume)
         min_mismatch = max_mismatch + 1
         solutions = []
         for (bra_type, bra_index, ideal_mismatch, spgs) in bra_list:
             print(f"Trying {bra_type} ...")
+            solver_hkl_max = hkl_max
+            solver_max_square = max_square
+            solver_total_square = total_square
+            solver_max_guess = 50000
+
+            # Runtime guardrails for low-symmetry branches where hkl-guess
+            # combinatorics can explode (e.g., monoclinic-C > 1e6 raw guesses).
+            if bra_type.startswith('monoclinic'):
+                solver_hkl_max = (
+                    min(int(hkl_max[0]), 2),
+                    min(int(hkl_max[1]), 4),
+                    min(int(hkl_max[2]), 4),
+                )
+                solver_max_square = min(int(max_square), 20)
+                solver_total_square = min(int(total_square), 28)
+                solver_max_guess = 12000
+            elif bra_type.startswith('orthorhombic'):
+                solver_max_guess = 25000
+
             # use very strict criteria to get initial cell solutions for each space group,
             # then use those solutions to determine the centering and possible space groups.
             # This way we can significantly reduce the number of space groups we need to check in the later steps,
             # and also increase the chances of finding the correct solution by starting with a more accurate initial guess.
-            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=hkl_max, max_mismatch=max_mismatch,
-                                max_chi2=max_chi2, max_square=max_square, total_square=total_square,
+            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=solver_hkl_max, max_mismatch=max_mismatch,
+                                max_chi2=max_chi2, max_square=solver_max_square, total_square=solver_total_square,
                                 min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
-                                theta_tols=theta_tols, verbose=verbose)
+                                theta_tols=theta_tols, max_guess=solver_max_guess,
+                                verbose=verbose)
             base_solutions = solver.solve(max_solutions=15, max_count=20)
             if len(base_solutions) == 0: continue
 
             count = 0
-            for base_solution in base_solutions:
+            # Build supercell variants: for each base solution also try n×cell (n=2,3)
+            # so we don't miss a correct super-cell whose primitive hits max_mismatch
+            # in the base SPG (which has no extinctions).  The super-cell is then
+            # checked against the real SPG's extinction rules and often has 0 mismatch.
+            extended_base_solutions = list(base_solutions)
+            for _bs in base_solutions:
+                for _n in (2, 3):
+                    _sup_cell = [c * _n for c in _bs['cell']]
+                    if any(c > max_abc for c in _sup_cell):
+                        continue
+                    _sup_vol = solver.get_volume_from_cell(_sup_cell)
+                    if _sup_vol > max_abc ** 3:
+                        continue
+                    if max_volume_cap is not None and _sup_vol > max_volume_cap:
+                        continue
+                    _sup = {k: v for k, v in _bs.items()}
+                    _sup['cell'] = _sup_cell
+                    _sup['match'] = [
+                        (tuple(int(v) * _n for v in hkl), obs_theta, cal_theta)
+                        for (hkl, obs_theta, cal_theta) in _bs['match']
+                    ]
+                    _sup['mismatch'] = [
+                        (tuple(int(v) * _n for v in hkl), theta)
+                        for (hkl, theta) in _bs['mismatch']
+                    ]
+                    extended_base_solutions.append(_sup)
+
+            direct_solver_cache = {}
+            direct_validate_cache = {}
+
+            def _try_direct_spg_rescue(spg_value, candidate_cell):
+                cell_sig = tuple(round(float(x), 4) for x in np.asarray(candidate_cell).tolist())
+                cache_key = (int(spg_value), cell_sig)
+                if cache_key in direct_validate_cache:
+                    return direct_validate_cache[cache_key]
+
+                try:
+                    direct_solver = direct_solver_cache.get(int(spg_value))
+                    if direct_solver is None:
+                        direct_solver = CellSolver(
+                            spg=int(spg_value),
+                            thetas=thetas,
+                            hkl_max=solver_hkl_max,
+                            max_mismatch=max_mismatch,
+                            max_chi2=max_chi2,
+                            max_square=solver_max_square,
+                            total_square=solver_total_square,
+                            min_abc=min_abc,
+                            max_abc=max_abc,
+                            min_volume=min_volume,
+                            theta_tols=theta_tols,
+                            max_guess=min(4000, solver_max_guess),
+                            verbose=False,
+                        )
+                        direct_solver_cache[int(spg_value)] = direct_solver
+
+                    sol_direct, _ = direct_solver.validate_cell(np.array(candidate_cell, dtype=float))
+                    if sol_direct is None:
+                        out = (False, None)
+                    else:
+                        out = (True, sol_direct)
+                except Exception:
+                    out = (False, None)
+
+                direct_validate_cache[cache_key] = out
+                return out
+
+            for base_solution in extended_base_solutions:
                 if bra_index in [4, 7, 8]:
                     axis_orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
                 elif bra_index in [5]: #A-center
@@ -889,35 +1030,75 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=20, 
                     #permuted_hkls = [tuple(m[0][i] for i in axis_order) for m in matched_hkls]
                     #if len(axis_orders)==6: print(f"Permuted hkls: {permuted_hkls}"); import sys; sys.exit("Debugging stop.")
                     for spg in spgs:
+                        if 15 < spg < 75:
+                            candidate_cell = [base_solution['cell'][i] for i in axis_order]
+                        else:
+                            candidate_cell = base_solution['cell']
+
                         match, unmatch = check_space_group(spg, matched_hkls,
                                                            base_solution['mismatch'],
                                                            axis_order)
+                        use_direct_rescue = False
+                        direct_sol = None
+                        if not match:
+                            rescue_ok, direct_sol = _try_direct_spg_rescue(spg, candidate_cell)
+                            if rescue_ok:
+                                match = True
+                                use_direct_rescue = True
+                                unmatch = direct_sol.get('mismatch', [])
+                                #print(
+                                #    f"Direct SG rescue accepted: spg={spg}, cell="
+                                #    f"[{', '.join(f'{float(x):.3f}' for x in np.asarray(candidate_cell).tolist())}]"
+                                #)
+
                         if match:
                             #if verbose:
                             #    print(f"Adding Space group {spg}: Match: {match} {len(unmatch)}")
-                            if 15 < spg < 75:
-                                cell = [base_solution['cell'][i] for i in axis_order]
+                            if use_direct_rescue:
+                                cell = candidate_cell
+                                peaks = direct_sol.get('match', [])
+                                mis_peaks = direct_sol.get('mismatch', [])
+                                chi2_vals = direct_sol.get('chi2', base_solution['chi2'])
+                                errors_vals = direct_sol.get('errors', base_solution['errors'])
+                                id_vals = direct_sol.get('id', base_solution['id'])
+                            elif 15 < spg < 75:
+                                cell = candidate_cell
                                 peaks = [(tuple(m[0][i] for i in axis_order), m[1], m[2]) for m in base_solution['match']]
                                 mis_peaks = [(tuple(m[0][i] for i in axis_order), m[1]) for m in base_solution['mismatch']]
+                                chi2_vals = base_solution['chi2']
+                                errors_vals = base_solution['errors']
+                                id_vals = base_solution['id']
                             else:
                                 cell = base_solution['cell']
                                 peaks = base_solution['match']
                                 mis_peaks = base_solution['mismatch']
+                                chi2_vals = base_solution['chi2']
+                                errors_vals = base_solution['errors']
+                                id_vals = base_solution['id']
                             solution = {
                                 'spg': spg,
                                 'cell': cell,
                                 'match': peaks,
                                 'mismatch': mis_peaks,
-                                'chi2': base_solution['chi2'],
-                                'errors': base_solution['errors'],
-                                'id': base_solution['id'],
+                                'chi2': chi2_vals,
+                                'errors': errors_vals,
+                                'id': id_vals,
                             }
+                            cell_str = '[' + ', '.join(f'{float(x):.3f}' for x in np.asarray(cell).tolist()) + ']'
+                            volume = solver.get_volume_from_cell(cell)
+                            if max_volume_cap is not None and volume > max_volume_cap:
+                                continue
+                            print(f"Solution for {bra_type}, {spg}, cell: {cell_str}, volume: {volume:.2f}, mismatch: {len(unmatch)}, chi2: {chi2_vals[1]:.4f}")
                             solutions.append(solution)
                             count += 1
                             if min_mismatch > len(unmatch):
                                 min_mismatch = len(unmatch)
             # Early stop with high confidence
             if count > 0 and min_mismatch <= ideal_mismatch:
+                print(
+                    f"SmartCellSolver early stop: {bra_type} reached ideal mismatch "
+                    f"(best={min_mismatch}, ideal={ideal_mismatch})."
+                )
                 return solutions
         return solutions
 
@@ -990,6 +1171,58 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
     return True, unmatched
 
 
+def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
+    """
+    Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
+    
+    Consolidates all candidates from all SPGs and sorts them globally by count (highest first),
+    then by DOF, then by other metrics. This avoids redundant structure generation and
+    prioritizes real structural precedents across the entire SPG candidate set.
+    
+    Args:
+        cell_dims: Cell dimensions (e.g., [a, b, c, alpha, beta, gamma])
+        spg_list: List of space group integers to enumerate
+        composition: Dictionary of element -> count
+        ref_den: (density_min, density_max) tuple for density filtering
+        
+    Returns:
+        List of consolidated Wyckoff candidates sorted by global priority:
+            [(spg, comp, lattice, wp_ids, num_wps, dof, count, Z, original_spg), ...]
+        Each tuple includes the original SPG for reference.
+    """
+    all_candidates = []
+    
+    for spg in spg_list:
+        try:
+            wp_manager = WPManager(spg, cell_dims, composition, max_dof=10, ref_den=ref_den)
+            local_sols = wp_manager.get_wyckoff_positions()
+            
+            # Tag each solution with which SPG it came from
+            for sol in local_sols:
+                # sol = (spg, comp, lattice, wp_ids, num_wps, dof, count, Z)
+                # Add original SPG as 9th element for reference
+                tagged_sol = sol + (spg,)
+                all_candidates.append(tagged_sol)
+        except Exception as e:
+            # Skip SPGs that fail enumeration
+            continue
+    
+    if not all_candidates:
+        return []
+    
+    # Sort by count (descending), then by DOF (ascending), then by num_wps, then by Z
+    # This prioritizes high-count (real structure) assignments globally
+    all_candidates.sort(
+        key=lambda x: (-x[6], x[5], -x[4], x[7]),
+        reverse=False  # Lower values earlier except for count
+    )
+    
+    # Actually, let's fix the sort: count is highest priority (descending), DOF second (ascending)
+    all_candidates.sort(key=lambda x: (-x[6], x[5], -x[4], x[7]))
+    
+    return all_candidates
+
+
 def score_wp_candidate(sol, max_dof=None):
     """
     Rank a Wyckoff-position candidate for search prioritization.
@@ -999,16 +1232,20 @@ def score_wp_candidate(sol, max_dof=None):
 
     Ranking priorities:
     1. Respect the current DOF budget.
-    2. Lower total DOF first.
+    2. Lower combined cost (dof + 1.5 * num_wps) first — balances structural
+       compactness (fewer distinct sites) against coordinate freedom.  This
+       promotes configurations like '8d 16e 16e' (3 sites, DOF=7) over
+       sprawling '16e 8d 4b 4a 8d' (5 sites, DOF=5) because real structures
+       tend to occupy fewer distinct Wyckoff orbits.
     3. Higher combinatorial count first.
-    4. Fewer total Wyckoff sites first.
-    5. Less fragmented site assignment first.
-    6. Lower Z first.
+    4. Less fragmented site assignment first.
+    5. Lower Z first.
     """
     (_, _comp, _lattice, wp_ids, num_wps, dof, count, Z) = sol
     within_budget = 1 if max_dof is None or dof <= max_dof else 0
     fragmentation = sum(max(len(wp) - 1, 0) for wp in wp_ids)
-    return (within_budget, -dof, count, -num_wps, -fragmentation, -Z)
+    combined_cost = dof + 1.5 * num_wps  # lower → tried first
+    return (within_budget, count, -combined_cost, -fragmentation, -Z)
 
 
 def get_adaptive_wp_limits(total_candidates, max_to_try):
@@ -1067,6 +1304,14 @@ def is_excellent_refinement(r2, chi2, min_r2, max_chi2):
     return r2 >= max(min_r2 + 0.03, 0.98) or chi2 <= min(max_chi2 * 0.75, 0.08)
 
 
+def should_terminate_on_refined_candidate(r2, chi2, eng_rel, min_r2, max_chi2,
+                                          max_eng_rel_for_termination):
+    """Allow immediate termination only for excellent fit quality AND near-best energy."""
+    if not is_excellent_refinement(r2, chi2, min_r2, max_chi2):
+        return False
+    return eng_rel <= max_eng_rel_for_termination
+
+
 def perturb_atoms(atoms, displacement=0.06):
     """Apply a small random Cartesian displacement to atomic positions."""
     trial_atoms = atoms.copy()
@@ -1081,7 +1326,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     INST_FILE, logger, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5,
                     max_local_boosts=1, max_local_perturbations=2,
-                    perturb_displacement=0.06):
+                    perturb_displacement=0.06, structure_log=None,
+                    max_eng_rel_early_stop=None, forced_wp_solution=None):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1117,6 +1363,13 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     eng_best = eng_min
     best_refined_result = None
     best_refined_score = -1e9
+    best_refined_result_energy_ok = None
+    best_refined_energy_ok_score = -1e9
+    _slog = structure_log if structure_log is not None else []
+    if max_eng_rel_early_stop is None:
+        max_eng_rel_for_termination = max(float(refine_eng_window), 0.60)
+    else:
+        max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
 
     trial_cells = list(cells[:N1])
     smallest_cell_volume = min([cell.size for cell in trial_cells], default=None)
@@ -1144,14 +1397,23 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 f"Supercell-aware budget: volume ratio={vol_ratio:.2f}x vs smallest cell; "
                 f"N2 {N2}->{N2_eff}, N3 {N3}->{N3_eff}."
             )
-        wp_manager = WPManager(spg, cell.dims, composition, ref_den=ref_den)
-        sols = wp_manager.get_wyckoff_positions()
-        ranked_sols = [sol for sol in sols if sol[5] <= N3_eff]
+        if forced_wp_solution is not None:
+            normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
+            ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= N3_eff else []
+            logger.info(
+                f"Using forced Wyckoff candidate for cell {cell.dims}: "
+                f"count={normalized_forced_wp[6]}, dof={normalized_forced_wp[5]}, n_wps={normalized_forced_wp[4]}"
+            )
+        else:
+            wp_manager = WPManager(spg, cell.dims, composition, ref_den=ref_den)
+            sols = wp_manager.get_wyckoff_positions()
+            ranked_sols = [sol for sol in sols if sol[5] <= N3_eff]
         if len(ranked_sols) == 0:
             logger.info(f"No Wyckoff candidates satisfy DOF <= {N3_eff} for cell {cell.dims}.")
             continue
 
-        ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol, max_dof=N3_eff), reverse=True)
+        if forced_wp_solution is None:
+            ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol, max_dof=N3_eff), reverse=True)
         wp_limits = get_adaptive_wp_limits(len(ranked_sols), N2_eff)
         preview = [
             f"Z={sol[7]} count={sol[6]} dof={sol[5]} n_wps={sol[4]}"
@@ -1170,7 +1432,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             )
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
-                xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids)
+                xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count)
                 N4 = xm.dof * 3 if xm.dof != 1 else 4
                 N_false = 0
                 extra_trials = 0
@@ -1178,9 +1440,17 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 local_perturbations = 0
                 local_accepted_result = None
                 local_accepted_score = -1e9
+                best_sim_in_wpset = 0.0
+                valid_trials_in_wpset = 0
+                # Exit a WP set early if the first warm-up trials all yield very low sim.
+                # Use a conservative threshold — well below refine_sim_min — so only
+                # truly hopeless WP combinations are skipped.
+                wpset_warmup = max(4, N4 // 3)
+                wpset_low_sim_exit = max(0.35, refine_sim_min - 0.35)
+                combined_cost_val = dof + 1.5 * num_wps
                 logger.info(
                     f"{cell.chi2:.3f}, Z={Z}, count={count}, dof={dof}, n_wps={num_wps}, "
-                    f"sites={xm.sites}, {N4} trials"
+                    f"combined_cost={combined_cost_val:.1f}, sites={xm.sites}, {N4} trials"
                 )
                 trial_idx = 0
                 while trial_idx < (N4 + 1 + extra_trials):
@@ -1214,7 +1484,23 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
 
                     y2 = RawDataManager(x2, y2, bg_subtract=False).y
                     sim = Similarity((x1, y1), (x2, y2)).value
+                    valid_trials_in_wpset += 1
+                    if sim > best_sim_in_wpset:
+                        best_sim_in_wpset = sim
+                    # Early exit: if after the warm-up window the WP set has never reached
+                    # even a very low sim, it is very unlikely to produce a useful structure.
+                    if (valid_trials_in_wpset >= wpset_warmup and
+                            best_sim_in_wpset < wpset_low_sim_exit and
+                            extra_trials == 0):
+                        logger.info(
+                            f"  Low-sim early exit: best_sim={best_sim_in_wpset:.3f} < "
+                            f"{wpset_low_sim_exit:.2f} after {valid_trials_in_wpset} valid trials; "
+                            f"skipping remaining trials for this WP set."
+                        )
+                        break
                     msg = f"{xtal.get_xtal_string()}, {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+                    log_entry = {"eng": eng, "sim": sim, "r2": 0.0, "wr": None, "chi2": None, "refined": False}
+                    _slog.append(log_entry)
                     refined_score = None
 
                     # Composite refinement trigger using two independent, system-agnostic criteria:
@@ -1248,12 +1534,19 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         xtal.from_seed(atoms)
                         xtal.to_file(match_cif)
                         wr, r2, chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
-                        msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
                         if wr is not None and r2 is not None and chi2 is not None:
+                            msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
                             refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
+                            log_entry.update({"r2": r2, "wr": wr, "chi2": chi2, "refined": True})
                             if refined_score > best_refined_score:
                                 best_refined_score = refined_score
                                 best_refined_result = (wr, r2, chi2, xtal, eng_best)
+                            if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
+                                best_refined_energy_ok_score = refined_score
+                                best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best)
+                        else:
+                            logger.info("  Refinement failed; continuing search without refined metrics.")
+                            msg += " [refine-failed]"
                     else:
                         wr = None
                         r2 = None
@@ -1335,6 +1628,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 f"{xtal.get_xtal_string()}, {p_sim:.3f}, {p_eng:.3f}, "
                                 f"{p_stress:.3f}, {p_fmax:.3f} [perturb:{perturb_idx + 1}]"
                             )
+                            p_log_entry = {"eng": p_eng, "sim": p_sim, "r2": 0.0, "wr": None, "chi2": None, "refined": False}
+                            _slog.append(p_log_entry)
 
                             p_eng_rel = max(0.0, p_eng - eng_best)
                             p_refine_reason = None
@@ -1361,12 +1656,19 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 xtal.from_seed(perturbed_atoms)
                                 xtal.to_file(match_cif)
                                 p_wr, p_r2, p_chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
-                                p_msg += f" {p_wr:6.3f}, {p_r2:6.3f}, {p_chi2:6.3f}"
                                 if p_wr is not None and p_r2 is not None and p_chi2 is not None:
+                                    p_msg += f" {p_wr:6.3f}, {p_r2:6.3f}, {p_chi2:6.3f}"
                                     p_refined_score = float((1.5 * p_r2) - (0.4 * p_wr) - (0.2 * p_chi2))
+                                    p_log_entry.update({"r2": p_r2, "wr": p_wr, "chi2": p_chi2, "refined": True})
                                     if p_refined_score > best_refined_score:
                                         best_refined_score = p_refined_score
                                         best_refined_result = (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                    if p_eng_rel <= max_eng_rel_for_termination and p_refined_score > best_refined_energy_ok_score:
+                                        best_refined_energy_ok_score = p_refined_score
+                                        best_refined_result_energy_ok = (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                else:
+                                    logger.info("  Perturbation refinement failed; continuing local search.")
+                                    p_msg += " [refine-failed]"
                             else:
                                 p_wr = None
                                 p_r2 = None
@@ -1382,11 +1684,19 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             logger.info(p_msg)
 
                             if p_wr is not None and (p_r2 > min_r2 or p_chi2 < max_chi2):
-                                if p_refined_score is not None and p_refined_score > local_accepted_score:
+                                p_energy_ok = p_eng_rel <= max_eng_rel_for_termination
+                                if p_refined_score is not None and p_refined_score > local_accepted_score and p_energy_ok:
                                     local_accepted_score = p_refined_score
                                     local_accepted_result = (p_wr, p_r2, p_chi2, xtal, eng_best)
-                                if is_excellent_refinement(p_r2, p_chi2, min_r2, max_chi2):
+                                if should_terminate_on_refined_candidate(
+                                    p_r2, p_chi2, p_eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
+                                ):
                                     return (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                if not p_energy_ok:
+                                    logger.info(
+                                        f"  Good refined fit found but energy is too high for early stop: "
+                                        f"eng_rel={p_eng_rel:.3f} eV/atom (threshold={max_eng_rel_for_termination:.3f})."
+                                    )
 
                     if is_new_best_energy:
                         msg += ' +++++'
@@ -1395,19 +1705,37 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     logger.info(msg)
 
                     if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
-                        if refined_score is not None and refined_score > local_accepted_score:
+                        energy_ok = eng_rel <= max_eng_rel_for_termination
+                        if refined_score is not None and refined_score > local_accepted_score and energy_ok:
                             local_accepted_score = refined_score
                             local_accepted_result = (wr, r2, chi2, xtal, eng_best)
-                        if is_excellent_refinement(r2, chi2, min_r2, max_chi2):
+                        if should_terminate_on_refined_candidate(
+                            r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
+                        ):
                             return (wr, r2, chi2, xtal, eng_best)
+                        if not energy_ok:
+                            logger.info(
+                                f"  Good refined fit found but energy is too high for early stop: "
+                                f"eng_rel={eng_rel:.3f} eV/atom (threshold={max_eng_rel_for_termination:.3f})."
+                            )
                 if local_accepted_result is not None:
                     logger.info("Returning best locally intensified accepted candidate for current WP setting.")
                     return local_accepted_result
             prev_limit = limit
 
+    if best_refined_result_energy_ok is not None:
+        logger.info(
+            "No candidate met the acceptance threshold; returning best refined fallback candidate "
+            "that satisfies the relative-energy criterion."
+        )
+        return best_refined_result_energy_ok
+
     if best_refined_result is not None:
-        logger.info("No candidate met the acceptance threshold; returning best refined fallback candidate.")
-        return best_refined_result
+        logger.info(
+            "No candidate met the acceptance threshold, and refined fallback candidates "
+            "exceed the relative-energy criterion; returning no solution."
+        )
+        return (None, None, None, None, eng_best)
 
     return (None, None, None, None, eng_best)
 
@@ -1436,7 +1764,8 @@ if __name__ == "__main__":
                       #f'Examples/PXRD_K2SnO6_148.csv',
                       #f'Examples/PXRD_HgC2N2_122.csv',
                       #f'Examples/PXRD_Mg9Si5_176.csv',
-                      f'Examples/hardPXRD_HfTlCuS3_63.csv',
+                      #f'Examples/hardPXRD_HfTlCuS3_63.csv',
+                      f'Examples/PXRD_CoO2_12.csv',
                     ]:
         formula, ref_spg = _infer_formula_spg(Path(match_csv))
         df = pd.read_csv(match_csv)
@@ -1455,12 +1784,16 @@ if __name__ == "__main__":
                         theta_tols=[0.1, 0.15, 0.5],
                         min_abc=min_abc,
                         max_abc=max_abc,
-                        verbose=True,
+                        verbose=False,
                         )
-        sols = [(sol['spg'], sol['cell'], len(sol['mismatch']), sol['chi2'][1], sol['errors'], sol['id']) for sol in solutions]
+        sols = [
+            (sol['spg'], sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
+            for sol in solutions
+        ]
         cells = CellManager.consolidate(sols,
                                         max_solutions=200,
                                         merge_tol=0.02,
                                         ref_spg=ref_spg,
-                                        max_mismatch=20)
+                                        max_mismatch=20,
+                                        sort_by='volume')
         print(f"Final consolidated solutions for {match_csv}\n")

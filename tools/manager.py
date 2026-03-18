@@ -543,7 +543,7 @@ class CellManager:
     @classmethod
     def consolidate(cls, raw_data, merge_tol=0.15, max_solutions=10, ref_cell=None,
                     verbose=False, debug=False, ref_spg=None, max_mismatch=30,
-                    chi2_tie_tol=5e-4):
+                    chi2_tie_tol=5e-4, sort_by='chi2'):
         """
         Class method: Takes raw list of [spg, dims, missing, chi2, d2, error], instantiates objects,
         sorts, merges duplicates, removes supercells, and returns the clean list.
@@ -557,6 +557,9 @@ class CellManager:
             debug (bool): Whether to print debug information
             ref_spg (int): Reference space group number (optional)
             max_mismatch (int): Maximum allowed mismatch (optional)
+            sort_by (str): Sort order used during consolidation and for returned solutions. Options:
+                - 'chi2' (default): sort by chi2 / quality
+                - 'volume': sort by cell volume ascending
 
         Returns:
             kept_solutions (list): Consolidated list of CellManager objects
@@ -575,7 +578,15 @@ class CellManager:
                 return value
             return int(np.round(value / chi2_tie_tol))
 
-        if ref_cell is not None:
+        sort_mode = str(sort_by).lower()
+        if sort_mode not in ('chi2', 'volume'):
+            raise ValueError("sort_by must be either 'chi2' or 'volume'")
+
+        if sort_mode == 'volume':
+            # Volume-first ranking (then quality tie-breakers).
+            solutions.sort(key=lambda x: (x.size, x.chi2, x.missing, -x.spg))
+        elif ref_cell is not None:
+            # Reference-cell mode remains volume-prioritized unless overridden.
             solutions.sort(key=lambda x: (x.size, x.chi2, x.missing, -x.spg))
         else:
             solutions.sort(key=lambda x: (_chi2_bucket(x.chi2), x.missing, x.chi2, x.size, -x.spg))
@@ -587,8 +598,9 @@ class CellManager:
         print(f"{'Status':<6} | SPG | {'Dims (Sorted)':<27}| {'Chi2':<6}| {'Missing':<8}| {'Volume':<8}| {'Errors':<20}")
         for i in range(len(solutions)):
             if i in indices_to_skip: continue
-            base = solutions[i]#; print(base)
-            if base.spg >= 195 and base.missing > 5: continue
+            base = solutions[i]
+            cubic_max_mismatch = min(max_mismatch, 12)   # cubic: same max_mismatch, capped at 12
+            if base.spg >= 195 and base.missing > cubic_max_mismatch: continue
             if base.spg < 195 and base.missing > max_mismatch: continue
 
             strs = f"{'KEEP':<6} |{str(base)} "
@@ -635,6 +647,11 @@ class CellManager:
         if debug and not match_cell and ref_cell is not None:
             print("Warning: No solutions matched the reference volume criteria.")
             import sys; sys.exit()
+
+        # Optional resort of final solutions
+        if sort_mode == 'volume':
+            kept_solutions.sort(key=lambda x: x.size)
+            print(f"Solutions resorted by volume.")
 
         if ref_cell is not None:
             return kept_solutions, match_cell
@@ -786,7 +803,7 @@ class WPManager:
         self.Zs = (int(np.ceil(volume/vol[1])), int(np.floor(volume/vol[0])))
         if self.Zs[1] > max_Z:
             self.Zs = (self.Zs[0], max_Z)
-        print(f"Estimated Z range: {self.Zs}, Vol: {volume:.2f}, Vol bounds: [{vol[0]:.2f}, {vol[1]:.2f}]")
+        # print(f"Estimated Z range: {self.Zs}, Vol: {volume:.2f}, Vol bounds: [{vol[0]:.2f}, {vol[1]:.2f}]")
 
     def get_wyckoff_positions_general(self):
         """
@@ -821,6 +838,9 @@ class WPManager:
             print(f"Z={Z}: Kept {len(sols)} Wyckoff position combinations.")
             # sort sols by DOF and number of WPs
             sols = sorted(sols, key=lambda x: (x[5], x[4]))
+        for sol in sols:
+            wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
+            print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
     def get_wyckoff_positions(self):
@@ -874,11 +894,12 @@ class WPManager:
         # Sort the solutions by count and DOF
         sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))
         for sol in sols:
-            print(f"SPG: {sol[0]}, WPs: {sol[3]}, Num WPs: {sol[4]}, DOF: {sol[5]}, Count: {sol[6]}")
+            wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
+            print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}, Count: {sol[6]}")
         return sols
 
 class XtalManager:
-    def __init__(self, spg, species, numIons, cell, WPs):
+    def __init__(self, spg, species, numIons, cell, WPs, count=None):
         """
         Crystal Manager is used to handle crystal structure related operations.
 
@@ -888,6 +909,7 @@ class XtalManager:
             numIons (list): Number of ions for each species
             cell (list): Cell parameters
             WPs (list): Wyckoff positions
+            count (int, optional): Number of known structures with this WP combination
         """
         self.spg = Group(spg)
         self.WPs = WPs
@@ -904,7 +926,8 @@ class XtalManager:
         self.sites = sites
         volume = self.cell.volume if hasattr(self.cell, 'volume') else None
         vol_str = f", Volume: {volume:.2f}" if volume is not None else ""
-        print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}{vol_str}")
+        count_str = f", Count: {count}" if count is not None else ""
+        print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}{vol_str}{count_str}")
 
     def generate_structure(self, use_asu=False):
         """
