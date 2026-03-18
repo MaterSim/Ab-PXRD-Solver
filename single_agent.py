@@ -929,6 +929,72 @@ def _run_pipeline_fallback(
     composition = state.get("composition", {})
     density_min = state.get("density_min", 0.0)
     density_max = state.get("density_max", 0.0)
+    spg_prediction_rank = {
+        int(pred_spg): idx
+        for idx, (pred_spg, _prob) in enumerate(state.get("spg_predictions", []), start=1)
+    }
+
+    def _prediction_rank(spg_value: int) -> int:
+        return int(spg_prediction_rank.get(int(spg_value), 10**9))
+
+    def _chi2_bucket(value: float, tol: float = 5e-4) -> int:
+        if tol <= 0:
+            return int(np.round(float(value) * 1e6))
+        return int(np.round(float(value) / tol))
+
+    def _canonical_cell_signature(cell_obj) -> tuple:
+        dims = np.array(getattr(cell_obj, "dims", []), dtype=float)
+        if len(dims) == 0:
+            return (0, ())
+        if len(dims) >= 3:
+            abc = tuple(round(float(x), 3) for x in sorted(dims[:3].tolist()))
+            tail = tuple(round(float(x), 2) for x in dims[3:].tolist())
+            return (len(dims), abc + tail)
+        return (len(dims), tuple(round(float(x), 3) for x in sorted(dims.tolist())))
+
+    wp_candidate_cache: dict[tuple, list] = {}
+    wp_cost_cache: dict[tuple, tuple[int, int]] = {}
+
+    def _pair_key(cell_obj, spg_value: int) -> tuple:
+        return (_canonical_cell_signature(cell_obj), int(spg_value))
+
+    def _get_wp_candidates_for_pair(cell_obj, spg_value: int) -> list:
+        key = _pair_key(cell_obj, spg_value)
+        if key in wp_candidate_cache:
+            return wp_candidate_cache[key]
+        try:
+            candidates = enumerate_wyckoff_multi_spg(
+                cell_obj.dims,
+                [int(spg_value)],
+                composition,
+                ref_den=(density_min, density_max),
+            )
+        except Exception:
+            candidates = []
+        wp_candidate_cache[key] = candidates
+        return candidates
+
+    def _estimate_pair_trial_cost(cell_obj, spg_value: int) -> tuple[int, int]:
+        key = _pair_key(cell_obj, spg_value)
+        if key in wp_cost_cache:
+            return wp_cost_cache[key]
+
+        candidates = _get_wp_candidates_for_pair(cell_obj, spg_value)
+        candidate_count = len(candidates)
+        top_candidates = candidates[:20]
+
+        est_trials = 0
+        for candidate in top_candidates:
+            dof = int(candidate[5])
+            n4 = dof * 3 if dof != 1 else 4
+            est_trials += (n4 + 1)
+
+        if candidate_count == 0:
+            est_trials = 10**9
+
+        out = (candidate_count, est_trials)
+        wp_cost_cache[key] = out
+        return out
     predicted_spgs = []
     for pred_spg, _prob in state.get("spg_predictions", [])[: int(state.get("spg_top_k", 5))]:
         spg_int = int(pred_spg)
@@ -1001,36 +1067,116 @@ def _run_pipeline_fallback(
                 all_seed_cells.append((float(getattr(cell, "size", 0.0)), cell, seed_spg))
 
         if all_seed_cells:
-            # ── Phase 2: rank ALL (cell, spg) pairs globally ─────────────────────
-            # Primary: volume ascending (smallest cell first, then larger)
-            # Secondary: descending SPG number within same volume (higher symmetry first)
-            # Tertiary: chi2, missing
-            all_seed_cells.sort(
-                key=lambda t: (
-                    round(t[0], 1),            # exact volume (Å³), ascending
-                    -t[2],                     # descending SPG number (65 before 35 before 21)
-                    getattr(t[1], "chi2", 1e9),
-                    getattr(t[1], "missing", 999),
+            # ── Phase 2: plan ALL (cell, spg) pairs with explicit cost estimates ─
+            # 1. Group permutation-equivalent / near-identical cells into families.
+            # 2. For each (cell, spg), estimate cost by Wyckoff candidate count and
+            #    estimated number of generated trials.
+            # 3. Rank by (small volume first, lower estimated trials first), then
+            #    prediction rank and fit quality.
+            grouped_seed_cells: dict[tuple, list[tuple[float, object, int]]] = {}
+            for item in all_seed_cells:
+                _vol, _cell, _spg = item
+                sig = _canonical_cell_signature(_cell)
+                grouped_seed_cells.setdefault(sig, []).append(item)
+
+            planned_groups = []
+            for sig, members in grouped_seed_cells.items():
+                enriched_members = []
+                for _vol, _cell, _spg in members:
+                    cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg)
+                    if cand_count == 0:
+                        continue  # no valid Wyckoff assignments — skip
+                    enriched_members.append(
+                        {
+                            "vol": float(_vol),
+                            "cell": _cell,
+                            "spg": int(_spg),
+                            "cand_count": int(cand_count),
+                            "est_trials": int(est_trials),
+                        }
+                    )
+
+                if not enriched_members:
+                    continue  # all members in this family had no valid Wyckoff assignments
+
+                enriched_members.sort(
+                    key=lambda m: (
+                        m["est_trials"],
+                        round(m["vol"], 1),
+                        m["cand_count"],
+                        _prediction_rank(m["spg"]),
+                        getattr(m["cell"], "missing", 999),
+                        _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
+                        getattr(m["cell"], "chi2", 1e9),
+                        -CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(int(m["spg"])), 0),
+                        -int(m["spg"]),
+                    )
+                )
+                best_symmetry = max(
+                    CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(int(m["spg"])), 0)
+                    for m in enriched_members
+                )
+                best_missing = min(getattr(m["cell"], "missing", 999) for m in enriched_members)
+                best_chi2 = min(float(getattr(m["cell"], "chi2", 1e9)) for m in enriched_members)
+                best_pred_rank = min(_prediction_rank(m["spg"]) for m in enriched_members)
+                min_group_volume = min(float(m["vol"]) for m in enriched_members)
+                min_group_trials = min(int(m["est_trials"]) for m in enriched_members)
+                min_group_candidates = min(int(m["cand_count"]) for m in enriched_members)
+                planned_groups.append(
+                    {
+                        "signature": sig,
+                        "members": enriched_members,
+                        "best_symmetry": best_symmetry,
+                        "best_missing": best_missing,
+                        "best_chi2": best_chi2,
+                        "best_pred_rank": best_pred_rank,
+                        "min_volume": min_group_volume,
+                        "min_trials": min_group_trials,
+                        "min_candidates": min_group_candidates,
+                    }
+                )
+
+            planned_groups.sort(
+                key=lambda g: (
+                    g["min_trials"],
+                    round(g["min_volume"], 1),
+                    g["min_candidates"],
+                    -g["best_symmetry"],
+                    g["best_pred_rank"],
+                    g["best_missing"],
+                    _chi2_bucket(g["best_chi2"]),
                 )
             )
+
+            all_seed_cells = [
+                (member["vol"], member["cell"], member["spg"])
+                for group in planned_groups
+                for member in group["members"]
+            ]
+
             vol_lo = all_seed_cells[0][0]
             vol_hi = all_seed_cells[-1][0]
             _emit_progress(
-                f"Phase 2: globally ranked {len(all_seed_cells)} (cell, SPG) pair(s) by "
-                f"(volume asc, SPG desc). Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
+                f"Phase 2: planned {len(all_seed_cells)} (cell, SPG) pair(s) across "
+                f"{len(planned_groups)} cell family/families. Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
+            )
+            _emit_progress(
+                "Phase 2 strategy: prioritize (small volume, fewer estimated trials/candidates), "
+                "then (symmetry, SG prediction rank, missing, chi2)."
             )
 
             # ── Phase 2 summary table ────────────────────────────────────────────
             _emit_progress(
-                f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} Dims"
+                f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} {'EstTrials':<10} Dims"
             )
-            _emit_progress("-" * 72)
+            _emit_progress("-" * 92)
             for _ri, (_vol, _cell, _spg) in enumerate(all_seed_cells, start=1):
+                _cand_count, _est_trials = _estimate_pair_trial_cost(_cell, _spg)
                 _dims_str = "  ".join(f"{float(x):8.3f}" for x in _cell.dims)
                 _emit_progress(
                     f"{_ri:<5} {_spg:<5} {_vol:<11.1f} "
                     f"{getattr(_cell, 'chi2', float('nan')):<8.4f} "
-                    f"{getattr(_cell, 'missing', -1):<8} {_dims_str}"
+                    f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_dims_str}"
                 )
             _emit_progress("")
 
@@ -1044,12 +1190,7 @@ def _run_pipeline_fallback(
                 )
 
                 try:
-                    consolidated_wp = enumerate_wyckoff_multi_spg(
-                        cell.dims,
-                        [seed_spg],          # only this SPG — same dims tried per-SPG separately
-                        composition,
-                        ref_den=(density_min, density_max),
-                    )
+                    consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg)
                 except Exception as exc:
                     _emit_progress(f"{pair_desc}: Wyckoff enumeration failed ({exc}). Skipping.")
                     continue
