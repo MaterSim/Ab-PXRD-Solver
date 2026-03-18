@@ -711,15 +711,19 @@ class CellSolver:
             return []
         if self.verbose: print("Total guesses:", len(guesses))
         sum_squares = np.sum(guesses**2, axis=(1,2))
-        sorted_indices = np.argsort(sum_squares)
-        guesses = guesses[sorted_indices]
         if len(guesses) > self.max_guess:
             if self.spg is not None:
                 print(
                     f"Truncating hkl guess sets for space group {self.spg}: "
                     f"{len(guesses)} -> {self.max_guess}."
                 )
-            guesses = guesses[:self.max_guess]
+            # Keep only the smallest-sum guesses without fully sorting the tail.
+            keep_ids = np.argpartition(sum_squares, self.max_guess - 1)[:self.max_guess]
+            guesses = guesses[keep_ids]
+            sum_squares = sum_squares[keep_ids]
+
+        sorted_indices = np.argsort(sum_squares)
+        guesses = guesses[sorted_indices]
 
         n_peaks = len(guesses[0])
         N = min([n_peaks + self.N_add, self.theta_count])
@@ -729,10 +733,11 @@ class CellSolver:
         if len(peak_combos) == 0:
             return []
         N_thetas = len(peak_combos)
-        thetas_base = available_peaks[peak_combos].reshape(-1)
+        thetas_by_combo = available_peaks[peak_combos]
 
         results = []
         cell_all = []
+        perfect_match_count = 0
 
         for start in range(0, len(guesses), self.N_batch):
             end = min(start + self.N_batch, len(guesses))
@@ -741,58 +746,67 @@ class CellSolver:
             if batch_size == 0:
                 continue
 
-            # Repeat each guess for each peak-combination candidate.
-            hkls_t = np.repeat(batch_guesses, N_thetas, axis=0).reshape(-1, 3)
-            thetas = np.tile(thetas_base, batch_size)
+            # Chunk combo expansion to avoid very large temporary arrays.
+            target_pair_count = 40000
+            combo_chunk = max(1, min(N_thetas, target_pair_count // max(1, batch_size)))
 
-            sols = self.get_cell_from_multi_hkls(hkls_t, thetas)
-            count = 0
-            for sol in sols:
-                guess, match, unmatch, chi2 = sol['id'], len(sol['match']), len(sol['mismatch']), sol['chi2'][1]
-                if match == self.theta_count:
-                    count += 1
-                    cell1 = sol['cell'] #np.sort(np.array(sol['cell']))
-                    vol = self.get_volume_from_cell(cell1)
-                    d2 = np.sum(guess**2)
-                    add = False
+            for combo_start in range(0, N_thetas, combo_chunk):
+                combo_end = min(combo_start + combo_chunk, N_thetas)
+                combo_thetas = thetas_by_combo[combo_start:combo_end]
+                combo_count = len(combo_thetas)
 
-                    if len(cell_all) == 0:
-                        add = True
-                    else:
-                        diffs = np.sqrt(np.sum((cell_all - cell1)**2, axis=1))
-                        if len(cell_all[diffs < self.cell_tol]) == 0:
+                # Repeat each guess for each peak-combination candidate in this chunk.
+                hkls_t = np.repeat(batch_guesses, combo_count, axis=0).reshape(-1, 3)
+                thetas = np.tile(combo_thetas.reshape(-1), batch_size)
+
+                sols = self.get_cell_from_multi_hkls(hkls_t, thetas)
+                for sol in sols:
+                    guess, match, unmatch, chi2 = sol['id'], len(sol['match']), len(sol['mismatch']), sol['chi2'][1]
+                    if match == self.theta_count:
+                        perfect_match_count += 1
+                        cell1 = sol['cell'] #np.sort(np.array(sol['cell']))
+                        vol = self.get_volume_from_cell(cell1)
+                        d2 = np.sum(guess**2)
+                        add = False
+
+                        if len(cell_all) == 0:
                             add = True
                         else:
-                            ids = np.where(diffs < self.cell_tol)[0]
-                            # keep the one with lower chi2
-                            if chi2 < np.array([results[i]['chi2'][1] for i in ids]).min():
-                                # remove the old one
-                                for j in sorted(ids, reverse=True):
-                                    del results[j]
-                                    cell_all = np.delete(cell_all, j, axis=0)
+                            diff2 = np.sum((cell_all - cell1)**2, axis=1)
+                            ids = np.where(diff2 < self.cell_tol**2)[0]
+                            if len(ids) == 0:
                                 add = True
-                                #if self.verbose:
-                                #    print(f"Found better cell for similar solution, χ²: {chi2:.4f}")
+                            else:
+                                # keep the one with lower chi2
+                                best_existing_chi2 = min(results[i]['chi2'][1] for i in ids)
+                                if chi2 < best_existing_chi2:
+                                    # remove the old one
+                                    for j in sorted(ids, reverse=True):
+                                        del results[j]
+                                        cell_all = np.delete(cell_all, j, axis=0)
+                                    add = True
+                                    #if self.verbose:
+                                    #    print(f"Found better cell for similar solution, χ²: {chi2:.4f}")
 
-                    if add:
-                        results.append(sol)
-                        if len(cell_all) == 0:
-                            cell_all = np.array([cell1])
-                        else:
-                            cell_all = np.vstack([cell_all, cell1])
+                        if add:
+                            results.append(sol)
+                            if len(cell_all) == 0:
+                                cell_all = np.array([cell1])
+                            else:
+                                cell_all = np.vstack([cell_all, cell1])
 
-                    if self.verbose:
-                        cell1_str = ' '.join([f'{p:6.3f}' for p in cell1]) + f" [{vol:7.1f}]"
-                        guess_str = ' '.join([f'{g:2d}' for g in guess])
-                        strs = f"{guess_str} [{d2:2d}] {cell1_str} {unmatch:2d}/{self.theta_count:3d} "
-                        strs += f"χ²: {chi2:.4f} "
-                        strs += ' '.join([f"{e:.3f}" for e in sol['errors']])
-                        strs += f" {len(results):3d}/{add}"
-                        print(strs)
+                        if self.verbose:
+                            cell1_str = ' '.join([f'{p:6.3f}' for p in cell1]) + f" [{vol:7.1f}]"
+                            guess_str = ' '.join([f'{g:2d}' for g in guess])
+                            strs = f"{guess_str} [{d2:2d}] {cell1_str} {unmatch:2d}/{self.theta_count:3d} "
+                            strs += f"χ²: {chi2:.4f} "
+                            strs += ' '.join([f"{e:.3f}" for e in sol['errors']])
+                            strs += f" {len(results):3d}/{add}"
+                            print(strs)
 
-                    if len(cell_all) >= max_solutions or count >= max_count:
-                        print(f"Reached maximum number of solutions ({max_solutions}). Stop!")
-                        return results
+                        if len(cell_all) >= max_solutions or perfect_match_count >= max_count:
+                            print(f"Reached maximum number of solutions ({max_solutions}). Stop!")
+                            return results
 
             if self.verbose and (start // self.N_batch) % 100 == 0:
                 d2 = (guesses[start]**2).sum()

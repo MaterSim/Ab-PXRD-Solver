@@ -267,6 +267,28 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
     spg = int(spg_from_filename) if spg_from_filename is not None else 0
     composition = parse_formula(formula)
 
+    density = predict_density_ensemble(formula, sigma=2.5)
+    density_min = float(density['min'])
+    density_max = float(density['max'])
+    density_pred = float(density.get('prediction', density_max))
+
+    # V1: estimated formula volume from the predicted density.
+    # Effective max-cell-volume is max(V1*5, V2), where V2 is user input.
+    density_for_v1 = density_pred if density_pred > 0 else max(density_max, 1e-6)
+    formula_volume_v1 = float(get_volume_from_density(composition, density_for_v1))
+    formula_volume_cap = 5.0 * formula_volume_v1
+    user_max_volume_v2 = None if max_cell_volume is None else float(max_cell_volume)
+    effective_max_cell_volume = (
+        max(formula_volume_cap, user_max_volume_v2)
+        if user_max_volume_v2 is not None
+        else formula_volume_cap
+    )
+    max_cell_volume = effective_max_cell_volume
+    state["max_cell_volume"] = effective_max_cell_volume
+    state["formula_volume_v1"] = formula_volume_v1
+    state["formula_volume_cap"] = formula_volume_cap
+    state["max_cell_volume_input_v2"] = user_max_volume_v2
+
     min_abc = 2.0
     wavelength = 1.54184
 
@@ -358,10 +380,7 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
             "Cannot infer space group from file name. Use --infer-spg or rename file as PXRD_<formula>_<spg>.csv."
         )
 
-    density = predict_density_ensemble(formula, sigma=2.5)
-    density_min = float(density['min'])
-    density_max = float(density['max'])
-    min_volume = float(get_volume_from_density(composition, density['max']))
+    min_volume = float(get_volume_from_density(composition, max(density_max, 1e-6)))
 
     result = {
         "spg": int(spg),
@@ -374,6 +393,9 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
         "density_min": density_min,
         "density_max": density_max,
         "min_volume": min_volume,
+        "formula_volume_v1": formula_volume_v1,
+        "formula_volume_cap": formula_volume_cap,
+        "max_cell_volume": max_cell_volume,
         "min_abc": min_abc,
         "wavelength": wavelength,
     }
@@ -1481,8 +1503,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--spg-top-k",
         type=int,
-        choices=[3, 5, 10, 20, 25, 30, 50],
-        default=50,
+        choices=[3, 5, 10, 20, 25, 30, 50, 100],
+        default=100,
         help="Number of inferred space-group options to evaluate/show (3 or 5).",
     )
     parser.add_argument(
