@@ -6,6 +6,7 @@ import logging
 import os
 import inspect
 import random
+import re
 import shutil
 import sys
 import time
@@ -42,6 +43,170 @@ logging.root.setLevel(logging.INFO)
 
 logger = logging.getLogger("strands.multiagent")
 logger.setLevel(logging.ERROR)
+
+
+def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    cleaned = []
+    for ch in text:
+        if ch.isalnum() or ch in {"-", "_", "."}:
+            cleaned.append(ch)
+        else:
+            cleaned.append("_")
+    token = "".join(cleaned).strip("_")
+    return token or fallback
+
+
+def _get_system_run_log_path(state: dict) -> str:
+    pxrd_csv = str(state.get("pxrd_csv") or "")
+    stem = Path(pxrd_csv).stem if pxrd_csv else "unknown_system"
+    log_name = f"RunLog_{_safe_name_token(stem)}.log"
+    return str(Path("Results") / log_name)
+
+
+def _is_important_runlog_message(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+
+    noisy_prefixes = (
+        "Peak at index ",
+        "Removed peak ",
+        "Trying ",
+        "Generated ",
+        "Reached maximum number of solutions",
+        "Filtered singular orthorhombic hkl guess sets",
+        "Solution for ",
+        "Status | SPG | Dims (Sorted)",
+        "KEEP   |",
+        "DROP   |",
+        "SKIP   |",
+        "Z=",
+        "SPG: ",
+        "Using Materials Project MACE",
+        "Using float32 for MACECalculator",
+        "Using CPU",
+        "Default dtype float32 does not match model dtype float64",
+    )
+    if text.startswith(noisy_prefixes):
+        return False
+
+    important_prefixes = (
+        "=",
+        "Run started:",
+        "Input:",
+        "Per-system run log:",
+        "Starting pipeline",
+        "Applying lattice symmetry filter:",
+        "Lattice symmetry filter ",
+        "Unknown lattice symmetry filter",
+        "Selected inferred space group:",
+        "Cell solving completed",
+        "Cell solve phase 1",
+        "No inferred SG candidate produced valid cells",
+        "No valid unit cells found.",
+        "Phase 2:",
+        "Phase 2 strategy:",
+        "Rank  ",
+        "[Pair ",
+        "Pair ",
+        "WP #",
+        "Space group:",
+        "Adaptive Wyckoff solve:",
+        "Attempt ",
+        "Final refinement results:",
+        "Best refinement plot saved to",
+        "Best structure saved to",
+        "Selected attempt ",
+        "No satisfactory solution found across all attempts.",
+        "No inferred space group met acceptance thresholds;",
+        "Completed inferred SG sweep;",
+        "Best inferred-SG score observed:",
+        "Best accepted inferred-SG solution details:",
+        "Accepted solution details:",
+        "Accepted artifacts:",
+        "Good solution found early:",
+        "Timing breakdown:",
+        "Timing summary:",
+        "Pipeline finished without a solution",
+        "Pipeline completed successfully!",
+        "Process interrupted by user",
+        "Exiting main thread",
+        "Saved consolidated run log to ",
+    )
+    if text.startswith(important_prefixes):
+        return True
+
+    important_substrings = (
+        "rejected for spg=",
+        "precheck error for spg=",
+        "accepted solution found; moving to next ranked pair",
+        "Refinement triggered:",
+        "Refinement skipped:",
+        "Perturbation refinement triggered:",
+        "Perturbed refinement skipped:",
+        "Low-sim early exit:",
+        "Promising local minimum for current WP setting; adding",
+        "Running ",
+        "Perturbation ",
+        "Early-stop deferred:",
+        "Good refined fit found but energy is too high for early stop:",
+        "Returning best locally intensified accepted candidate",
+        "returning best refined fallback candidate",
+        "returning no solution",
+        "metrics: Wr=",
+    )
+    if any(token in text for token in important_substrings):
+        return True
+
+    if re.match(r"^\d+\s+\d+\s+\d", text):
+        return True
+    if re.match(r"^-{20,}$", text):
+        return True
+    if text.startswith("*"):
+        return True
+
+    return False
+
+
+class _SystemRunLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            return _is_important_runlog_message(record.getMessage())
+        except Exception:
+            return True
+
+
+def _attach_system_run_log(state: dict) -> logging.Handler | None:
+    try:
+        os.makedirs("Results", exist_ok=True)
+        log_path = _get_system_run_log_path(state)
+        handler = logging.FileHandler(log_path, mode="a")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.addFilter(_SystemRunLogFilter())
+        logging.root.addHandler(handler)
+        state["system_run_log"] = log_path
+        run_banner = f"\n{'=' * 80}\nRun started: {time.strftime('%Y-%m-%d %H:%M:%S')}\nInput: {state.get('pxrd_csv')}\n{'=' * 80}"
+        print(run_banner)
+        print(f"Per-system run log: {log_path}")
+        return handler
+    except Exception as exc:
+        print(f"Warning: failed to create per-system run log ({exc}).")
+        return None
+
+
+def _detach_system_run_log(handler: logging.Handler | None) -> None:
+    if handler is None:
+        return
+    try:
+        logging.root.removeHandler(handler)
+    finally:
+        try:
+            handler.close()
+        except Exception:
+            pass
 
 
 def _env_int(name: str, default: int, min_value: int | None = None) -> int:
@@ -551,6 +716,12 @@ def _plot_energy_vs_r2(
             ax.scatter(re, rr, c="crimson", marker="*", s=140, alpha=0.7,
                        label=f"Refined (N={len(re)})")
 
+        if engs:
+            x_min = min(float(e) for e in engs)
+            x_max = max(float(e) for e in engs)
+            if (x_max - x_min) < 0.1:
+                ax.set_xlim(x_min - 0.05, x_max + 0.05)
+
         ax.set_xlabel("Energy per atom (eV)")
         ax.set_ylabel("R² score  (0 = not refined)")
         ax.set_ylim(-0.2, 1.1)
@@ -706,7 +877,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             f"perturb_displacement={perturb_displacement:.3f}"
         )
 
-        wr, r2, chi2, xtal, eng_best = search_solution(
+        wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel = search_solution(
             cells[:N1],
             spg,
             composition,
@@ -752,6 +923,8 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             "chi2": float(chi2),
             "xtal": xtal,
             "eng_best": float(eng_best),
+            "selected_energy": float(selected_eng) if selected_eng is not None else None,
+            "eng_rel": float(selected_eng_rel) if selected_eng_rel is not None else None,
             "attempt": attempt_idx + 1,
             "seed": seed,
             "png": attempt_refinement_png,
@@ -760,9 +933,14 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         }
         candidate["accepted"] = _meets_acceptance(candidate)
         score = _score_result(candidate)
+        selected_energy_text = (
+            f", E={candidate['selected_energy']:.4f}, dE={candidate['eng_rel']:.4f}"
+            if candidate["selected_energy"] is not None and candidate["eng_rel"] is not None
+            else ""
+        )
         logger.info(
             f"Attempt {attempt_idx + 1} metrics: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}, "
-            f"score={score:.4f}, accepted={candidate['accepted']}"
+            f"score={score:.4f}, accepted={candidate['accepted']}{selected_energy_text}"
         )
 
         if score > best_score:
@@ -959,6 +1137,8 @@ def _run_pipeline_fallback(
         r2 = result.get("r2")
         chi2 = result.get("chi2")
         score = result.get("score")
+        selected_energy = result.get("selected_energy")
+        eng_rel = result.get("eng_rel")
         attempt = result.get("attempt")
         seed = result.get("seed")
         cif = result.get("cif")
@@ -968,6 +1148,8 @@ def _run_pipeline_fallback(
         r2_text = f"{float(r2):.4f}" if r2 is not None else "n/a"
         chi2_text = f"{float(chi2):.4f}" if chi2 is not None else "n/a"
         score_text = f"{float(score):.4f}" if score is not None else "n/a"
+        energy_text = f"{float(selected_energy):.4f}" if selected_energy is not None else "n/a"
+        eng_rel_text = f"{float(eng_rel):.4f}" if eng_rel is not None else "n/a"
         attempt_text = str(attempt) if attempt is not None else "n/a"
         seed_text = str(seed) if seed is not None else "n/a"
         cif_text = str(cif) if cif else "n/a"
@@ -975,7 +1157,8 @@ def _run_pipeline_fallback(
 
         _emit_progress(
             f"{prefix} details: spg={spg_value}, Wr={wr_text}, R2={r2_text}, "
-            f"Chi2={chi2_text}, score={score_text}, attempt={attempt_text}, seed={seed_text}"
+            f"Chi2={chi2_text}, score={score_text}, E={energy_text}, dE={eng_rel_text}, "
+            f"attempt={attempt_text}, seed={seed_text}"
         )
         _emit_progress(f"Accepted artifacts: CIF={cif_text}, PNG={png_text}")
 
@@ -1021,6 +1204,22 @@ def _run_pipeline_fallback(
         if tol <= 0:
             return int(np.round(float(value) * 1e6))
         return int(np.round(float(value) / tol))
+
+    def _balanced_pair_priority(
+        est_trials: int,
+        volume: float,
+        min_trials: int,
+        min_volume: float,
+        trial_weight: float = 0.65,
+        volume_weight: float = 0.35,
+    ) -> float:
+        safe_trials = max(1.0, float(est_trials))
+        safe_volume = max(1e-6, float(volume))
+        ref_trials = max(1.0, float(min_trials))
+        ref_volume = max(1e-6, float(min_volume))
+        trial_ratio = safe_trials / ref_trials
+        volume_ratio = safe_volume / ref_volume
+        return float((trial_ratio ** trial_weight) * (volume_ratio ** volume_weight))
 
     def _canonical_cell_signature(cell_obj) -> tuple:
         dims = np.array(getattr(cell_obj, "dims", []), dtype=float)
@@ -1151,8 +1350,8 @@ def _run_pipeline_fallback(
             # 1. Group permutation-equivalent / near-identical cells into families.
             # 2. For each (cell, spg), estimate cost by Wyckoff candidate count and
             #    estimated number of generated trials.
-            # 3. Rank by (small volume first, lower estimated trials first), then
-            #    prediction rank and fit quality.
+            # 3. Globally rank every pair by a balanced score that combines
+            #    relative estimated trials and relative cell volume.
             grouped_seed_cells: dict[tuple, list[tuple[float, object, int]]] = {}
             for item in all_seed_cells:
                 _vol, _cell, _spg = item
@@ -1228,35 +1427,71 @@ def _run_pipeline_fallback(
                 )
             )
 
-            all_seed_cells = [
-                (member["vol"], member["cell"], member["spg"])
+            planned_pairs = [
+                member
                 for group in planned_groups
                 for member in group["members"]
             ]
+            min_pair_trials = min(int(member["est_trials"]) for member in planned_pairs)
+            min_pair_volume = min(float(member["vol"]) for member in planned_pairs)
+            for member in planned_pairs:
+                member["balance_score"] = _balanced_pair_priority(
+                    member["est_trials"],
+                    member["vol"],
+                    min_pair_trials,
+                    min_pair_volume,
+                )
+            planned_pairs.sort(
+                key=lambda m: (
+                    m["balance_score"],
+                    m["est_trials"],
+                    round(m["vol"], 1),
+                    m["cand_count"],
+                    -CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(int(m["spg"])), 0),
+                    _prediction_rank(m["spg"]),
+                    getattr(m["cell"], "missing", 999),
+                    _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
+                    getattr(m["cell"], "chi2", 1e9),
+                    -int(m["spg"]),
+                )
+            )
 
-            vol_lo = all_seed_cells[0][0]
-            vol_hi = all_seed_cells[-1][0]
+            all_seed_cells = [
+                (member["vol"], member["cell"], member["spg"])
+                for member in planned_pairs
+            ]
+
+            volumes = [float(item[0]) for item in all_seed_cells]
+            vol_lo = min(volumes)
+            vol_hi = max(volumes)
             _emit_progress(
                 f"Phase 2: planned {len(all_seed_cells)} (cell, SPG) pair(s) across "
                 f"{len(planned_groups)} cell family/families. Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
             )
             _emit_progress(
-                "Phase 2 strategy: prioritize (small volume, fewer estimated trials/candidates), "
+                "Phase 2 strategy: globally rank every (cell, SPG) pair by a balanced "
+                "score combining relative estimated trials and relative volume "
+                "(trial_weight=0.65, volume_weight=0.35), then break ties by "
+                "(fewer estimated trials, smaller volume, fewer candidates), "
                 "then (symmetry, SG prediction rank, missing, chi2)."
             )
 
             # ── Phase 2 summary table ────────────────────────────────────────────
             _emit_progress(
-                f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} {'EstTrials':<10} Dims"
+                f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} {'EstTrials':<10} {'BalScore':<9} Dims"
             )
-            _emit_progress("-" * 92)
-            for _ri, (_vol, _cell, _spg) in enumerate(all_seed_cells, start=1):
-                _cand_count, _est_trials = _estimate_pair_trial_cost(_cell, _spg)
+            _emit_progress("-" * 104)
+            for _ri, _pair in enumerate(planned_pairs, start=1):
+                _vol = _pair["vol"]
+                _cell = _pair["cell"]
+                _spg = _pair["spg"]
+                _est_trials = _pair["est_trials"]
+                _balance_score = float(_pair.get("balance_score", float("nan")))
                 _dims_str = "  ".join(f"{float(x):8.3f}" for x in _cell.dims)
                 _emit_progress(
                     f"{_ri:<5} {_spg:<5} {_vol:<11.1f} "
                     f"{getattr(_cell, 'chi2', float('nan')):<8.4f} "
-                    f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_dims_str}"
+                    f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_balance_score:<9.3f} {_dims_str}"
                 )
             _emit_progress("")
 
@@ -1355,12 +1590,33 @@ def _run_pipeline_fallback(
                                 r2_val is not None and chi2_val is not None and
                                 r2_val >= 0.93 and chi2_val < 0.18
                             )
+                            candidate_energy = trial_result.get("selected_energy")
+                            global_energy_values = [
+                                float(entry.get("eng"))
+                                for entry in global_structure_log
+                                if entry.get("eng") is not None
+                            ]
+                            global_best_energy = min(global_energy_values) if global_energy_values else None
+                            global_eng_rel = None
+                            if candidate_energy is not None and global_best_energy is not None:
+                                global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
+                            max_eng_rel_early_stop = max(
+                                0.0,
+                                float(state.get(
+                                    "max_eng_rel_early_stop",
+                                    state.get("max_eng_rel") if state.get("max_eng_rel") is not None else 0.20,
+                                )),
+                            )
+                            energy_ok_for_global_early_exit = (
+                                global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop
+                            )
                             enough_global_structures = len(global_structure_log) >= max(0, int(state.get("min_structures_before_early_stop", 10)))
-                            if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures:
+                            if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and energy_ok_for_global_early_exit:
                                 _emit_progress(
                                     f"Good solution found early: spg={spg_val}, "
                                     f"R2={trial_result.get('r2', 0):.4f}, "
-                                    f"Chi2={trial_result.get('chi2', 0):.4f}. "
+                                    f"Chi2={trial_result.get('chi2', 0):.4f}, "
+                                    f"dE_global={global_eng_rel:.4f}. "
                                     f"Stopping search after pair {rank_idx}/{len(all_seed_cells)} "
                                     f"and {wp_attempted} WP candidate(s)."
                                 )
@@ -1385,9 +1641,21 @@ def _run_pipeline_fallback(
                                     "spg": state.get("spg"),
                                     "formula": state.get("formula"),
                                 }
+                            if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and not energy_ok_for_global_early_exit:
+                                if global_eng_rel is not None:
+                                    _emit_progress(
+                                        f"Good refined fit found for spg={spg_val}, but skipping early stop "
+                                        f"because dE_global={global_eng_rel:.4f} exceeds "
+                                        f"{max_eng_rel_early_stop:.4f} eV/atom."
+                                    )
+                                else:
+                                    _emit_progress(
+                                        f"Good refined fit found for spg={spg_val}, but skipping early stop "
+                                        f"because global energy comparison is unavailable."
+                                    )
                             _emit_progress(
                                 f"Accepted solution found for spg={spg_val}; continuing "
-                                f"(stop-on-first-accepted is disabled)."
+                                f"(early-stop criteria not met or disabled)."
                             )
 
                     prev_limit = limit
@@ -1670,6 +1938,8 @@ def main(
     run_prompt = INPUT_PROMPT if input_prompt is None else input_prompt
     force_fallback, _ = _startup_runtime_mode()
     _FAILURE_STATUSES = {"no_cells", "no_solution"}
+    system_log_handler = _attach_system_run_log(run_state)
+    result = None
 
     try:
         if force_fallback:
@@ -1692,6 +1962,11 @@ def main(
             result = _run_pipeline_fallback(run_state)
         else:
             raise
+    finally:
+        system_log_path = run_state.get("system_run_log")
+        if system_log_path:
+            print(f"Saved consolidated run log to {system_log_path}")
+        _detach_system_run_log(system_log_handler)
 
     result_status = result.get("status", "") if isinstance(result, dict) else ""
 

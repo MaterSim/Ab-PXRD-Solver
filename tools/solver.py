@@ -1434,7 +1434,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         logger: Logger for recording results.
 
     Returns:
-        Tuple of (wr, r2, chi2, xtal, eng_best)
+        Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
 
     eng_best = eng_min
@@ -1618,10 +1618,10 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             log_entry.update({"r2": r2, "wr": wr, "chi2": chi2, "refined": True})
                             if refined_score > best_refined_score:
                                 best_refined_score = refined_score
-                                best_refined_result = (wr, r2, chi2, xtal, eng_best)
+                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
                             if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
                                 best_refined_energy_ok_score = refined_score
-                                best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best)
+                                best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
                         else:
                             logger.info("  Refinement failed; continuing search without refined metrics.")
                             msg += " [refine-failed]"
@@ -1740,10 +1740,10 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                     p_log_entry.update({"r2": p_r2, "wr": p_wr, "chi2": p_chi2, "refined": True})
                                     if p_refined_score > best_refined_score:
                                         best_refined_score = p_refined_score
-                                        best_refined_result = (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                        best_refined_result = (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
                                     if p_eng_rel <= max_eng_rel_for_termination and p_refined_score > best_refined_energy_ok_score:
                                         best_refined_energy_ok_score = p_refined_score
-                                        best_refined_result_energy_ok = (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                        best_refined_result_energy_ok = (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
                                 else:
                                     logger.info("  Perturbation refinement failed; continuing local search.")
                                     p_msg += " [refine-failed]"
@@ -1765,12 +1765,12 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 p_energy_ok = p_eng_rel <= max_eng_rel_for_termination
                                 if p_refined_score is not None and p_refined_score > local_accepted_score and p_energy_ok:
                                     local_accepted_score = p_refined_score
-                                    local_accepted_result = (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                    local_accepted_result = (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
                                 if should_terminate_on_refined_candidate(
                                     p_r2, p_chi2, p_eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
                                 ):
                                     if len(_slog) >= min_structures_before_early_stop:
-                                        return (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                        return (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
                                     logger.info(
                                         f"  Early-stop deferred: explored {len(_slog)} structure(s), "
                                         f"need >= {min_structures_before_early_stop}."
@@ -1791,12 +1791,12 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         energy_ok = eng_rel <= max_eng_rel_for_termination
                         if refined_score is not None and refined_score > local_accepted_score and energy_ok:
                             local_accepted_score = refined_score
-                            local_accepted_result = (wr, r2, chi2, xtal, eng_best)
+                            local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
                         if should_terminate_on_refined_candidate(
                             r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
                         ):
                             if len(_slog) >= min_structures_before_early_stop:
-                                return (wr, r2, chi2, xtal, eng_best)
+                                return (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
                             logger.info(
                                 f"  Early-stop deferred: explored {len(_slog)} structure(s), "
                                 f"need >= {min_structures_before_early_stop}."
@@ -1823,9 +1823,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             "No candidate met the acceptance threshold, and refined fallback candidates "
             "exceed the relative-energy criterion; returning no solution."
         )
-        return (None, None, None, None, eng_best)
+        return (None, None, None, None, eng_best, None, None)
 
-    return (None, None, None, None, eng_best)
+    return (None, None, None, None, eng_best, None, None)
 
 
 

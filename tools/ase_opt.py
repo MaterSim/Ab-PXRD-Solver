@@ -122,14 +122,16 @@ def ASE_relax(
         else:
             dyn = FIRE(atoms, a=0.1, logfile=logfile) if logfile is not None else FIRE(atoms, a=0.1)
 
-        # First stage
-        dyn.run(fmax=fmax, steps=step_init)
+        # First stage (suppress numpy underflow which can occur in spglib symmetrize_rank1)
+        with np.errstate(under='ignore'):
+            dyn.run(fmax=fmax, steps=step_init)
         forces = atoms.get_forces()
         _fmax = np.sqrt((forces**2).sum(axis=1).max())
 
         # Second stage (only if not completely insane)
         if _fmax < 1e3 and step > step_init:
-            dyn.run(fmax=fmax, steps=step - step_init)
+            with np.errstate(under='ignore'):
+                dyn.run(fmax=fmax, steps=step - step_init)
             forces = atoms.get_forces()
             _fmax = np.sqrt((forces**2).sum(axis=1).max())
             if _fmax > 100:
@@ -143,6 +145,10 @@ def ASE_relax(
 
     except TypeError:
         logger.warning(f"Warning {label} spglib error in getting the lattice")
+        atoms = None
+
+    except FloatingPointError:
+        logger.warning(f"Warning {label} FloatingPointError (underflow) during symmetry-constrained relaxation")
         atoms = None
 
     finally:
