@@ -39,7 +39,7 @@ All three agents share a single mutable `invocation_state` dictionary (`share_st
 
 ### Runtime Robustness (new)
 
-The default execution path is still the Strands graph, but `single_agent.py` now includes a **deterministic fallback pipeline** for runtime reliability:
+The default execution path is still the Strands graph, but `PXRD_agent.py` now includes a **deterministic fallback pipeline** for runtime reliability:
 
 - It first attempts graph execution.
 - If a known Strands Gemini streaming bug is detected (the `candidate` `UnboundLocalError`), it automatically falls back to sequential stage execution:
@@ -59,7 +59,15 @@ The script also prints startup runtime-control flags and selected mode for repro
 Run from the repository root:
 
 ```bash
-python single_agent.py
+python PXRD_solve.py
+```
+
+This is the deterministic entrypoint. It runs the three stages directly in sequence without the Strands graph, which is the better place to debug pipeline limitations before adding agent orchestration.
+
+If you want the current graph-based agent entrypoint instead:
+
+```bash
+python PXRD_agent.py
 ```
 
 The script prints startup flags, selected runtime mode (`graph` or `fallback`), and progress logs.
@@ -67,19 +75,19 @@ The script prints startup flags, selected runtime mode (`graph` or `fallback`), 
 #### Force deterministic fallback mode
 
 ```bash
-STRANDS_FORCE_FALLBACK=1 python single_agent.py
+STRANDS_FORCE_FALLBACK=1 python PXRD_agent.py
 ```
 
 #### Force graph mode even when known bug signature is detected
 
 ```bash
-STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=1 python single_agent.py
+STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=1 python PXRD_agent.py
 ```
 
 #### Optional: show both runtime flags explicitly
 
 ```bash
-STRANDS_FORCE_FALLBACK=0 STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=0 python single_agent.py
+STRANDS_FORCE_FALLBACK=0 STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=0 python PXRD_agent.py
 ```
 
 #### Infer space group from PXRD model instead of filename
@@ -88,10 +96,10 @@ By default, the space group is read from the filename convention (`PXRD_<formula
 
 ```bash
 # Infer top-5 space groups (default) and try each until a solution is found
-python single_agent.py --infer-spg --input-csv Examples/PXRD_Ba4NaBi_216.csv
+python PXRD_agent.py --infer-spg --input-csv Examples/PXRD_Ba4NaBi_216.csv
 
 # Try up to 20 predicted space groups
-python single_agent.py --infer-spg --spg-top-k 20 --input-csv Examples/PXRD_Ce3Si8Ni2_65.csv
+python PXRD_agent.py --infer-spg --spg-top-k 20 --input-csv Examples/PXRD_Ce3Si8Ni2_65.csv
 ```
 
 Available `--spg-top-k` values: `3`, `5` (default), `10`, `20`.
@@ -100,10 +108,10 @@ You can additionally constrain inferred candidates by crystal system:
 
 ```bash
 # Auto: infer crystal system from filename SPG and keep only matching inferred SGs
-python single_agent.py --infer-spg --lattice-symmetry auto --input-csv Examples/PXRD_Ce3Si8Ni2_65.csv
+python PXRD_agent.py --infer-spg --lattice-symmetry auto --input-csv Examples/PXRD_Ce3Si8Ni2_65.csv
 
 # Explicit: only test cubic inferred SG candidates
-python single_agent.py --infer-spg --lattice-symmetry cubic --spg-top-k 20 --input-csv Examples/PXRD_Ba4NaBi_216.csv
+python PXRD_agent.py --infer-spg --lattice-symmetry cubic --spg-top-k 20 --input-csv Examples/PXRD_Ba4NaBi_216.csv
 ```
 
 `--lattice-symmetry` choices: `auto`, `any`, `triclinic`, `monoclinic`, `orthorhombic`, `tetragonal`, `trigonal`, `hexagonal`, `cubic`.
@@ -119,7 +127,7 @@ This infer-SPG behavior is consistent in deterministic fallback mode and graph-c
 
 #### Improve stability for stochastic search (recommended)
 
-The Wyckoff/structure stage is stochastic. `single_agent.py` now supports adaptive multi-attempt search with deterministic seeds:
+The Wyckoff/structure stage is stochastic. `PXRD_agent.py` now supports adaptive multi-attempt search with deterministic seeds:
 
 - `PXRD_MULTI_ATTEMPTS` (default `3`, minimum `1`): number of independent attempts.
 - `PXRD_SEED_BASE` (default `20260315`): base seed used to derive per-attempt seeds.
@@ -128,10 +136,10 @@ Examples:
 
 ```bash
 # More robust, slower
-PXRD_MULTI_ATTEMPTS=5 python single_agent.py
+PXRD_MULTI_ATTEMPTS=5 python PXRD_agent.py
 
 # Fully reproducible run with a fixed seed base
-PXRD_MULTI_ATTEMPTS=4 PXRD_SEED_BASE=123456 python single_agent.py
+PXRD_MULTI_ATTEMPTS=4 PXRD_SEED_BASE=123456 python PXRD_agent.py
 ```
 
 Recommended settings (speed vs stability):
@@ -166,7 +174,7 @@ Recommended settings (speed vs stability):
 
 ## Stage 1 — Data Preprocessing (`DataPreprocessAgent`)
 
-**Class / tool:** `DataPreprocessor` (in `single_agent.py`)  
+**Class / tool:** `DataPreprocessor` (in `PXRD_agent.py`)  
 **Core logic:** `tools/manager.py` → `RawDataManager`  
 **ML component:** `tools/peak_prediction.py` → `_predict_peaks`  
 **ML component:** `tools/density.py` → `DensityEnsemblePredictor` / `predict_density_ensemble`
@@ -221,7 +229,7 @@ All extracted values are written back to `invocation_state` and returned as a st
 
 ## Stage 2 — Unit Cell Indexing (`CellManagerAgent`)
 
-**Class / tool:** `CellSolverTool` (in `single_agent.py`)  
+**Class / tool:** `CellSolverTool` (in `PXRD_agent.py`)  
 **Core logic:** `tools/solver.py` → `CellSolver`, `tools/manager.py` → `CellManager`
 
 ### 2.1 Bravais Lattice
@@ -269,7 +277,7 @@ These are stored in `invocation_state["cells"]` for Stage 3.
 
 ## Stage 3 — Crystal Structure Solution (`WyckoffSolverAgent`)
 
-**Class / tool:** `WyckoffSolverTool` (in `single_agent.py`)  
+**Class / tool:** `WyckoffSolverTool` (in `PXRD_agent.py`)  
 **Core logic:** `tools/solver.py` → `search_solution`  
 **Supporting logic:** `tools/manager.py` → `WPManager`, `XtalManager`  
 **Force field:** ASE + MACE (via `tools/ase_opt.py`)  
@@ -429,7 +437,7 @@ MRR            : 0.742
 |------|-------------|
 | `Match_<formula>_<spg>.cif` | Best refined crystal structure in CIF format |
 | `Match_<formula>_<spg>.png` | Observed vs. simulated PXRD pattern comparison |
-| `single_agent.log` | Detailed run log with per-peak, per-cell, and per-structure diagnostics |
+| `PXRD_agent.log` | Detailed run log with per-peak, per-cell, and per-structure diagnostics |
 
 Notes:
 
@@ -442,8 +450,8 @@ Notes:
 
 | Package | Purpose |
 |---------|---------|
-| `strands` | Agentic framework (agent, tool, graph builder) |
-| `google-generativeai` | Gemini 2.5 Pro LLM backend |
+| `strands-agents` (import: `strands`) | Agentic framework (agent, tool, graph builder) |
+| `google-genai` | Gemini 2.5 Pro LLM backend |
 | `pyxtal` | Space group symmetry, Wyckoff positions, structure generation |
 | `ase` | Atomic simulation environment for geometry relaxation |
 | `mace-torch` | Universal neural-network force field (MACE) |
@@ -451,12 +459,39 @@ Notes:
 | `scipy` | Peak detection, signal smoothing |
 | `pandas` / `numpy` | Data I/O and numerical operations |
 | GSAS-II | Full-pattern Rietveld refinement |
+| Python | `>=3.11` (recommended: `3.11`) |
+
+---
+
+## Environment Setup (Conda)
+
+Option 1: create from the checked-in Conda spec:
+
+```bash
+conda env create -f environment.yml
+conda activate pxrd-agent
+```
+
+CI note: GitHub Actions runs a Conda smoke test from `environment.yml` on pull requests and pushes that modify environment/setup files (`.github/workflows/conda-smoke.yml`).
+
+Option 2: use the helper script (auto-detects CPU/GPU PyTorch and verifies imports):
+
+```bash
+bash scripts/setup_conda_env.sh
+conda activate pxrd-agent
+```
+
+If you need CUDA-enabled PyTorch after creating from `environment.yml`, install it in the active environment:
+
+```bash
+conda install -c pytorch -c nvidia pytorch-cuda=12.1
+```
 
 ---
 
 ## Logging
 
-All output from the pipeline — including print statements from library code — is intercepted by `StreamToLogger` and routed through the Python `logging` module. Both `single_agent.log` and the console receive identical `INFO`-level output. The Strands multiagent logger is silenced at `ERROR` level to reduce noise.
+All output from the pipeline — including print statements from library code — is intercepted by `StreamToLogger` and routed through the Python `logging` module. Both `PXRD_agent.log` and the console receive identical `INFO`-level output. The Strands multiagent logger is silenced at `ERROR` level to reduce noise.
 
 ---
 

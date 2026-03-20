@@ -5,14 +5,65 @@ import os
 import sys
 import warnings
 import numpy as np
+from importlib import import_module
 
 # Suppress GSAS-II and pydantic warnings
 warnings.filterwarnings("ignore", message=".*Importing GSASIIscriptable as a top level module is deprecated.*")
 warnings.filterwarnings("ignore", message=".*UnsupportedFieldAttributeWarning.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
-import GSASIIscriptable as G2sc
 import matplotlib.pyplot as plt
+
+
+def _load_gsas_scriptable():
+    """Load GSAS-II scriptable API from common import locations."""
+    gsas_candidates = []
+
+    gsas_path_env = os.getenv("GSASII_PATH", "").strip()
+    if gsas_path_env:
+        gsas_candidates.extend([gsas_path_env, os.path.join(gsas_path_env, "GSASII")])
+
+    # Common local install locations from the official gitstrap workflow.
+    home = os.path.expanduser("~")
+    gsas_candidates.extend([
+        os.path.join(home, "GSAS-II"),
+        os.path.join(home, "GSAS-II", "GSASII"),
+    ])
+
+    for candidate in gsas_candidates:
+        if os.path.isdir(candidate) and candidate not in sys.path:
+            sys.path.insert(0, candidate)
+
+    errors = []
+    for modname in ("GSASIIscriptable", "GSASII.GSASIIscriptable"):
+        try:
+            return import_module(modname)
+        except Exception as exc:
+            errors.append(f"{modname}: {exc}")
+    msg = (
+        "GSAS-II is not available in this environment. "
+        "Install GSAS-II and ensure GSASIIscriptable is importable. "
+        "If GSAS-II is installed in a custom location, set GSASII_PATH to that directory. "
+        "Tried imports: " + " | ".join(errors)
+    )
+    raise ModuleNotFoundError(msg)
+
+
+def check_gsas_available():
+    """Return (ok, message) describing GSAS-II availability."""
+    try:
+        _load_gsas_scriptable()
+        # Import a compiled GSAS extension to ensure binary compatibility.
+        try:
+            import pyspg  # type: ignore  # noqa: F401
+        except Exception as exc:
+            return False, (
+                "GSAS-II scriptable API imported, but binary module load failed "
+                f"(pyspg): {exc}"
+            )
+        return True, "GSAS-II is available."
+    except Exception as exc:
+        return False, str(exc)
 
 
 class RedirectG2Output:
@@ -57,6 +108,8 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
         noise_level: Relative Gaussian noise level (e.g., 0.02 = 2%)
         max_counts: Counts scaling for Poisson noise
     """
+    G2sc = _load_gsas_scriptable()
+
     # Create project and add phase
     os.makedirs('tmp', exist_ok=True)
     gpx = G2sc.G2Project(newgpx='tmp/simulation.gpx')
@@ -138,6 +191,8 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
         R2: Coefficient of determination between observed and calculated
         weighted_chi2: Weighted chi² value
     """
+
+    G2sc = _load_gsas_scriptable()
 
     gpx_dir = os.path.dirname(gpx_name)
     if gpx_dir:
@@ -275,6 +330,12 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     return wR, R2, weighted_chi2, refined_cif
 
 if __name__ == "__main__":
+    ok, msg = check_gsas_available()
+    if not ok:
+        print(f"[ERROR] {msg}")
+        print("[HINT] Install GSAS-II in your local environment before running tools/gsas.py")
+        sys.exit(1)
+
     # --------------------------------------------------
     # User inputs
     # --------------------------------------------------
