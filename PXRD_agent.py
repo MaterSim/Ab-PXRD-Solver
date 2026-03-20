@@ -14,14 +14,15 @@ from importlib import import_module
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 import pandas as pd
 import numpy as np
-from pxrd_cli import build_common_parser, build_run_state, collect_input_csv_files, resolve_cli_symmetry, run_csv_batch
-from pxrd_inference import (
+from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv_files, resolve_cli_symmetry, run_csv_batch
+from pxrd_app.inference import (
     CRYSTAL_SYSTEM_PRIORITY,
     SPG_INFER_BACKENDS,
     infer_formula_spg,
     infer_spacegroups_from_backend,
     spg_to_crystal_system,
 )
+from pxrd_app.runtime import FAILURE_STATUSES, print_result_summary
 
 STRANDS_RUNTIME_AVAILABLE = False
 
@@ -324,6 +325,13 @@ default_state = {
     "max_stress": 0.3,
     "max_cells": 10,
     "max_cell_volume": None,
+    "cell_solver_max_mismatch": 12,
+    "cell_solver_hkl_max": (2, 5, 6),
+    "cell_solver_max_square": 28,
+    "cell_solver_total_square": 40,
+    "cell_solver_theta_tols": [0.1, 0.15, 0.5],
+    "cell_solver_max_chi2": 0.5,
+    "cell_solver_max_guess": 50000,
     "multi_attempts": _env_int("PXRD_MULTI_ATTEMPTS", 1, min_value=1),
     "seed_base": _env_int("PXRD_SEED_BASE", 20260315),
     "spg_top_k": 25,
@@ -358,6 +366,37 @@ VALID_LATTICE_SYMMETRIES = {
     "hexagonal",
     "cubic",
 }
+
+
+def _get_cell_solver_kwargs(state: dict) -> dict:
+    hkl_max_raw = state.get("cell_solver_hkl_max", (2, 5, 6))
+    theta_tols_raw = state.get("cell_solver_theta_tols", [0.1, 0.15, 0.5])
+
+    try:
+        hkl_max = tuple(int(x) for x in hkl_max_raw)
+    except Exception:
+        hkl_max = (2, 5, 6)
+
+    try:
+        theta_tols = [float(x) for x in theta_tols_raw]
+    except Exception:
+        theta_tols = [0.1, 0.15, 0.5]
+
+    if len(hkl_max) != 3:
+        hkl_max = (2, 5, 6)
+    if not theta_tols:
+        theta_tols = [0.1, 0.15, 0.5]
+
+    return {
+        "max_mismatch": max(0, int(state.get("cell_solver_max_mismatch", 12))),
+        "hkl_max": hkl_max,
+        "max_square": max(1, int(state.get("cell_solver_max_square", 28))),
+        "total_square": max(1, int(state.get("cell_solver_total_square", 40))),
+        "theta_tols": theta_tols,
+        "min_abc": max(0.1, float(state.get("min_abc", 2.0))),
+        "max_chi2": max(1e-6, float(state.get("cell_solver_max_chi2", 0.5))),
+        "max_guess": max(100, int(state.get("cell_solver_max_guess", 50000))),
+    }
 
 def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
     formula_from_filename, spg_from_filename = infer_formula_spg(pxrd_csv)
@@ -484,6 +523,7 @@ def _run_cell_solver_stage(state: dict) -> dict:
     peak_positions = state.get("peak_positions")
     max_cells = state.get("max_cells")
     max_cell_volume = state.get("max_cell_volume")
+    cell_solver_kwargs = _get_cell_solver_kwargs(state)
 
     def _filter_cells_by_max_volume(cells: list) -> tuple[list, int]:
         if max_cell_volume is None:
@@ -540,11 +580,14 @@ def _run_cell_solver_stage(state: dict) -> dict:
     solver = CellSolver(
         spg,
         peak_positions_np,
-        max_mismatch=12,
-        hkl_max=(2, 5, 6),
-        max_square=28,
-        total_square=40,
-        theta_tols=[0.1, 0.15, 0.5],
+        max_mismatch=cell_solver_kwargs["max_mismatch"],
+        hkl_max=cell_solver_kwargs["hkl_max"],
+        max_square=cell_solver_kwargs["max_square"],
+        total_square=cell_solver_kwargs["total_square"],
+        theta_tols=cell_solver_kwargs["theta_tols"],
+        min_abc=cell_solver_kwargs["min_abc"],
+        max_chi2=cell_solver_kwargs["max_chi2"],
+        max_guess=cell_solver_kwargs["max_guess"],
         verbose=False,
     )
     solutions = solver.solve()
@@ -1079,14 +1122,18 @@ def _run_pipeline_fallback(
 
     def _validate_reused_cell_for_spg(cell_obj, spg_value: int, peak_positions: np.ndarray):
         try:
+            cell_solver_kwargs = _get_cell_solver_kwargs(state)
             solver = CellSolver(
                 int(spg_value),
                 peak_positions,
-                max_mismatch=12,
-                hkl_max=(2, 5, 6),
-                max_square=28,
-                total_square=40,
-                theta_tols=[0.1, 0.15, 0.5],
+                max_mismatch=cell_solver_kwargs["max_mismatch"],
+                hkl_max=cell_solver_kwargs["hkl_max"],
+                max_square=cell_solver_kwargs["max_square"],
+                total_square=cell_solver_kwargs["total_square"],
+                theta_tols=cell_solver_kwargs["theta_tols"],
+                min_abc=cell_solver_kwargs["min_abc"],
+                max_chi2=cell_solver_kwargs["max_chi2"],
+                max_guess=cell_solver_kwargs["max_guess"],
                 verbose=False,
             )
             solution, reason = solver.validate_cell(np.array(cell_obj.dims, dtype=float))
@@ -1838,7 +1885,6 @@ def main(
     )
     run_prompt = INPUT_PROMPT if input_prompt is None else input_prompt
     force_fallback, _ = _startup_runtime_mode()
-    _FAILURE_STATUSES = {"no_cells", "no_solution"}
     system_log_handler = _attach_system_run_log(run_state)
     result = None
 
@@ -1869,38 +1915,13 @@ def main(
             print(f"Saved consolidated run log to {system_log_path}")
         _detach_system_run_log(system_log_handler)
 
-    result_status = result.get("status", "") if isinstance(result, dict) else ""
-
-    timing_breakdown = run_state.get("timing_breakdown_seconds") if isinstance(run_state, dict) else None
-    if isinstance(timing_breakdown, dict):
-        def _fmt_seconds(seconds: float) -> str:
-            total_seconds = max(0.0, float(seconds))
-            total_minutes = int(total_seconds // 60)
-            seconds_remain = total_seconds - (60 * total_minutes)
-            if total_minutes >= 60:
-                hours = total_minutes // 60
-                minutes = total_minutes % 60
-                return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-            return f"{total_minutes}m {seconds_remain:04.1f}s"
-
-        spg_cell_s = float(timing_breakdown.get("spg_and_cell", 0.0))
-        structure_s = float(timing_breakdown.get("structure_inference", 0.0))
-        total_s = float(timing_breakdown.get("total", spg_cell_s + structure_s))
-        timing_line = (
-            f"Timing summary: SPG+Cell={_fmt_seconds(spg_cell_s)} | "
-            f"Structure={_fmt_seconds(structure_s)} | Total={_fmt_seconds(total_s)}"
-        )
-        logger.info(timing_line)
-        print(timing_line)
-
-    if result_status in _FAILURE_STATUSES:
-        reason = {
-            "no_cells": "no valid unit cells found",
-            "no_solution": "no accepted structure found",
-        }.get(result_status, result_status)
-        print(f"Pipeline finished without a solution ({reason}).")
-    else:
-        print("Pipeline completed successfully!")
+    print_result_summary(
+        logger,
+        run_state,
+        result,
+        success_message="Pipeline completed successfully!",
+        failure_prefix="Pipeline finished without a solution",
+    )
     print("Exiting main thread")
 
 
