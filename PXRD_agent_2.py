@@ -1,6 +1,7 @@
 import argparse
 import copy
 import json
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from PXRD_agent import (
     default_state,
     logger,
 )
+from tools.solver import enumerate_wyckoff_multi_spg
 
 
 def _safe_float(value, default=None):
@@ -210,6 +212,64 @@ def _run_structure_trial(
     return trial_state, outcome
 
 
+def _enumerate_quick_check_wp_solutions(base_state: dict, cell, spg: int) -> list:
+    composition = base_state.get("composition") or {}
+    density_min = base_state.get("density_min")
+    density_max = base_state.get("density_max")
+    ref_den = (density_min, density_max)
+    return enumerate_wyckoff_multi_spg(cell.dims, [int(spg)], composition, ref_den=ref_den)
+
+
+def _run_quick_check_trials(
+    base_state: dict,
+    *,
+    cell,
+    spg: int,
+    quick_check_index: int,
+    args: argparse.Namespace,
+) -> list[tuple[dict, dict]]:
+    wp_candidates = _enumerate_quick_check_wp_solutions(base_state, cell, spg)
+    total_candidates = len(wp_candidates)
+    max_trials = max(1, int(args.quick_check_max_trials))
+    print(
+        f"Quick-check cell {quick_check_index}: enumerated {total_candidates} WP candidate(s) for spg={spg}."
+    )
+
+    if total_candidates == 0:
+        return []
+
+    if total_candidates > max_trials:
+        rng_seed = int(base_state.get("seed_base", 20260315)) + (1009 * quick_check_index)
+        rng = random.Random(rng_seed)
+        selected_candidates = rng.sample(wp_candidates, k=max_trials)
+        print(
+            f"Quick-check cell {quick_check_index}: estimated trial count exceeds {max_trials}; "
+            f"sampling {max_trials} random WP trial(s) with seed={rng_seed}."
+        )
+    else:
+        selected_candidates = list(wp_candidates)
+        print(f"Quick-check cell {quick_check_index}: trying all {len(selected_candidates)} WP trial(s).")
+
+    outcomes: list[tuple[dict, dict]] = []
+    for trial_idx, candidate in enumerate(selected_candidates, start=1):
+        forced_wp_solution = candidate[:8] if len(candidate) >= 9 else candidate
+        trial_state, trial_outcome = _run_structure_trial(
+            base_state,
+            f"quick_check_{quick_check_index}_{trial_idx}",
+            spg=int(spg),
+            cells=[cell],
+            overrides={
+                "multi_attempts": 1,
+                "max_local_boosts": 0,
+                "max_local_perturbations": 0,
+                "forced_wp_solution": forced_wp_solution,
+                "suppress_local_energy_plot": True,
+            },
+        )
+        outcomes.append((trial_state, trial_outcome))
+    return outcomes
+
+
 def _run_expanded_cell_trial(
     base_state: dict,
     trial_label: str,
@@ -238,24 +298,21 @@ def _handle_near_success(base_state: dict, winner_state: dict, winner_outcome: d
 
     same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_near_success")
     for idx, cell in enumerate(cells[1:1 + args.quick_check_cells], start=1):
-        trial_state, trial_outcome = _run_structure_trial(
+        quick_trials = _run_quick_check_trials(
             base_state,
-            f"quick_check_{idx}",
+            cell=cell,
             spg=int(winner_outcome["spg"]),
-            cells=[cell],
-            overrides={
-                "multi_attempts": max(1, int(args.quick_check_attempts)),
-                "max_local_boosts": max(0, int(args.quick_check_local_boosts)),
-                "max_local_perturbations": max(0, int(args.quick_check_local_perturbations)),
-            },
+            quick_check_index=idx,
+            args=args,
         )
-        trials.append(trial_outcome)
-        if _is_better_outcome(trial_outcome, winner_outcome):
-            winner_state = trial_state
-            winner_outcome = trial_outcome
-            same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_near_success")
-        else:
-            _restore_artifacts(same_spg_snapshot)
+        for trial_state, trial_outcome in quick_trials:
+            trials.append(trial_outcome)
+            if _is_better_outcome(trial_outcome, winner_outcome):
+                winner_state = trial_state
+                winner_outcome = trial_outcome
+                same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_near_success")
+            else:
+                _restore_artifacts(same_spg_snapshot)
     return winner_state, winner_outcome, trials
 
 
@@ -521,19 +578,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--quick-check-attempts",
         type=int,
         default=1,
-        help="Number of Wyckoff attempts per quick-check cell.",
+        help="Deprecated compatibility knob. Quick-check now runs single forced WP trials.",
+    )
+    parser.add_argument(
+        "--quick-check-max-trials",
+        type=int,
+        default=10,
+        help="Maximum number of random forced WP trials per quick-check cell.",
     )
     parser.add_argument(
         "--quick-check-local-boosts",
         type=int,
         default=0,
-        help="Local regeneration boosts for quick-check trials.",
+        help="Deprecated compatibility knob. Quick-check skips local boost passes.",
     )
     parser.add_argument(
         "--quick-check-local-perturbations",
         type=int,
-        default=1,
-        help="Local perturb-and-relax trials for quick-check cells.",
+        default=0,
+        help="Deprecated compatibility knob. Quick-check skips local perturbation passes.",
     )
     parser.add_argument(
         "--resample-top-cells",
