@@ -1,0 +1,31 @@
+name: pxrd-agent
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy=1.26
+  - pandas
+  - scipy
+  - matplotlib
+  - tqdm
+  - scikit-learn
+  - pymatgen
+  - pyxtal
+  - ase
+  - monty
+  - spglib
+  - typing_extensions
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pip:
+      - numpy<2
+      - google-genai
+      - strands-agents
+      - wandb
+      - tensorboard
+      - jarvis-tools
+      - mace-torch

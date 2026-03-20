@@ -1,6 +1,3 @@
-from strands import Agent, tool, ToolContext
-from strands.models.gemini import GeminiModel
-from strands.multiagent.graph import GraphBuilder
 import argparse
 import logging
 import os
@@ -13,15 +10,56 @@ import time
 import traceback
 import copy
 from pathlib import Path
+from importlib import import_module
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 import pandas as pd
 import numpy as np
+from pxrd_cli import build_common_parser, build_run_state, collect_input_csv_files, resolve_cli_symmetry, run_csv_batch
+from pxrd_inference import (
+    CRYSTAL_SYSTEM_PRIORITY,
+    SPG_INFER_BACKENDS,
+    infer_formula_spg,
+    infer_spacegroups_from_backend,
+    spg_to_crystal_system,
+)
+
+STRANDS_RUNTIME_AVAILABLE = False
+
+try:
+    strands_module = import_module("strands")
+    Agent = strands_module.Agent
+    tool = strands_module.tool
+    ToolContext = strands_module.ToolContext
+    GeminiModel = import_module("strands.models.gemini").GeminiModel
+    GraphBuilder = import_module("strands.multiagent.graph").GraphBuilder
+    STRANDS_RUNTIME_AVAILABLE = True
+except Exception:
+    try:
+        # Compatibility path for newer strands-agents releases where top-level
+        # exports are split across submodules.
+        Agent = import_module("strands.agent").Agent
+        tool = import_module("strands.tools").tool
+        ToolContext = import_module("strands.types.tools").ToolContext
+        GeminiModel = import_module("strands.models.gemini").GeminiModel
+        GraphBuilder = import_module("strands.multiagent.graph").GraphBuilder
+        STRANDS_RUNTIME_AVAILABLE = True
+    except Exception:
+        Agent = None
+        GeminiModel = None
+        GraphBuilder = None
+
+        class ToolContext:  # type: ignore[no-redef]
+            invocation_state: dict
+
+        def tool(*args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
 from tools.manager import RawDataManager, CellManager, WPManager
-from tools.peak_prediction import predict_peaks, predict_spacegroup
-from tools.XRD import Profile
 from tools.solver import (
     CellSolver,
-    SmartCellSolver,
     search_solution,
     enumerate_wyckoff_multi_spg,
     score_wp_candidate,
@@ -31,7 +69,7 @@ from tools.utils import parse_formula, get_volume_from_density
 from tools.density import predict_density_ensemble
 
 # Configure logging with both file and console handlers
-file_handler = logging.FileHandler('single_agent.log')
+file_handler = logging.FileHandler('PXRD_agent.log')
 console_handler = logging.StreamHandler()
 formatter = logging.Formatter("%(message)s")
 file_handler.setFormatter(formatter)
@@ -129,6 +167,9 @@ def _is_important_runlog_message(message: str) -> bool:
         "Accepted artifacts:",
         "Good solution found early:",
         "Timing breakdown:",
+        "1) SPG + cell inference:",
+        "2) Structure inference:",
+        "Total:",
         "Timing summary:",
         "Pipeline finished without a solution",
         "Pipeline completed successfully!",
@@ -298,11 +339,13 @@ default_state = {
 }
 
 
-gemini_model = GeminiModel(
-    client_args={'api_key': 'AIzaSyA2TT4RqCvrY-RwRNmhT8AnCLwH-IwvdE8'},
-    model_id='gemini-2.5-pro',
-    params={"temperature": 0.7}
-)
+gemini_model = None
+if STRANDS_RUNTIME_AVAILABLE:
+    gemini_model = GeminiModel(
+        client_args={'api_key': 'AIzaSyA2TT4RqCvrY-RwRNmhT8AnCLwH-IwvdE8'},
+        model_id='gemini-2.5-pro',
+        params={"temperature": 0.7}
+    )
 
 INPUT_PROMPT = "Process the PXRD data from Examples/PXRD_PrYMg2_123.csv"
 
@@ -316,104 +359,8 @@ VALID_LATTICE_SYMMETRIES = {
     "cubic",
 }
 
-SPG_INFER_BACKENDS = {"model", "smart-cell"}
-
-CRYSTAL_SYSTEM_PRIORITY = {
-    "cubic": 7,
-    "hexagonal": 6,
-    "trigonal": 5,
-    "tetragonal": 4,
-    "orthorhombic": 3,
-    "monoclinic": 2,
-    "triclinic": 1,
-}
-
-
-def _infer_formula_spg(path: str) -> tuple[str | None, int | None]:
-    tokens = Path(path).stem.split('_')
-    formula_guess, spg_guess = None, None
-    if len(tokens) >= 2:
-        try:
-            spg_guess = int(tokens[-1])
-            formula_guess = '_'.join(tokens[1:-1]) if len(tokens) > 2 else None
-        except ValueError:
-            pass
-    return formula_guess, spg_guess
-
-
-def _spg_to_crystal_system(spg: int) -> str | None:
-    if 1 <= spg <= 2:
-        return "triclinic"
-    if 3 <= spg <= 15:
-        return "monoclinic"
-    if 16 <= spg <= 74:
-        return "orthorhombic"
-    if 75 <= spg <= 142:
-        return "tetragonal"
-    if 143 <= spg <= 167:
-        return "trigonal"
-    if 168 <= spg <= 194:
-        return "hexagonal"
-    if 195 <= spg <= 230:
-        return "cubic"
-    return None
-
-
-def _rank_spg_candidates_from_smart_solutions(solutions: list[dict], top_k: int = 5) -> list[tuple[int, float]]:
-    """Rank SG candidates from SmartCellSolver output.
-
-    Priority is crystal-system symmetry (high -> low), then per-SPG evidence:
-    lower missing peaks, lower chi2, higher support count.
-    """
-    if not solutions:
-        return []
-
-    stats: dict[int, dict] = {}
-    for sol in solutions:
-        spg = int(sol.get("spg", 0) or 0)
-        if spg <= 0:
-            continue
-        mismatch = len(sol.get("mismatch", []) or [])
-        chi2_raw = sol.get("chi2", (1e9, 1e9))
-        if isinstance(chi2_raw, (list, tuple)) and len(chi2_raw) >= 2:
-            chi2_val = float(chi2_raw[1])
-        else:
-            chi2_val = float(chi2_raw if chi2_raw is not None else 1e9)
-
-        rec = stats.setdefault(
-            spg,
-            {
-                "support": 0,
-                "best_missing": 10**9,
-                "best_chi2": 1e9,
-            },
-        )
-        rec["support"] += 1
-        rec["best_missing"] = min(rec["best_missing"], mismatch)
-        rec["best_chi2"] = min(rec["best_chi2"], chi2_val)
-
-    ordered_spgs = sorted(
-        stats.keys(),
-        key=lambda sg: (
-            -CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(sg), 0),
-            stats[sg]["best_missing"],
-            stats[sg]["best_chi2"],
-            -stats[sg]["support"],
-            -sg,
-        ),
-    )
-
-    ordered_spgs = ordered_spgs[: max(1, int(top_k))]
-    denom = float(sum(1.0 / (idx + 1) for idx in range(len(ordered_spgs))))
-    ranked = []
-    for idx, spg in enumerate(ordered_spgs):
-        weight = (1.0 / (idx + 1)) / denom if denom > 0 else 0.0
-        ranked.append((int(spg), float(weight)))
-    return ranked
-
-
 def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
-    formula_from_filename, spg_from_filename = _infer_formula_spg(pxrd_csv)
+    formula_from_filename, spg_from_filename = infer_formula_spg(pxrd_csv)
     state["spg_from_filename"] = int(spg_from_filename) if spg_from_filename is not None else None
     formula_override = state.get("formula")
     formula = formula_override if formula_override else formula_from_filename
@@ -469,61 +416,23 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
 
     if infer_spg:
         try:
-            predictions = []
-            if spg_infer_backend == "smart-cell":
-                smart_solutions = SmartCellSolver(
-                    np.array(peak_positions, dtype=float),
-                    hkl_max=(2, 5, 6),
-                    max_mismatch=12,
-                    max_chi2=0.2,
-                    max_square=28,
-                    total_square=40,
-                    theta_tols=[0.1, 0.15, 0.5],
-                    min_abc=min_abc,
-                    max_abc=35.0,
-                    min_volume=20.0,
-                    max_volume=max_cell_volume,
-                    verbose=False,
-                )
-                predictions = _rank_spg_candidates_from_smart_solutions(
-                    smart_solutions,
-                    top_k=spg_top_k,
-                )
-                raw_by_spg: dict[int, list[tuple]] = {}
-                for sol in smart_solutions:
-                    spg_i = int(sol.get("spg", 0) or 0)
-                    if spg_i <= 0:
-                        continue
-                    mismatch = sol.get("mismatch", []) or []
-                    chi2_raw = sol.get("chi2", (1e9, 1e9))
-                    chi2_val = float(chi2_raw[1]) if isinstance(chi2_raw, (list, tuple)) and len(chi2_raw) >= 2 else float(chi2_raw)
-                    raw_tuple = (
-                        spg_i,
-                        sol.get("cell"),
-                        mismatch,
-                        chi2_val,
-                        sol.get("errors", []),
-                        sol.get("id", ""),
-                        sol.get("match", []),
-                    )
-                    raw_by_spg.setdefault(spg_i, []).append(raw_tuple)
-                if raw_by_spg:
-                    state["smart_cell_raw_solutions_by_spg"] = raw_by_spg
-                state["spg_prediction_source"] = "smart_cell_solver"
-
-            if not predictions:
-                y1_norm = (y1 - np.min(y1)) / (np.max(y1) - np.min(y1) + 1e-8)
-                peak_results = predict_peaks(y1_norm, threshold=0.8)
-                peak_idx = [pos for pos, _ in peak_results]
-                peak_intensities = [y1_norm[pos] * 100 for pos in peak_idx]
-
-                if peak_idx:
-                    _, py = Profile("gaussian").get_profile(x1[peak_idx], peak_intensities, 10, 80)
-                    predictions = predict_spacegroup(py, formula, top_k=spg_top_k, use_normalization=False)
-                    state["spg_prediction_source"] = "reconstructed_profile"
-                else:
-                    predictions = predict_spacegroup(y1_norm, formula, top_k=spg_top_k, use_normalization=True)
-                    state["spg_prediction_source"] = "raw_intensity_fallback"
+            infer_result = infer_spacegroups_from_backend(
+                x1=np.array(x1, dtype=float),
+                y1=np.array(y1, dtype=float),
+                peak_positions=np.array(peak_positions, dtype=float),
+                formula=formula,
+                spg_infer_backend=spg_infer_backend,
+                spg_top_k=spg_top_k,
+                min_abc=min_abc,
+                max_cell_volume=max_cell_volume,
+            )
+            predictions = infer_result.get("predictions") or []
+            if infer_result.get("source"):
+                state["spg_prediction_source"] = infer_result["source"]
+            if infer_result.get("smart_cell_raw_solutions_by_spg"):
+                state["smart_cell_raw_solutions_by_spg"] = infer_result["smart_cell_raw_solutions_by_spg"]
+            if infer_result.get("smart_cell_ranked_spg_cells"):
+                state["smart_cell_ranked_spg_cells"] = infer_result["smart_cell_ranked_spg_cells"]
 
             if predictions:
                 spg = int(predictions[0][0])
@@ -1036,6 +945,8 @@ def _get_strands_version() -> str:
 
 
 def _has_known_gemini_stream_candidate_bug() -> bool:
+    if GeminiModel is None:
+        return False
     try:
         src = inspect.getsource(GeminiModel.stream)
     except Exception:
@@ -1047,6 +958,10 @@ def _has_known_gemini_stream_candidate_bug() -> bool:
 
 def _startup_runtime_mode() -> tuple[bool, str]:
     strands_version = _get_strands_version()
+    if not STRANDS_RUNTIME_AVAILABLE:
+        logger.info("Runtime mode: fallback (Strands runtime unavailable)")
+        return True, strands_version
+
     force_fallback_raw = os.getenv("STRANDS_FORCE_FALLBACK", "0")
     allow_graph_raw = os.getenv("STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG", "0")
     env_force_fallback = force_fallback_raw == "1"
@@ -1283,7 +1198,7 @@ def _run_pipeline_fallback(
     lattice_filter = str(state.get("lattice_symmetry", "auto") or "auto").strip().lower()
     if lattice_filter == "auto":
         filename_spg = state.get("spg_from_filename")
-        target_system = _spg_to_crystal_system(int(filename_spg)) if filename_spg is not None else None
+        target_system = spg_to_crystal_system(int(filename_spg)) if filename_spg is not None else None
     elif lattice_filter == "any":
         target_system = None
     elif lattice_filter in VALID_LATTICE_SYMMETRIES:
@@ -1293,7 +1208,7 @@ def _run_pipeline_fallback(
         target_system = None
 
     if predicted_spgs and target_system is not None:
-        filtered_spgs = [sg for sg in predicted_spgs if _spg_to_crystal_system(sg) == target_system]
+        filtered_spgs = [sg for sg in predicted_spgs if spg_to_crystal_system(sg) == target_system]
         if filtered_spgs:
             _emit_progress(
                 f"Applying lattice symmetry filter: {target_system}. "
@@ -1387,12 +1302,12 @@ def _run_pipeline_fallback(
                         getattr(m["cell"], "missing", 999),
                         _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
                         getattr(m["cell"], "chi2", 1e9),
-                        -CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(int(m["spg"])), 0),
+                        -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
                         -int(m["spg"]),
                     )
                 )
                 best_symmetry = max(
-                    CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(int(m["spg"])), 0)
+                    CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0)
                     for m in enriched_members
                 )
                 best_missing = min(getattr(m["cell"], "missing", 999) for m in enriched_members)
@@ -1447,7 +1362,7 @@ def _run_pipeline_fallback(
                     m["est_trials"],
                     round(m["vol"], 1),
                     m["cand_count"],
-                    -CRYSTAL_SYSTEM_PRIORITY.get(_spg_to_crystal_system(int(m["spg"])), 0),
+                    -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
                     _prediction_rank(m["spg"]),
                     getattr(m["cell"], "missing", 999),
                     _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
@@ -1758,120 +1673,129 @@ def CellSolverTool(tool_context: ToolContext) -> dict:
 def DataPreprocessor(pxrd_csv: str, tool_context: ToolContext) -> dict:
     return _run_data_preprocessor_stage(pxrd_csv, tool_context.invocation_state)
 
-DataPreprocessAgent = Agent(
-    model=gemini_model,
-    tools=[DataPreprocessor],
-    system_prompt=(
-        "You are a PXRD (Powder X-Ray Diffraction) data analysis specialist.\n\n"
-        "Your primary task is to preprocess experimental PXRD data for crystal structure determination.\n\n"
-        "When given a PXRD CSV file path, you should:\n"
-        "1. Extract the chemical formula and space group from the filename\n"
-        "2. Load and process the diffraction pattern data\n"
-        "3. Identify characteristic peaks using scipy algorithms\n"
-        "4. Predict material density using ensemble ML models\n"
-        "5. Calculate minimum volume constraints for unit cell indexing\n\n"
-        "Always use the DataPreprocessor tool to perform these tasks.\n"
-        "Report any issues with data quality or processing errors immediately.\n"
-        "The return format should include status, messages, and all relevant computed parameters."
+if STRANDS_RUNTIME_AVAILABLE:
+    DataPreprocessAgent = Agent(
+        model=gemini_model,
+        tools=[DataPreprocessor],
+        system_prompt=(
+            "You are a PXRD (Powder X-Ray Diffraction) data analysis specialist.\n\n"
+            "Your primary task is to preprocess experimental PXRD data for crystal structure determination.\n\n"
+            "When given a PXRD CSV file path, you should:\n"
+            "1. Extract the chemical formula and space group from the filename\n"
+            "2. Load and process the diffraction pattern data\n"
+            "3. Identify characteristic peaks using scipy algorithms\n"
+            "4. Predict material density using ensemble ML models\n"
+            "5. Calculate minimum volume constraints for unit cell indexing\n\n"
+            "Always use the tool named exactly 'DataPreprocessor' to perform these tasks.\n"
+            "Do not call method-style names such as 'DataPreprocessor.run'.\n"
+            "Report any issues with data quality or processing errors immediately.\n"
+            "The return format should include status, messages, and all relevant computed parameters."
+        )
     )
-)
 
-CellManagerAgent = Agent(
-    model=gemini_model,
-    tools=[CellSolverTool],
-    system_prompt=(
-        "You are a PXRD unit cell solver specialist.\n\n"
-        "Your primary task is to determine unit cell parameters from the given PXRD peak data.\n\n"
-        "For the given peak positions, chemical composition, space group, and constraints, you should:\n"
-        "1. Use indexing algorithms to find candidate unit cells that fit the peak data\n"
-        "2. Apply constraints based on composition and predicted density to filter solutions\n"
-        "3. Rank candidate cells based on fit quality and physical plausibility\n\n"
-        "Always use the CellSolver tool to perform these tasks.\n"
-        "Report any issues with indexing or solution quality immediately.\n"
-        "The return format should include status, messages, and all relevant computed unit cell parameters."
+    CellManagerAgent = Agent(
+        model=gemini_model,
+        tools=[CellSolverTool],
+        system_prompt=(
+            "You are a PXRD unit cell solver specialist.\n\n"
+            "Your primary task is to determine unit cell parameters from the given PXRD peak data.\n\n"
+            "For the given peak positions, chemical composition, space group, and constraints, you should:\n"
+            "1. Use indexing algorithms to find candidate unit cells that fit the peak data\n"
+            "2. Apply constraints based on composition and predicted density to filter solutions\n"
+            "3. Rank candidate cells based on fit quality and physical plausibility\n\n"
+            "Always use the tool named exactly 'CellSolverTool' to perform these tasks.\n"
+            "Do not call method-style names such as 'CellSolverTool.run'.\n"
+            "Report any issues with indexing or solution quality immediately.\n"
+            "The return format should include status, messages, and all relevant computed unit cell parameters."
+        )
     )
-)
 
-WyckoffSolverAgent = Agent(
-    model=gemini_model,
-    tools=[WyckoffSolverTool],
-    system_prompt=(
-        "You are a specialist in crystal structure generation and optimization.\n\n"
-        "Your primary task is to generate candidate crystal structures from indexed unit cells "
-        "and optimize them to match experimental PXRD data.\n\n"
+    WyckoffSolverAgent = Agent(
+        model=gemini_model,
+        tools=[WyckoffSolverTool],
+        system_prompt=(
+            "You are a specialist in crystal structure generation and optimization.\n\n"
+            "Your primary task is to generate candidate crystal structures from indexed unit cells "
+            "and optimize them to match experimental PXRD data.\n\n"
 
-        "**Your Workflow:**\n"
-        "1. **Wyckoff Position Assignment**\n"
-        "   - For each candidate unit cell, enumerate possible Wyckoff position combinations\n"
-        "   - Consider space group symmetry constraints\n"
-        "   - Filter based on composition and density constraints\n\n"
+            "**Your Workflow:**\n"
+            "1. **Wyckoff Position Assignment**\n"
+            "   - For each candidate unit cell, enumerate possible Wyckoff position combinations\n"
+            "   - Consider space group symmetry constraints\n"
+            "   - Filter based on composition and density constraints\n\n"
 
-        "2. **Structure Generation**\n"
-        "   - Generate initial atomic positions using symmetry operations\n"
-        "   - Validate structural geometry and atomic overlaps\n"
-        "   - Generate multiple random configurations per Wyckoff assignment\n\n"
+            "2. **Structure Generation**\n"
+            "   - Generate initial atomic positions using symmetry operations\n"
+            "   - Validate structural geometry and atomic overlaps\n"
+            "   - Generate multiple random configurations per Wyckoff assignment\n\n"
 
-        "3. **Geometry Optimization**\n"
-        "   - Relax atomic positions using ASE with MACE force field\n"
-        "   - Track energy minimization to identify stable configurations\n\n"
-        "   - Apply stress constraints (max stress < 0.5 GPa initially)\n"
+            "3. **Geometry Optimization**\n"
+            "   - Relax atomic positions using ASE with MACE force field\n"
+            "   - Track energy minimization to identify stable configurations\n\n"
+            "   - Apply stress constraints (max stress < 0.5 GPa initially)\n"
 
-        "4. **XRD Pattern Matching**\n"
-        "   - Calculate theoretical XRD patterns for optimized structures\n"
-        "   - Compare with experimental data using similarity metrics\n"
-        "   - Track best matches (similarity > 0.90)\n\n"
+            "4. **XRD Pattern Matching**\n"
+            "   - Calculate theoretical XRD patterns for optimized structures\n"
+            "   - Compare with experimental data using similarity metrics\n"
+            "   - Track best matches (similarity > 0.90)\n\n"
 
-        "5. **Rietveld Refinement**\n"
-        "   - Perform full-pattern refinement using GSAS-II for promising candidates\n"
-        "   - Calculate fit metrics: Rwp, R², χ²\n"
-        "   - Accept solutions with R² > 0.95 or χ² < 0.12\n\n"
+            "5. **Rietveld Refinement**\n"
+            "   - Perform full-pattern refinement using GSAS-II for promising candidates\n"
+            "   - Calculate fit metrics: Rwp, R², χ²\n"
+            "   - Accept solutions with R² > 0.95 or χ² < 0.12\n\n"
 
-        "**Search Strategy:**\n"
-        "- Test top 5 unit cells (ranked by missing peaks)\n"
-        "- Evaluate up to 20 Wyckoff position combinations per cell\n"
-        "- Generate 3×DOF + 1 random structures per combination (max DOF=9)\n"
-        "- Stop immediately when R² > 0.95 or χ² < 0.12 is achieved\n\n"
+            "**Search Strategy:**\n"
+            "- Test top 5 unit cells (ranked by missing peaks)\n"
+            "- Evaluate up to 20 Wyckoff position combinations per cell\n"
+            "- Generate 3×DOF + 1 random structures per combination (max DOF=9)\n"
+            "- Stop immediately when R² > 0.95 or χ² < 0.12 is achieved\n\n"
 
-        "**Quality Criteria:**\n"
-        "- Structural validity (no atomic overlaps)\n"
-        "- Converged geometry (stress < 0.5 GPa)\n"
-        "- Low potential energy per atom\n"
-        "- High XRD pattern similarity (> 0.90)\n"
-        "- Excellent Rietveld fit (R² > 0.95 or χ² < 0.12)\n\n"
+            "**Quality Criteria:**\n"
+            "- Structural validity (no atomic overlaps)\n"
+            "- Converged geometry (stress < 0.5 GPa)\n"
+            "- Low potential energy per atom\n"
+            "- High XRD pattern similarity (> 0.90)\n"
+            "- Excellent Rietveld fit (R² > 0.95 or χ² < 0.12)\n\n"
 
-        "**Expected Input (from previous agents):**\n"
-        "- Space group number\n"
-        "- Chemical formula and composition\n"
-        "- List of indexed unit cells with dimensions\n"
-        "- Experimental PXRD data (x1, y1, peaks)\n"
-        "- Density constraints (min, max)\n"
-        "- X-ray wavelength\n\n"
+            "**Expected Input (from previous agents):**\n"
+            "- Space group number\n"
+            "- Chemical formula and composition\n"
+            "- List of indexed unit cells with dimensions\n"
+            "- Experimental PXRD data (x1, y1, peaks)\n"
+            "- Density constraints (min, max)\n"
+            "- X-ray wavelength\n\n"
 
-        "**Output Format:**\n"
-        "Report the following:\n"
-        "1. Number of cells tested\n"
-        "2. Total structures generated and optimized\n"
-        "3. Best similarity score and energy achieved\n"
-        "4. Final Rietveld refinement metrics (Rwp, R², χ²)\n"
-        "5. Whether a satisfactory solution was found (R² > 0.95)\n"
-        "6. Paths to saved structure file (.cif) and XRD comparison plot (.png)\n\n"
+            "**Output Format:**\n"
+            "Report the following:\n"
+            "1. Number of cells tested\n"
+            "2. Total structures generated and optimized\n"
+            "3. Best similarity score and energy achieved\n"
+            "4. Final Rietveld refinement metrics (Rwp, R², χ²)\n"
+            "5. Whether a satisfactory solution was found (R² > 0.95)\n"
+            "6. Paths to saved structure file (.cif) and XRD comparison plot (.png)\n\n"
 
-        "Always use the WyckoffSolverTool to perform these computationally intensive tasks.\n"
-        "This tool may take several minutes to hours depending on complexity.\n"
-        "Report progress updates and immediately notify when a satisfactory solution is found.\n"
-        "If no solution meets the R² threshold after exhausting the search space, "
-        "recommend adjustments to constraints or suggest alternative space groups."
+            "Always use the tool named exactly 'WyckoffSolverTool' to perform these computationally intensive tasks.\n"
+            "Do not call method-style names such as 'WyckoffSolverTool.run'.\n"
+            "This tool may take several minutes to hours depending on complexity.\n"
+            "Report progress updates and immediately notify when a satisfactory solution is found.\n"
+            "If no solution meets the R² threshold after exhausting the search space, "
+            "recommend adjustments to constraints or suggest alternative space groups."
+        )
     )
-)
 
-builder = GraphBuilder()
-builder.add_node(DataPreprocessAgent, "DataPreprocessorAgent")
-builder.add_node(CellManagerAgent, "CellSolverAgent")
-builder.add_node(WyckoffSolverAgent, "WyckoffSolverAgent")
-builder.add_edge("DataPreprocessorAgent", "CellSolverAgent")
-builder.add_edge("CellSolverAgent", "WyckoffSolverAgent")
-builder.set_entry_point("DataPreprocessorAgent")
-graph = builder.build()
+    builder = GraphBuilder()
+    builder.add_node(DataPreprocessAgent, "DataPreprocessorAgent")
+    builder.add_node(CellManagerAgent, "CellSolverAgent")
+    builder.add_node(WyckoffSolverAgent, "WyckoffSolverAgent")
+    builder.add_edge("DataPreprocessorAgent", "CellSolverAgent")
+    builder.add_edge("CellSolverAgent", "WyckoffSolverAgent")
+    builder.set_entry_point("DataPreprocessorAgent")
+    graph = builder.build()
+else:
+    DataPreprocessAgent = None
+    CellManagerAgent = None
+    WyckoffSolverAgent = None
+    graph = None
 
 def main(
     state: dict | None = None,
@@ -1892,49 +1816,26 @@ def main(
     max_eng_rel: float | None = None,
     max_cell_volume: float | None = None,
 ) -> None:
-    run_state = copy.deepcopy(default_state if state is None else state)
-    if pxrd_csv is not None:
-        run_state["pxrd_csv"] = pxrd_csv
-    if formula is not None:
-        run_state["formula"] = formula
-    if multi_attempts is not None:
-        run_state["multi_attempts"] = max(1, int(multi_attempts))
-    if seed_base is not None:
-        run_state["seed_base"] = int(seed_base)
-    if infer_spg_from_pxrd is not None:
-        run_state["infer_spg_from_pxrd"] = bool(infer_spg_from_pxrd)
-    if try_all_inferred_spg is not None:
-        run_state["stop_on_first_accepted_inferred_spg"] = not bool(try_all_inferred_spg)
-    if spg_top_k is not None:
-        run_state["spg_top_k"] = int(spg_top_k)
-    if spg_infer_backend is not None:
-        backend = str(spg_infer_backend).strip().lower()
-        if backend in SPG_INFER_BACKENDS:
-            run_state["spg_infer_backend"] = backend
-        else:
-            logger.warning(f"Unsupported spg infer backend '{spg_infer_backend}', using model backend.")
-            run_state["spg_infer_backend"] = "model"
-    if show_spg_predictions is not None:
-        run_state["show_spg_predictions"] = bool(show_spg_predictions)
-    if lattice_symmetry is not None:
-        run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
-    elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
-        run_state["lattice_symmetry"] = "any"
-    if max_local_boosts is not None:
-        run_state["max_local_boosts"] = max(0, int(max_local_boosts))
-    if max_local_perturbations is not None:
-        run_state["max_local_perturbations"] = max(0, int(max_local_perturbations))
-    if perturb_displacement is not None:
-        run_state["perturb_displacement"] = max(0.0, float(perturb_displacement))
-    if max_eng_rel is not None:
-        run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
-        run_state["max_eng_rel_early_stop"] = max(0.0, float(max_eng_rel))
-    if max_cell_volume is not None:
-        max_cell_volume = float(max_cell_volume)
-        if max_cell_volume > 0:
-            run_state["max_cell_volume"] = max_cell_volume
-        else:
-            logger.warning(f"Ignoring non-positive max_cell_volume={max_cell_volume}; expected > 0.")
+    run_state = build_run_state(
+        default_state,
+        logger,
+        state=state,
+        pxrd_csv=pxrd_csv,
+        formula=formula,
+        multi_attempts=multi_attempts,
+        seed_base=seed_base,
+        infer_spg_from_pxrd=infer_spg_from_pxrd,
+        try_all_inferred_spg=try_all_inferred_spg,
+        spg_top_k=spg_top_k,
+        spg_infer_backend=spg_infer_backend,
+        show_spg_predictions=show_spg_predictions,
+        lattice_symmetry=lattice_symmetry,
+        max_local_boosts=max_local_boosts,
+        max_local_perturbations=max_local_perturbations,
+        perturb_displacement=perturb_displacement,
+        max_eng_rel=max_eng_rel,
+        max_cell_volume=max_cell_volume,
+    )
     run_prompt = INPUT_PROMPT if input_prompt is None else input_prompt
     force_fallback, _ = _startup_runtime_mode()
     _FAILURE_STATUSES = {"no_cells", "no_solution"}
@@ -2003,126 +1904,8 @@ def main(
     print("Exiting main thread")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run PXRD agent pipeline")
-    parser.add_argument(
-        "--input-csv",
-        default="Examples/PXRD_PrYMg2_123.csv",
-        help=(
-            "Path to a PXRD CSV file, or a directory containing CSV files. "
-            "If a directory is provided, all '*.csv' files in that directory are processed."
-        ),
-    )
-    parser.add_argument(
-        "--input-formula",
-        default="",
-        help="Optional formula override. Leave empty to parse from filename.",
-    )
-    parser.add_argument(
-        "--multi-attempts",
-        type=int,
-        default=None,
-        help="Override number of adaptive attempts (same as PXRD_MULTI_ATTEMPTS).",
-    )
-    parser.add_argument(
-        "--seed-base",
-        type=int,
-        default=123456,
-        help="Override base random seed (same as PXRD_SEED_BASE).",
-    )
-    parser.add_argument(
-        "--infer-spg",
-        action="store_true",
-        help="Infer space group from PXRD/profile model instead of filename convention.",
-    )
-    parser.add_argument(
-        "--try-all-inferred-spg",
-        action="store_true",
-        help="When --infer-spg is on, do not stop at first accepted SG; evaluate all inferred candidates and keep best.",
-    )
-    parser.add_argument(
-        "--spg-top-k",
-        type=int,
-        choices=[3, 5, 10, 20, 25, 30, 50, 100],
-        default=100,
-        help="Number of inferred space-group options to evaluate/show (3 or 5).",
-    )
-    parser.add_argument(
-        "--spg-infer-backend",
-        type=str,
-        choices=["model", "smart-cell"],
-        default="model",
-        help=(
-            "Backend for --infer-spg: 'model' uses pretrained SG classifier, "
-            "'smart-cell' uses SmartCellSolver to rank likely SGs by high->low symmetry and indexing evidence."
-        ),
-    )
-    parser.add_argument(
-        "--symmetry",
-        type=str,
-        choices=["auto", "any", "triclinic", "monoclinic", "orthorhombic", "tetragonal", "trigonal", "hexagonal", "cubic"],
-        default=None,
-        help=(
-            "Optional crystal-system filter for inferred SG candidates. "
-            "Defaults to 'auto' when --infer-spg is set; otherwise unset. "
-            "'auto' uses filename SPG (if present), 'any' disables filtering."
-        ),
-    )
-    parser.add_argument(
-        "--local-boosts",
-        type=int,
-        default=None,
-        help="Maximum number of extra regeneration boosts per promising Wyckoff setting.",
-    )
-    parser.add_argument(
-        "--local-perturbations",
-        type=int,
-        default=None,
-        help="Maximum number of perturb-and-relax trials per promising Wyckoff setting.",
-    )
-    parser.add_argument(
-        "--perturb-displacement",
-        type=float,
-        default=None,
-        help="Standard deviation of Cartesian perturbation in Å for local perturb-and-relax trials.",
-    )
-    parser.add_argument(
-        "--max-eng-rel",
-        type=float,
-        default=None,
-        help=(
-            "Maximum allowed energy-above-best (eV/atom) for immediate early termination on excellent "
-            "refined fits. If unset, uses max(refine_eng_window, 0.60)."
-        ),
-    )
-    parser.add_argument(
-        "--max-cell-volume",
-        type=float,
-        default=2500.0,
-        help="Maximum allowed unit-cell volume (Å^3) for cell solutions. Larger cells are discarded.",
-    )
-    args = parser.parse_args()
-
-    if args.symmetry is not None:
-        symmetry = args.symmetry
-    elif args.infer_spg and args.spg_infer_backend == "smart-cell":
-        symmetry = "any"
-    else:
-        symmetry = "auto" if args.infer_spg else None
-
-    input_path = Path(args.input_csv)
-    if input_path.is_dir():
-        csv_files = sorted(input_path.glob("*.csv"))
-        if not csv_files:
-            print(f"No CSV files found in directory: {input_path}")
-            sys.exit(1)
-        print(f"Found {len(csv_files)} CSV file(s) in '{input_path}'.")
-    elif input_path.is_file():
-        csv_files = [input_path]
-    else:
-        print(f"Input path does not exist: {input_path}")
-        sys.exit(1)
-
+def run_agent_csv(csv_path: str, args: argparse.Namespace) -> None:
+    symmetry = resolve_cli_symmetry(args)
     shared_kwargs = dict(
         formula=args.input_formula,
         multi_attempts=args.multi_attempts,
@@ -2139,15 +1922,24 @@ if __name__ == "__main__":
         max_cell_volume=args.max_cell_volume,
         show_spg_predictions=True,
     )
+    main(
+        pxrd_csv=csv_path,
+        input_prompt=f"Process the PXRD data from {csv_path}",
+        **shared_kwargs,
+    )
 
-    for idx, csv_path in enumerate(csv_files, start=1):
-        csv_str = str(csv_path)
-        if len(csv_files) > 1:
-            print(f"\n{'=' * 60}")
-            print(f"Processing file {idx}/{len(csv_files)}: {csv_str}")
-            print(f"{'=' * 60}\n")
-        main(
-            pxrd_csv=csv_str,
-            input_prompt=f"Process the PXRD data from {csv_str}",
-            **shared_kwargs,
-        )
+
+if __name__ == "__main__":
+    parser = build_common_parser("Run PXRD agent pipeline")
+    args = parser.parse_args()
+
+    try:
+        csv_files = collect_input_csv_files(args.input_csv)
+    except FileNotFoundError as exc:
+        print(str(exc))
+        sys.exit(1)
+    try:
+        run_csv_batch(csv_files, args, run_agent_csv)
+    except RuntimeError as exc:
+        print(str(exc))
+        sys.exit(1)
