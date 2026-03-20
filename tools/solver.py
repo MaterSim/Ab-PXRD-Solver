@@ -245,6 +245,72 @@ def get_two_theta_from_cell(bravais, hkls, cell, wave_length=1.54184, check_uniq
     else:
         return two_thetas, hkls[valid]
 
+
+def _match_obs_exp_peaks(obs_thetas, exp_thetas, tol):
+    """
+    Fast peak matching without constructing a full N_obs x N_exp error matrix.
+
+    Semantics are aligned with the prior implementation:
+    1) Determine which observed peaks have at least one calculated peak within tolerance.
+    2) For those observed peaks, assign nearest unused calculated peaks globally
+       (not restricted by tolerance), in observed-peak order.
+    3) Build calculated-peak "observability" mask based on tolerance windows.
+
+    Returns:
+        matched_obs_ids: indices into obs_thetas
+        matched_exp_ids: indices into exp_thetas
+        errs: obs - exp error for each matched pair in obs order
+        used_exp_mask: boolean mask over exp_thetas that are within tolerance
+                       of at least one observed peak (for mismatch accounting)
+    """
+    obs_thetas = np.asarray(obs_thetas)
+    exp_thetas = np.asarray(exp_thetas)
+    if len(obs_thetas) == 0 or len(exp_thetas) == 0:
+        return np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=float), np.zeros(len(exp_thetas), dtype=bool)
+
+    sort_ids = np.argsort(exp_thetas, kind='stable')
+    exp_sorted = exp_thetas[sort_ids]
+
+    left = np.searchsorted(exp_sorted, obs_thetas - tol, side='left')
+    right = np.searchsorted(exp_sorted, obs_thetas + tol, side='right')
+
+    has_obs_match = left < right
+    matched_obs_ids = np.where(has_obs_match)[0]
+
+    # Calculated peaks that are close enough to at least one observed peak.
+    observable_sorted = np.zeros(len(exp_sorted), dtype=bool)
+    for lo, hi in zip(left, right):
+        if lo < hi:
+            observable_sorted[lo:hi] = True
+
+    used_exp_mask = np.zeros(len(exp_thetas), dtype=bool)
+    if len(exp_thetas) > 0:
+        used_exp_mask[sort_ids] = observable_sorted
+
+    matched_exp_ids = []
+    errs = []
+    assigned_exp = np.zeros(len(exp_thetas), dtype=bool)
+
+    for obs_id in matched_obs_ids:
+        if not np.any(~assigned_exp):
+            continue
+
+        obs_theta = obs_thetas[obs_id]
+        errors = np.abs(exp_thetas - obs_theta)
+        masked_errors = np.where(assigned_exp, np.inf, errors)
+        exp_id = int(np.argmin(masked_errors))
+        if not np.isfinite(masked_errors[exp_id]):
+            continue
+
+        assigned_exp[exp_id] = True
+        matched_exp_ids.append(exp_id)
+        errs.append(float(obs_theta - exp_thetas[exp_id]))
+
+    matched_obs_ids = np.asarray(matched_obs_ids[:len(matched_exp_ids)], dtype=int)
+    matched_exp_ids = np.asarray(matched_exp_ids, dtype=int)
+    errs = np.asarray(errs, dtype=float)
+    return matched_obs_ids, matched_exp_ids, errs, used_exp_mask
+
 class CellSolver:
     def __init__(self, spg, thetas, bra=None, N_add=5, max_mismatch=20, theta_tols=[0.1, 0.15, 0.5],
                  cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
@@ -308,6 +374,7 @@ class CellSolver:
         self.N_batch = N_batch
         self.wave_length = wave_length
         self.verbose = verbose
+        self.lattice_type = get_lattice_type(self.bravais)
         if self.bravais > 3:
             self.max_mismatch_hkl = 3
         else:
@@ -429,53 +496,51 @@ class CellSolver:
             msg = f"Rejected cell due to no expected peaks within the theta range: {cell_str}"
             return None, msg
 
-        # Fast precheck: each observed peak must have at least one calculated peak
-        # within tolerance. Rejecting here avoids building a full N_obs x N_exp matrix.
         tol = self.theta_tols[-1]
-        ins = np.searchsorted(exp_thetas, self.thetas)
-        left_ids = np.clip(ins - 1, 0, len(exp_thetas) - 1)
-        right_ids = np.clip(ins, 0, len(exp_thetas) - 1)
-        left_err = np.abs(self.thetas - exp_thetas[left_ids])
-        right_err = np.abs(self.thetas - exp_thetas[right_ids])
-        nearest_err = np.minimum(left_err, right_err)
-        matched_count = int(np.sum(nearest_err < tol))
-        if matched_count < self.theta_count:
-            msg = f"Rejected cell: {cell_str}, matched {matched_count}/{self.theta_count} peaks"
-            return None, msg
-
-        errors_matrix_raw = self.thetas[:, np.newaxis] - exp_thetas[np.newaxis, :]
-        errors_matrix = np.abs(errors_matrix_raw)
-        within_tolerance = errors_matrix < tol
-        has_obs_match = np.any(within_tolerance, axis=1)
+        # Fast tolerance check without full error matrix.
+        sort_ids = np.argsort(exp_thetas, kind='stable')
+        exp_sorted = exp_thetas[sort_ids]
+        left = np.searchsorted(exp_sorted, self.thetas - tol, side='left')
+        right = np.searchsorted(exp_sorted, self.thetas + tol, side='right')
+        has_obs_match = left < right
         ids_matched = np.where(has_obs_match)[0]
+        
+        # Compute observability for mismatch accounting.
+        observable_sorted = np.zeros(len(exp_sorted), dtype=bool)
+        for lo, hi in zip(left, right):
+            if lo < hi:
+                observable_sorted[lo:hi] = True
+        used_exp_mask = np.zeros(len(exp_thetas), dtype=bool)
+        used_exp_mask[sort_ids] = observable_sorted
+        
         if len(ids_matched) == self.theta_count:
+            # Greedy global assignment of matched peaks.
+            matched_exp_ids = []
+            errs = []
+            assigned_exp = np.zeros(len(exp_thetas), dtype=bool)
+            for obs_id in ids_matched:
+                obs_theta = self.thetas[obs_id]
+                errors = np.abs(exp_thetas - obs_theta)
+                masked_errors = np.where(assigned_exp, np.inf, errors)
+                exp_id = int(np.argmin(masked_errors))
+                if np.isfinite(masked_errors[exp_id]):
+                    assigned_exp[exp_id] = True
+                    matched_exp_ids.append(exp_id)
+                    errs.append(float(obs_theta - exp_thetas[exp_id]))
+            
+            if len(matched_exp_ids) < self.theta_count:
+                return None, f"Rejected cell: {cell_str}, matched {len(matched_exp_ids)}/{self.theta_count} peaks"
+            
             # Get the obs. peaks
             matched_peaks = []
-            exp_theta_list = []
-            obs_theta_list = []
-            hkl_ids = []
-            for id in ids_matched:
-                errors = errors_matrix[id]
-                obs_theta = self.thetas[id]
-                hkl_id = np.argsort(errors)
-                # find the first unmatched hkl_id
-                for j in range(len(hkl_id)):
-                    if hkl_id[j] in hkl_ids:
-                        continue
-                    else:
-                        hkl_id = hkl_id[j]
-                        break
+            for obs_id, hkl_id in zip(ids_matched, matched_exp_ids):
+                obs_theta = self.thetas[obs_id]
                 exp_theta = exp_thetas[hkl_id]
                 matched_peaks.append((exp_hkls[hkl_id], exp_theta, obs_theta))
-                exp_theta_list.append(exp_theta)
-                obs_theta_list.append(obs_theta)
-                hkl_ids.append(hkl_id)
-
-            exp_arr = np.array(exp_theta_list)
-            obs_arr = np.array(obs_theta_list)
+            obs_arr = self.thetas[ids_matched]
+            errs = np.asarray(errs, dtype=float)
             # Weighted chi² using theta_tol as uncertainty
             # χ² = Σ[(obs - exp)² / σ²] where σ = theta_tol
-            errs = obs_arr - exp_arr
             chi2 = np.sum((errs)**2) / (self.theta_tols[-1]**2 * len(obs_arr))
             half = self.theta_count // 2
             chi2_half = np.sum(errs[:half]**2) / (self.theta_tols[-1]**2 * half)
@@ -494,8 +559,7 @@ class CellSolver:
                 msg = f"Rejected cell: {cell_str}, chi2: {chi2_half:.4f} {chi2:.4f}"
                 return None, msg
 
-            mis_obs_match = np.any(within_tolerance, axis=0)
-            ids_mis_matched = np.where(~mis_obs_match)[0]
+            ids_mis_matched = np.where(~used_exp_mask)[0]
 
             mis_matched_peaks = []
             for id in ids_mis_matched:
@@ -561,11 +625,9 @@ class CellSolver:
         if len(exp_thetas) == 0:
             msg += f"Rejected cell due to no expected peaks: {cell_str}"
 
-        errors_matrix_raw = self.thetas[:, np.newaxis] - exp_thetas[np.newaxis, :]
-        errors_matrix = np.abs(errors_matrix_raw)
-        within_tolerance = errors_matrix < self.theta_tols[-1]
-        has_obs_match = np.any(within_tolerance, axis=1)
-        ids_matched = np.where(has_obs_match)[0]
+        ids_matched, matched_exp_ids, errs, used_exp_mask = _match_obs_exp_peaks(
+            self.thetas, exp_thetas, self.theta_tols[-1]
+        )
 
         # Get the obs. peaks
         if len(ids_matched) < len(self.thetas):
@@ -579,31 +641,14 @@ class CellSolver:
                      #       print(f"({hkl}, {self.thetas[id]:.2f}, {sim:.2f}, {e:.2f}) ")
                      #import sys; sys.exit()
         matched_peaks = []
-        exp_theta_list = []
-        obs_theta_list = []
-        hkl_ids = []
-        for id in ids_matched:
-            errors = errors_matrix[id]
+        for id, hkl_id in zip(ids_matched, matched_exp_ids):
             obs_theta = self.thetas[id]
-            hkl_id = np.argsort(errors)
-            # find the first unmatched hkl_id
-            for j in range(len(hkl_id)):
-                if hkl_id[j] in hkl_ids:
-                    continue
-                else:
-                    hkl_id = hkl_id[j]
-                    break
             exp_theta = exp_thetas[hkl_id]
             matched_peaks.append((exp_hkls[hkl_id], exp_theta, obs_theta))
-            exp_theta_list.append(exp_theta)
-            obs_theta_list.append(obs_theta)
-            hkl_ids.append(hkl_id)
+        obs_arr = self.thetas[ids_matched]
 
-        exp_arr = np.array(exp_theta_list)
-        obs_arr = np.array(obs_theta_list)
         # Weighted chi² using theta_tol as uncertainty
         # χ² = Σ[(obs - exp)² / σ²] where σ = theta_tol
-        errs = obs_arr - exp_arr
         chi2 = np.sum((errs)**2) / (self.theta_tols[-1]**2 * len(obs_arr))
         half = len(self.thetas) // 2
         chi2_half = np.sum(errs[:half]**2) / (self.theta_tols[-1]**2 * half)
@@ -620,8 +665,7 @@ class CellSolver:
         if chi2_half > max(chi2, 0.01) or chi2 > self.max_chi2:
             msg += f"\nLarge chi2: {chi2_half:.4f} {chi2:.4f}"
 
-        mis_obs_match = np.any(within_tolerance, axis=0)
-        ids_mis_matched = np.where(~mis_obs_match)[0]
+        ids_mis_matched = np.where(~used_exp_mask)[0]
 
         mis_matched_peaks = []
         for id in ids_mis_matched:
@@ -709,6 +753,24 @@ class CellSolver:
         guesses = np.array(guesses)
         if len(guesses) == 0:
             return []
+
+        # For orthorhombic systems, the linear solve in get_cell_params uses
+        # A = [[h^2, k^2, l^2], ...] for 3 hkls. If det(A)=0, that guess set
+        # is guaranteed singular for any theta assignment and can be removed.
+        if self.lattice_type == 3 and guesses.ndim == 3 and guesses.shape[1] == 3:
+            coeff = guesses.astype(float) ** 2
+            dets = np.linalg.det(coeff)
+            valid_mask = np.abs(dets) > 1e-10
+            if np.any(~valid_mask):
+                if self.spg is not None:
+                    print(
+                        f"Filtered singular orthorhombic hkl guess sets for space group {self.spg}: "
+                        f"{len(guesses)} -> {int(np.count_nonzero(valid_mask))}."
+                    )
+                guesses = guesses[valid_mask]
+                if len(guesses) == 0:
+                    return []
+
         if self.verbose: print("Total guesses:", len(guesses))
         sum_squares = np.sum(guesses**2, axis=(1,2))
         if len(guesses) > self.max_guess:
@@ -1341,7 +1403,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     refine_sim_min=0.7, refine_eng_window=0.5,
                     max_local_boosts=1, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=None,
-                    max_eng_rel_early_stop=None, forced_wp_solution=None):
+                    max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
+                    forced_wp_solution=None):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1380,8 +1443,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     best_refined_result_energy_ok = None
     best_refined_energy_ok_score = -1e9
     _slog = structure_log if structure_log is not None else []
+    min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
     if max_eng_rel_early_stop is None:
-        max_eng_rel_for_termination = max(float(refine_eng_window), 0.60)
+        max_eng_rel_for_termination = max(float(refine_eng_window), 0.30)
     else:
         max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
 
@@ -1705,7 +1769,12 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 if should_terminate_on_refined_candidate(
                                     p_r2, p_chi2, p_eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
                                 ):
-                                    return (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                    if len(_slog) >= min_structures_before_early_stop:
+                                        return (p_wr, p_r2, p_chi2, xtal, eng_best)
+                                    logger.info(
+                                        f"  Early-stop deferred: explored {len(_slog)} structure(s), "
+                                        f"need >= {min_structures_before_early_stop}."
+                                    )
                                 if not p_energy_ok:
                                     logger.info(
                                         f"  Good refined fit found but energy is too high for early stop: "
@@ -1726,7 +1795,12 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         if should_terminate_on_refined_candidate(
                             r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
                         ):
-                            return (wr, r2, chi2, xtal, eng_best)
+                            if len(_slog) >= min_structures_before_early_stop:
+                                return (wr, r2, chi2, xtal, eng_best)
+                            logger.info(
+                                f"  Early-stop deferred: explored {len(_slog)} structure(s), "
+                                f"need >= {min_structures_before_early_stop}."
+                            )
                         if not energy_ok:
                             logger.info(
                                 f"  Good refined fit found but energy is too high for early stop: "

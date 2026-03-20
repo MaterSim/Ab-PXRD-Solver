@@ -127,8 +127,9 @@ default_state = {
     "max_local_boosts": _env_int("PXRD_LOCAL_BOOSTS", 1, min_value=0),
     "max_local_perturbations": _env_int("PXRD_LOCAL_PERTURBS", 2, min_value=0),
     "perturb_displacement": float(os.getenv("PXRD_PERTURB_DISPLACEMENT", "0.06")),
-    "max_eng_rel_early_stop": None,
+    "max_eng_rel_early_stop": 0.20,
     "max_eng_rel": None,
+    "min_structures_before_early_stop": 10,
 }
 
 
@@ -523,6 +524,7 @@ def _plot_energy_vs_r2(
     output_png: str,
     status: str = "Failure",
     elapsed_seconds: float | None = None,
+    timing_breakdown_seconds: dict | None = None,
 ) -> None:
     """Scatter plot of energy-per-atom vs R² for every relaxed structure explored.
     Structures that were never refined receive R²=0.
@@ -542,17 +544,19 @@ def _plot_energy_vs_r2(
         fig, ax = plt.subplots(figsize=(8, 5))
         if unref:
             ue, ur = zip(*unref)
-            ax.scatter(ue, ur, c="steelblue", s=25, alpha=0.55,
+            ax.scatter(ue, ur, c="steelblue", s=25, alpha=0.5,
                        label=f"Relaxed only (N={len(ue)})")
         if ref:
             re, rr = zip(*ref)
-            ax.scatter(re, rr, c="crimson", marker="*", s=140, alpha=0.9,
+            ax.scatter(re, rr, c="crimson", marker="*", s=140, alpha=0.7,
                        label=f"Refined (N={len(re)})")
 
         ax.set_xlabel("Energy per atom (eV)")
         ax.set_ylabel("R² score  (0 = not refined)")
         ax.set_ylim(-0.2, 1.1)
-        if elapsed_seconds is not None:
+        if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
+            total_seconds = max(0.0, float(timing_breakdown_seconds.get("total", 0.0)))
+        elif elapsed_seconds is not None:
             total_seconds = max(0.0, float(elapsed_seconds))
             total_minutes = int(total_seconds // 60)
             seconds_remain = total_seconds - (60 * total_minutes)
@@ -564,9 +568,37 @@ def _plot_energy_vs_r2(
                 time_text = f"{total_minutes}m {seconds_remain:04.1f}s"
         else:
             time_text = "n/a"
+        if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
+            total_minutes = int(total_seconds // 60)
+            seconds_remain = total_seconds - (60 * total_minutes)
+            if total_minutes >= 60:
+                hours = total_minutes // 60
+                minutes = total_minutes % 60
+                time_text = f"{hours}h {minutes}m {seconds_remain:04.1f}s"
+            else:
+                time_text = f"{total_minutes}m {seconds_remain:04.1f}s"
+        breakdown_text = None
+        if timing_breakdown_seconds:
+            spg_cell_seconds = max(0.0, float(timing_breakdown_seconds.get("spg_and_cell", 0.0)))
+            structure_seconds = max(0.0, float(timing_breakdown_seconds.get("structure_inference", 0.0)))
+
+            def _fmt_breakdown(seconds: float) -> str:
+                total_minutes = int(seconds // 60)
+                seconds_remain = seconds - (60 * total_minutes)
+                if total_minutes >= 60:
+                    hours = total_minutes // 60
+                    minutes = total_minutes % 60
+                    return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
+                return f"{total_minutes}m {seconds_remain:04.1f}s"
+
+            breakdown_text = (
+                f"SPG+Cell: {_fmt_breakdown(spg_cell_seconds)} | "
+                f"Structure: {_fmt_breakdown(structure_seconds)}"
+            )
         ax.set_title(
             f"{formula}  SPG {spg} — Energy vs R²  ({len(structure_log)} structures)  "
             f"[{status}]  [Time: {time_text}]"
+            + (f"\n[{breakdown_text}]" if breakdown_text else "")
         )
         ax.legend()
         ax.grid(True, alpha=0.3)
@@ -607,14 +639,15 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     max_local_perturbations = max(0, int(state.get("max_local_perturbations", 2)))
     perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
+    min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     suppress_local_energy_plot = bool(state.get("suppress_local_energy_plot", False))
 
     eng_min, sim_max = 1e10, 0.90
 
     os.makedirs("Results", exist_ok=True)
+    os.makedirs("tmp", exist_ok=True)
 
     title = f'{formula} PXRD Prediction: Space Group {spg}'
-    match_png = f"Results/Match_{formula}_{spg}.png"
     match_cif = f'Results/Match_{formula}_{spg}.cif'
     attempts = max(1, int(state.get("multi_attempts", 3)))
     seed_base = int(state.get("seed_base", 20260315))
@@ -664,8 +697,9 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         N1, N2, N3 = _attempt_schedule(attempt_idx)
         _set_seed(seed)
 
-        attempt_png = f"Results/Match_{formula}_{spg}_attempt{attempt_idx + 1}.png"
+        attempt_png = f"tmp/Match_{formula}_{spg}_attempt{attempt_idx + 1}.png"
         attempt_cif = f"Results/Match_{formula}_{spg}_attempt{attempt_idx + 1}.cif"
+        attempt_refinement_png = attempt_cif.replace(".cif", "_refinement.png")
         logger.info(
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
             f"local_boosts={max_local_boosts}, local_perturbations={max_local_perturbations}, "
@@ -704,6 +738,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             perturb_displacement=perturb_displacement,
             structure_log=all_structure_log,
             max_eng_rel_early_stop=max_eng_rel_early_stop,
+            min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
         )
 
@@ -719,7 +754,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             "eng_best": float(eng_best),
             "attempt": attempt_idx + 1,
             "seed": seed,
-            "png": attempt_png,
+            "png": attempt_refinement_png,
             "cif": attempt_cif,
             "accepted": False,
         }
@@ -734,7 +769,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             best_score = score
             best_result = candidate
 
-        if candidate["accepted"] and (
+        if candidate["accepted"] and len(all_structure_log) >= min_structures_before_early_stop and (
             candidate["r2"] >= max(min_r2 + 0.02, 0.97)
             or candidate["chi2"] <= min(max_chi2 * 0.7, 0.08)
         ):
@@ -749,6 +784,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             f"Results/EnergyR2_{formula}_{spg}.png",
             status=local_plot_status,
             elapsed_seconds=elapsed_stage,
+            timing_breakdown_seconds=state.get("timing_breakdown_seconds"),
         )
 
     state["structure_log"] = all_structure_log
@@ -774,8 +810,6 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         text += "No satisfactory solution found.\n"
         return text
 
-    if os.path.exists(best_result["png"]):
-        shutil.copy2(best_result["png"], match_png)
     if os.path.exists(best_result["cif"]):
         shutil.copy2(best_result["cif"], match_cif)
 
@@ -783,7 +817,9 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     r2 = best_result["r2"]
     chi2 = best_result["chi2"]
     logger.info(f"\nFinal refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}")
-    logger.info(f"Best structure saved to {match_cif} and {match_png}")
+    if os.path.exists(best_result["png"]):
+        logger.info(f"Best refinement plot saved to {best_result['png']}")
+    logger.info(f"Best structure saved to {match_cif}")
     logger.info(
         f"Selected attempt {best_result['attempt']} (seed={best_result['seed']}, score={best_score:.4f})"
     )
@@ -799,7 +835,9 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     text += f"Selected attempt: {best_result['attempt']} (seed={best_result['seed']})\n"
     if not best_result["accepted"]:
         text += "Best refined candidate did not meet the acceptance thresholds, but was kept as a fallback result.\n"
-    text += f"Best structure saved to {match_cif} and {match_png}\n"
+    if os.path.exists(best_result["png"]):
+        text += f"Best refinement plot saved to {best_result['png']}\n"
+    text += f"Best structure saved to {match_cif}\n"
     return text
 
 
@@ -865,6 +903,10 @@ def _run_pipeline_fallback(
     announce_bug_switch: bool = True,
     status_label: str = "fallback_success",
 ) -> dict:
+    pipeline_start_time = time.perf_counter()
+    spg_cell_phase_end_time: float | None = None
+    structure_phase_start_time: float | None = None
+
     if announce_bug_switch:
         logger.info("Detected Strands Gemini streaming bug; switching to deterministic fallback pipeline.")
     else:
@@ -873,6 +915,44 @@ def _run_pipeline_fallback(
 
     def _emit_progress(message: str) -> None:
         print(message)
+
+    def _format_elapsed(seconds: float) -> str:
+        total_seconds = max(0.0, float(seconds))
+        total_minutes = int(total_seconds // 60)
+        seconds_remain = total_seconds - (60 * total_minutes)
+        if total_minutes >= 60:
+            hours = total_minutes // 60
+            minutes = total_minutes % 60
+            return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
+        return f"{total_minutes}m {seconds_remain:04.1f}s"
+
+    def _current_timing_breakdown_seconds() -> dict:
+        nonlocal spg_cell_phase_end_time, structure_phase_start_time
+        now = time.perf_counter()
+        if spg_cell_phase_end_time is None:
+            spg_cell_seconds = now - pipeline_start_time
+            structure_seconds = 0.0
+        else:
+            spg_cell_seconds = max(0.0, spg_cell_phase_end_time - pipeline_start_time)
+            if structure_phase_start_time is None:
+                structure_seconds = max(0.0, now - spg_cell_phase_end_time)
+            else:
+                structure_seconds = max(0.0, now - structure_phase_start_time)
+
+        total_seconds = spg_cell_seconds + structure_seconds
+        return {
+            "spg_and_cell": float(spg_cell_seconds),
+            "structure_inference": float(structure_seconds),
+            "total": float(total_seconds),
+        }
+
+    def _emit_timing_breakdown() -> None:
+        breakdown = _current_timing_breakdown_seconds()
+        state["timing_breakdown_seconds"] = breakdown
+        _emit_progress("Timing breakdown:")
+        _emit_progress(f"  1) SPG + cell inference: {_format_elapsed(breakdown['spg_and_cell'])}")
+        _emit_progress(f"  2) Structure inference: {_format_elapsed(breakdown['structure_inference'])}")
+        _emit_progress(f"  Total: {_format_elapsed(breakdown['total'])}")
 
     def _emit_accepted_solution_details(spg_value: int, result: dict, prefix: str = "Accepted solution") -> None:
         wr = result.get("wr")
@@ -1180,6 +1260,9 @@ def _run_pipeline_fallback(
                 )
             _emit_progress("")
 
+            spg_cell_phase_end_time = time.perf_counter()
+            structure_phase_start_time = spg_cell_phase_end_time
+
             # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
             # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
             # only for that SPG to avoid redundant work across identical cell dims.
@@ -1272,7 +1355,8 @@ def _run_pipeline_fallback(
                                 r2_val is not None and chi2_val is not None and
                                 r2_val >= 0.93 and chi2_val < 0.18
                             )
-                            if stop_on_first_accepted_inferred_spg and strict_early_exit:
+                            enough_global_structures = len(global_structure_log) >= max(0, int(state.get("min_structures_before_early_stop", 10)))
+                            if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures:
                                 _emit_progress(
                                     f"Good solution found early: spg={spg_val}, "
                                     f"R2={trial_result.get('r2', 0):.4f}, "
@@ -1281,6 +1365,8 @@ def _run_pipeline_fallback(
                                     f"and {wp_attempted} WP candidate(s)."
                                 )
                                 if global_structure_log:
+                                    timing_breakdown = _current_timing_breakdown_seconds()
+                                    state["timing_breakdown_seconds"] = timing_breakdown
                                     formula_str = state.get("formula", "unknown")
                                     _plot_energy_vs_r2(
                                         global_structure_log,
@@ -1289,8 +1375,10 @@ def _run_pipeline_fallback(
                                         f"Results/EnergyR2_{formula_str}_global.png",
                                         status="Success",
                                         elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
+                                        timing_breakdown_seconds=timing_breakdown,
                                     )
                                 state.update(trial_state)
+                                _emit_timing_breakdown()
                                 return {
                                     "status": status_label,
                                     "message": trial_message,
@@ -1311,6 +1399,8 @@ def _run_pipeline_fallback(
 
             # End of all-pairs loop: emit global plot covering every structure tried
             if global_structure_log:
+                timing_breakdown = _current_timing_breakdown_seconds()
+                state["timing_breakdown_seconds"] = timing_breakdown
                 formula_str = state.get("formula", "unknown")
                 global_plot_status = "Success" if (best_trial_state and (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)) else "Failure"
                 _plot_energy_vs_r2(
@@ -1320,6 +1410,7 @@ def _run_pipeline_fallback(
                     f"Results/EnergyR2_{formula_str}_global.png",
                     status=global_plot_status,
                     elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
+                    timing_breakdown_seconds=timing_breakdown,
                 )
 
         if not any_seed_had_cells:
@@ -1342,6 +1433,11 @@ def _run_pipeline_fallback(
             _emit_progress(f"Best inferred-SG score observed: {best_trial_score:.4f}")
             state.update(best_trial_state)
             accepted_inferred = (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)
+            if spg_cell_phase_end_time is None:
+                spg_cell_phase_end_time = time.perf_counter()
+            if accepted_inferred and structure_phase_start_time is None:
+                structure_phase_start_time = spg_cell_phase_end_time
+            _emit_timing_breakdown()
             return {
                 "status": status_label if accepted_inferred else "no_solution",
                 "message": best_trial_message,
@@ -1352,16 +1448,21 @@ def _run_pipeline_fallback(
     cell_result = _run_cell_solver_stage(state)
     if not state.get("cells"):
         _emit_progress("No valid unit cells found. Pipeline did not find a solution.")
+        spg_cell_phase_end_time = time.perf_counter()
+        _emit_timing_breakdown()
         return {
             "status": "no_cells",
             "message": cell_result.get("message", ""),
             "spg": state.get("spg"),
             "formula": state.get("formula"),
         }
+    spg_cell_phase_end_time = time.perf_counter()
+    structure_phase_start_time = spg_cell_phase_end_time
     wyckoff_message = _run_wyckoff_solver_stage(state)
     wyckoff_result = state.get("wyckoff_result") or {}
     accepted = wyckoff_result.get("accepted", False)
     final_status = status_label if accepted else "no_solution"
+    _emit_timing_breakdown()
     return {
         "status": final_status,
         "message": wyckoff_message,
@@ -1593,6 +1694,29 @@ def main(
             raise
 
     result_status = result.get("status", "") if isinstance(result, dict) else ""
+
+    timing_breakdown = run_state.get("timing_breakdown_seconds") if isinstance(run_state, dict) else None
+    if isinstance(timing_breakdown, dict):
+        def _fmt_seconds(seconds: float) -> str:
+            total_seconds = max(0.0, float(seconds))
+            total_minutes = int(total_seconds // 60)
+            seconds_remain = total_seconds - (60 * total_minutes)
+            if total_minutes >= 60:
+                hours = total_minutes // 60
+                minutes = total_minutes % 60
+                return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
+            return f"{total_minutes}m {seconds_remain:04.1f}s"
+
+        spg_cell_s = float(timing_breakdown.get("spg_and_cell", 0.0))
+        structure_s = float(timing_breakdown.get("structure_inference", 0.0))
+        total_s = float(timing_breakdown.get("total", spg_cell_s + structure_s))
+        timing_line = (
+            f"Timing summary: SPG+Cell={_fmt_seconds(spg_cell_s)} | "
+            f"Structure={_fmt_seconds(structure_s)} | Total={_fmt_seconds(total_s)}"
+        )
+        logger.info(timing_line)
+        print(timing_line)
+
     if result_status in _FAILURE_STATUSES:
         reason = {
             "no_cells": "no valid unit cells found",
