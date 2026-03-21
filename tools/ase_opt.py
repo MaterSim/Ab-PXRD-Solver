@@ -8,12 +8,14 @@ import warnings
 import os
 import sys
 import multiprocessing as mp
+import time
+import io
+import contextlib
 import numpy as np
 from ase.constraints import FixSymmetry
 from ase.filters import UnitCellFilter
 from ase.optimize.fire import FIRE
 import logging
-from queue import Empty
 from ase.atoms import Atoms
 
 _cached_mace = None
@@ -27,13 +29,50 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _default_isolate_fix_symmetry() -> bool:
+def _default_isolate_fix_symmetry(calculator=None) -> bool:
     """
     Isolated relaxation is helpful for hard symmetry-related hangs, but on macOS the
     required `spawn` start method can make every relaxation look stuck because the
     child process must cold-start PyTorch/MACE for each attempt.
     """
+    if isinstance(calculator, str) and calculator.upper() == "MACE":
+        return False
     return sys.platform != "darwin"
+
+
+def _silence_mace_output() -> bool:
+    return _env_flag("PXRD_SILENCE_MACE", default=True)
+
+
+@contextlib.contextmanager
+def _silence_external_output(enabled: bool):
+    if not enabled:
+        yield
+        return
+
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        with open(os.devnull, "w") as devnull:
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os.dup2(devnull.fileno(), 1)
+            os.dup2(devnull.fileno(), 2)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                yield
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
 
 
 def _strip_atoms_for_ipc(atoms):
@@ -45,6 +84,16 @@ def _strip_atoms_for_ipc(atoms):
     clean_atoms.calc = None
     clean_atoms.set_constraint()
     return clean_atoms
+
+
+def _restore_atoms_from_ipc(atoms, calculator):
+    """Reattach the calculator after an `Atoms` object returns from a worker process."""
+    if atoms is None:
+        return None
+
+    with _silence_external_output(isinstance(calculator, str) and calculator == "MACE" and _silence_mace_output()):
+        atoms.calc = get_calculator(calculator)
+    return atoms
 
 
 def _ase_relax_impl(
@@ -125,15 +174,20 @@ def _ase_relax_impl(
     return atoms
 
 
-def _ase_relax_worker(queue, atoms, kwargs):
+def _ase_relax_worker(conn, atoms, kwargs):
     try:
         result = _ase_relax_impl(atoms, **kwargs)
-        queue.put(("ok", _strip_atoms_for_ipc(result)))
+        conn.send(("ok", _strip_atoms_for_ipc(result)))
     except Exception as exc:
-        queue.put(("error", f"{type(exc).__name__}: {exc}"))
+        try:
+            conn.send(("error", f"{type(exc).__name__}: {exc}"))
+        except Exception:
+            pass
     finally:
-        queue.close()
-        queue.cancel_join_thread()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def get_calculator(calculator):
     """
@@ -160,8 +214,13 @@ def get_calculator(calculator):
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message=".*float32.*")
                     warnings.filterwarnings("ignore", category=FutureWarning)
-                    from mace.calculators import mace_mp
-                    _cached_mace = mace_mp(model="small")
+                    if _silence_mace_output():
+                        with _silence_external_output(True):
+                            from mace.calculators import mace_mp
+                            _cached_mace = mace_mp(model="small")
+                    else:
+                        from mace.calculators import mace_mp
+                        _cached_mace = mace_mp(model="small")
             calc = _cached_mace
 
         else:
@@ -217,11 +276,11 @@ def ASE_relax(
 
     isolate_fix_symmetry = _env_flag(
         "PXRD_ISOLATE_FIX_SYMMETRY",
-        default=_default_isolate_fix_symmetry(),
+        default=_default_isolate_fix_symmetry(calculator),
     )
     if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
         context = mp.get_context("spawn")
-        queue = context.Queue(maxsize=1)
+        parent_conn, child_conn = context.Pipe(duplex=False)
         kwargs = {
             "calculator": calculator,
             "opt_lat": opt_lat,
@@ -232,15 +291,36 @@ def ASE_relax(
             "label": label,
             "use_fix_symmetry": use_fix_symmetry,
         }
-        process = context.Process(target=_ase_relax_worker, args=(queue, atoms, kwargs))
+        process = context.Process(target=_ase_relax_worker, args=(child_conn, atoms, kwargs))
         process.start()
+        child_conn.close()
         wait_seconds = max(10, int(max_time * 60) + 20)
-        process.join(timeout=wait_seconds)
+
+        status = None
+        payload = None
+        deadline = time.monotonic() + wait_seconds
+        try:
+            while time.monotonic() < deadline:
+                remaining = max(0.0, deadline - time.monotonic())
+                if parent_conn.poll(min(1.0, remaining)):
+                    status, payload = parent_conn.recv()
+                    break
+                if not process.is_alive():
+                    break
+        except (EOFError, OSError):
+            status = None
+            payload = None
+
+        process.join(timeout=1)
 
         if process.is_alive():
             process.terminate()
             process.join(timeout=5)
             logger.warning(f"Warning {label} timed out in isolated relaxation process.")
+            try:
+                parent_conn.close()
+            except Exception:
+                pass
             return None
 
         if process.exitcode not in (0, None):
@@ -248,19 +328,23 @@ def ASE_relax(
                 f"Warning {label} isolated relaxation process crashed (exitcode={process.exitcode}); "
                 "skipping this structure."
             )
+            try:
+                parent_conn.close()
+            except Exception:
+                pass
             return None
 
         try:
-            status, payload = queue.get(timeout=2)
             if status == "ok":
-                return payload
-            logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
-            return None
-        except Empty:
-            pass
+                return _restore_atoms_from_ipc(payload, calculator)
+            if status is not None:
+                logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
+                return None
         finally:
-            queue.close()
-            queue.cancel_join_thread()
+            try:
+                parent_conn.close()
+            except Exception:
+                pass
 
         logger.warning(f"Warning {label} isolated relaxation returned no result; skipping structure.")
         return None
