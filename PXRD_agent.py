@@ -10,6 +10,7 @@ import time
 import traceback
 import copy
 from pathlib import Path
+from uuid import uuid4
 from importlib import import_module
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 import pandas as pd
@@ -102,7 +103,8 @@ def _get_system_run_log_path(state: dict) -> str:
     pxrd_csv = str(state.get("pxrd_csv") or "")
     stem = Path(pxrd_csv).stem if pxrd_csv else "unknown_system"
     log_name = f"RunLog_{_safe_name_token(stem)}.log"
-    return str(Path("Results") / log_name)
+    results_dir = state.get("results_dir", "Results")
+    return str(Path(results_dir) / log_name)
 
 
 def _is_important_runlog_message(message: str) -> bool:
@@ -223,7 +225,8 @@ class _SystemRunLogFilter(logging.Filter):
 
 def _attach_system_run_log(state: dict) -> logging.Handler | None:
     try:
-        os.makedirs("Results", exist_ok=True)
+        results_dir = state.get("results_dir", "Results")
+        os.makedirs(results_dir, exist_ok=True)
         log_path = _get_system_run_log_path(state)
         handler = logging.FileHandler(log_path, mode="a")
         handler.setFormatter(logging.Formatter("%(message)s"))
@@ -768,14 +771,19 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
 
     eng_min, sim_max = 1e10, 0.90
 
-    os.makedirs("Results", exist_ok=True)
-    os.makedirs("tmp", exist_ok=True)
+    results_dir = state.get("results_dir", "Results")
+    os.makedirs(results_dir, exist_ok=True)
+    tmp_root = Path("tmp")
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    run_token = f"{_safe_name_token(Path(str(pxrd_csv or '')).stem)}_{os.getpid()}_{uuid4().hex[:8]}"
+    run_tmp_dir = tmp_root / f"run_{run_token}"
+    run_tmp_dir.mkdir(parents=True, exist_ok=True)
 
     title = f'{formula} PXRD Prediction: Space Group {spg}'
-    match_cif = f'Results/Match_{formula}_{spg}.cif'
+    match_cif = f'{results_dir}/Match_{formula}_{spg}.cif'
     stale_result_cifs = [
-        *Path("Results").glob(f"Match_{formula}_{spg}_attempt*.cif"),
-        *Path("Results").glob(f"Match_{formula}_{spg}_attempt*_refined.cif"),
+        *Path(results_dir).glob(f"Match_{formula}_{spg}_attempt*.cif"),
+        *Path(results_dir).glob(f"Match_{formula}_{spg}_attempt*_refined.cif"),
     ]
     for stale_path in stale_result_cifs:
         try:
@@ -829,9 +837,10 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         N1, N2, N3 = _attempt_schedule(attempt_idx)
         _set_seed(seed)
 
-        attempt_png = f"tmp/Match_{formula}_{spg}_attempt{attempt_idx + 1}.png"
-        attempt_cif = f"tmp/Match_{formula}_{spg}_attempt{attempt_idx + 1}.cif"
-        attempt_refinement_png = attempt_cif.replace(".cif", "_refinement.png")
+        attempt_prefix = run_tmp_dir / f"Match_{formula}_{spg}_attempt{attempt_idx + 1}"
+        attempt_png = str(attempt_prefix.with_suffix(".png"))
+        attempt_cif = str(attempt_prefix.with_suffix(".cif"))
+        attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
         logger.info(
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
             f"local_boosts={max_local_boosts}, local_perturbations={max_local_perturbations}, "
@@ -921,7 +930,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         elapsed_stage = time.perf_counter() - stage_start_time
         _plot_energy_vs_r2(
             all_structure_log, formula, spg,
-            f"Results/EnergyR2_{formula}_{spg}.png",
+            f"{results_dir}/EnergyR2_{formula}_{spg}.png",
             status=local_plot_status,
             elapsed_seconds=elapsed_stage,
             timing_breakdown_seconds=state.get("timing_breakdown_seconds"),
@@ -1623,7 +1632,7 @@ def _run_pipeline_fallback(
                                         global_structure_log,
                                         formula_str,
                                         "all",
-                                        f"Results/EnergyR2_{formula_str}.png",
+                                        f"{state.get('results_dir', 'Results')}/EnergyR2_{formula_str}.png",
                                         status="Success",
                                         elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
                                         timing_breakdown_seconds=timing_breakdown,
@@ -1670,7 +1679,7 @@ def _run_pipeline_fallback(
                     global_structure_log,
                     formula_str,
                     "all",
-                    f"Results/EnergyR2_{formula_str}.png",
+                    f"{state.get('results_dir', 'Results')}/EnergyR2_{formula_str}.png",
                     status=global_plot_status,
                     elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
                     timing_breakdown_seconds=timing_breakdown,

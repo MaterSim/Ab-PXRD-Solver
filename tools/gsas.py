@@ -4,6 +4,7 @@ Simulate and refine PXRD patterns using GSAS-II.
 import os
 import sys
 import warnings
+import uuid
 import numpy as np
 from importlib import import_module
 
@@ -174,8 +175,8 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
     return x, ycalc
 
 def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
-                gpx_name='tmp/gpx_refinement.gpx',
-                gsas_log='tmp/gsas_refinement.log'):
+                gpx_name=None,
+                gsas_log=None):
     """
     Refine PXRD data using GSAS-II.
 
@@ -193,6 +194,15 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     """
 
     G2sc = _load_gsas_scriptable()
+
+    tmp_root = os.path.join("tmp", "gsas_runs")
+    os.makedirs(tmp_root, exist_ok=True)
+    run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}_{run_id}")
+    if gpx_name is None:
+        gpx_name = f"{default_base}.gpx"
+    if gsas_log is None:
+        gsas_log = f"{default_base}.log"
 
     gpx_dir = os.path.dirname(gpx_name)
     if gpx_dir:

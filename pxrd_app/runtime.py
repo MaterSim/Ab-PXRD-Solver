@@ -4,11 +4,60 @@ from pathlib import Path
 
 FAILURE_STATUSES = {"no_cells", "no_solution"}
 
-RESULTS_CSV = Path("Results") / "results_summary.csv"
+_DEFAULT_RESULTS_DIR = "Results"
 CSV_COLUMNS = [
-    "csv_file_name", "Runtime", "Number of relaxed structures",
+    "csv_file_name", "Runtime", "N_struc",
     "Status", "E", "dE", "R2", "Chi2", "SPG", "Wyckoff", "Cell",
 ]
+
+
+def _format_scalar(value, decimals: int = 4) -> str:
+    if value is None:
+        return ""
+    try:
+        text = f"{float(value):.{int(decimals)}f}".rstrip("0").rstrip(".")
+        return text if text not in {"-0", ""} else "0"
+    except Exception:
+        return ""
+
+
+def _approx_equal(a: float, b: float, tol: float = 1e-3) -> bool:
+    return abs(float(a) - float(b)) <= tol
+
+
+def _format_cell_components(values: list[float], decimals: int = 4) -> str:
+    return "[" + ", ".join(_format_scalar(v, decimals) for v in values) + "]"
+
+
+def _compact_cell_from_para(para) -> str | None:
+    try:
+        a, b, c, alpha, beta, gamma = [float(x) for x in para]
+    except Exception:
+        return None
+
+    if (
+        _approx_equal(alpha, 90.0, 1e-2)
+        and _approx_equal(beta, 90.0, 1e-2)
+        and _approx_equal(gamma, 90.0, 1e-2)
+    ):
+        if _approx_equal(a, b) and _approx_equal(b, c):
+            return _format_cell_components([a])
+        if _approx_equal(a, b):
+            return _format_cell_components([a, c])
+        return _format_cell_components([a, b, c])
+
+    if (
+        _approx_equal(alpha, 90.0, 1e-2)
+        and _approx_equal(beta, 90.0, 1e-2)
+        and _approx_equal(gamma, 120.0, 1e-2)
+        and _approx_equal(a, b)
+    ):
+        return _format_cell_components([a, c])
+
+    if _approx_equal(alpha, 90.0, 1e-2) and _approx_equal(gamma, 90.0, 1e-2):
+        return _format_cell_components([a, b, c, beta], decimals=4)
+
+    return _format_cell_components([a, b, c, alpha, beta, gamma], decimals=4)
 
 
 def _extract_xtal_cell(xtal) -> str | None:
@@ -16,15 +65,19 @@ def _extract_xtal_cell(xtal) -> str | None:
     if xtal is None:
         return None
     try:
-        return xtal.lattice.encode()
+        para = xtal.lattice.get_para()
+        compact = _compact_cell_from_para(para)
+        if compact is not None:
+            return compact
     except Exception:
         pass
     try:
-        para = xtal.lattice.get_para()
-        a, b, c, alpha, beta, gamma = para
-        return f"{a:.4f} {b:.4f} {c:.4f} {alpha:.2f} {beta:.2f} {gamma:.2f}"
+        encoded = xtal.lattice.encode()
+        if isinstance(encoded, str):
+            return encoded
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _extract_xtal_wyckoff(xtal) -> str | None:
@@ -64,7 +117,7 @@ def _extract_xtal_wyckoff(xtal) -> str | None:
 
 
 def write_results_csv(input_csv: str, run_state: dict | None, result: dict | None) -> None:
-    """Append one summary row to Results/results_summary.csv."""
+    """Append one summary row to <results_dir>/results_summary.csv."""
     run_state = run_state or {}
     result = result or {}
 
@@ -82,32 +135,32 @@ def write_results_csv(input_csv: str, run_state: dict | None, result: dict | Non
 
     # --- Structure count ---
     structure_log = run_state.get("structure_log") or []
-    n_relaxed = len(structure_log)
+    n_struc = len(structure_log)
 
     # --- Best-structure metrics (only on success) ---
     E = dE = R2 = Chi2 = SPG = Wyckoff = Cell = ""
     if not is_failure:
         wr = run_state.get("wyckoff_result") or {}
         xtal = wr.get("xtal")
-        _f = lambda v: f"{v:.6g}" if v is not None else ""
-        E = _f(wr.get("selected_energy"))
-        dE = _f(wr.get("eng_rel"))
-        R2 = _f(wr.get("r2"))
-        Chi2 = _f(wr.get("chi2"))
+        E = _format_scalar(wr.get("selected_energy"), 6)
+        dE = _format_scalar(wr.get("eng_rel"), 6)
+        R2 = _format_scalar(wr.get("r2"), 6)
+        Chi2 = _format_scalar(wr.get("chi2"), 6)
         SPG = str(run_state.get("spg") or wr.get("spg") or "")
         Wyckoff = _extract_xtal_wyckoff(xtal) or ""
         Cell = _extract_xtal_cell(xtal) or ""
 
     csv_file_name = os.path.basename(input_csv)
 
-    RESULTS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not RESULTS_CSV.exists() or RESULTS_CSV.stat().st_size == 0
-    with open(RESULTS_CSV, "a+", newline="") as fh:
+    results_csv = Path(run_state.get("results_dir") or _DEFAULT_RESULTS_DIR) / "results_summary.csv"
+    results_csv.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not results_csv.exists() or results_csv.stat().st_size == 0
+    with open(results_csv, "a+", newline="") as fh:
         writer = csv.writer(fh)
         if write_header:
             writer.writerow(CSV_COLUMNS)
         writer.writerow([
-            csv_file_name, runtime_str, n_relaxed,
+            csv_file_name, runtime_str, n_struc,
             status_label, E, dE, R2, Chi2, SPG, Wyckoff, Cell,
         ])
 

@@ -24,7 +24,7 @@ COMMON_SYMMETRY_CHOICES = [
 def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
-        "--input-csv",
+        "--input",
         default="Examples/PXRD_PrYMg2_123.csv",
         help=(
             "Path to a PXRD CSV file, or a directory containing CSV files. "
@@ -32,7 +32,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--input-formula",
+        "--formula",
         default="",
         help="Optional formula override. Leave empty to parse from filename.",
     )
@@ -66,7 +66,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Number of inferred space-group options to evaluate/show.",
     )
     parser.add_argument(
-        "--spg-infer-backend",
+        "--spg-backend",
         type=str,
         choices=sorted(SPG_INFER_BACKENDS),
         default="model",
@@ -124,9 +124,14 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         type=int,
         default=1,
         help=(
-            "Number of CSV files to solve in parallel when --input-csv points to a directory. "
+            "Number of CSV files to solve in parallel when --input points to a directory. "
             "Use 1 to run sequentially."
         ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="Results",
+        help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
     return parser
 
@@ -134,7 +139,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
 def resolve_cli_symmetry(args: argparse.Namespace) -> str | None:
     if args.symmetry is not None:
         return args.symmetry
-    if args.infer_spg and args.spg_infer_backend == "smart-cell":
+    if args.infer_spg and args.spg_backend == "smart-cell":
         return "any"
     return "auto" if args.infer_spg else None
 
@@ -167,9 +172,9 @@ def run_csv_batch(
 
     if len(csv_files) > 1:
         if workers > 1:
-            print(f"Found {len(csv_files)} CSV file(s) in '{args.input_csv}'. Running with {workers} parallel worker(s).")
+            print(f"Found {len(csv_files)} CSV file(s) in '{args.input}'. Running with {workers} parallel worker(s).")
         else:
-            print(f"Found {len(csv_files)} CSV file(s) in '{args.input_csv}'.")
+            print(f"Found {len(csv_files)} CSV file(s) in '{args.input}'.")
 
     if workers <= 1:
         for idx, csv_path in enumerate(csv_files, start=1):
@@ -226,6 +231,7 @@ def build_run_state(
     perturb_displacement: float | None = None,
     max_eng_rel: float | None = None,
     max_cell_volume: float | None = None,
+    results_dir: str | None = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None:
@@ -270,6 +276,8 @@ def build_run_state(
             run_state["max_cell_volume"] = max_cell_volume
         else:
             logger.warning(f"Ignoring non-positive max_cell_volume={max_cell_volume}; expected > 0.")
+    if results_dir is not None:
+        run_state["results_dir"] = str(results_dir)
     return run_state
 
 
@@ -278,13 +286,13 @@ def build_run_state_from_args(default_state: dict, logger, args: argparse.Namesp
         default_state,
         logger,
         pxrd_csv=csv_path,
-        formula=args.input_formula,
+        formula=args.formula,
         multi_attempts=args.multi_attempts,
         seed_base=args.seed_base,
         infer_spg_from_pxrd=args.infer_spg,
         try_all_inferred_spg=args.try_all_inferred_spg,
         spg_top_k=args.spg_top_k,
-        spg_infer_backend=args.spg_infer_backend,
+        spg_infer_backend=args.spg_backend,
         show_spg_predictions=True,
         lattice_symmetry=resolve_cli_symmetry(args),
         max_local_boosts=args.local_boosts,
@@ -292,4 +300,5 @@ def build_run_state_from_args(default_state: dict, logger, args: argparse.Namesp
         perturb_displacement=args.perturb_displacement,
         max_eng_rel=args.max_eng_rel,
         max_cell_volume=args.max_cell_volume,
+        results_dir=args.output_dir,
     )
