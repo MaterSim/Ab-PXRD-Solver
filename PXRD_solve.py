@@ -52,7 +52,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     try:
-        csv_files = collect_input_csv_files(args.input_csv)
+        csv_files = collect_input_csv_files(args.input)
     except FileNotFoundError as exc:
         print(str(exc))
         sys.exit(1)

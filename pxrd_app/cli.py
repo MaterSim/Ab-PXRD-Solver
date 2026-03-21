@@ -129,7 +129,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--output-dir",
+        "--output",
         default="Results",
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
@@ -300,5 +300,5 @@ def build_run_state_from_args(default_state: dict, logger, args: argparse.Namesp
         perturb_displacement=args.perturb_displacement,
         max_eng_rel=args.max_eng_rel,
         max_cell_volume=args.max_cell_volume,
-        results_dir=args.output_dir,
+        results_dir=args.output,
     )
