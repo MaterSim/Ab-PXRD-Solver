@@ -811,6 +811,7 @@ class WPManager:
         """
         sols = []
         for Z in range(self.Zs[0], self.Zs[1]+1):
+            sols_before_z = len(sols)
             comp = [n * Z for n in self.comp]
             wps, _, ids = self.group.list_wyckoff_combinations(comp, numWp=(0, self.max_wp))
             indices = sorted(range(len(ids)), key=lambda i: sum(len(x) for x in ids[i]))
@@ -835,8 +836,9 @@ class WPManager:
                         wp_lists.append(tmp)
                         sols.append((self.spg, comp, self.lattice, id, len(tmp), sum(dof)))
                         #print("Added:", self.spg, comp, id)
-            if len(sols) > 0:
-                print(f"Z={Z}: Kept {len(sols)} Wyckoff position combinations.")
+            kept_this_z = len(sols) - sols_before_z
+            if kept_this_z > 0:
+                print(f"Z={Z}: Kept {kept_this_z} Wyckoff position combinations.")
             # sort sols by DOF and number of WPs
             sols = sorted(sols, key=lambda x: (x[5], x[4]))
         #for sol in sols:
@@ -850,6 +852,7 @@ class WPManager:
         """
         sols = []
         for Z in range(self.Zs[0], self.Zs[1]+1):
+            sols_before_z = len(sols)
             df_z = self.df[self.df['n_atoms'] == Z * sum(self.comp)]
             #print(df_z)
             if len(df_z) == 0: continue
@@ -890,17 +893,16 @@ class WPManager:
                         n_wps = sum(len(sub) for sub in sol)
                         sols.append((self.spg, comp, self.lattice, sol, n_wps, sum(dof), count, Z))
                         #print("Added:", self.spg, tmp_lists[0], [self.group[w].get_label() for wp in sol for w in wp])
-            print(f"Z={Z}: Kept {len(sols)} Wyckoff position combinations.")
+            kept_this_z = len(sols) - sols_before_z
+            if kept_this_z > 0:
+                print(f"Z={Z}: Kept {kept_this_z} Wyckoff position combinations.")
 
         # Sort the solutions by count and DOF
         sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))
-        for sol in sols:
-            wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
-            # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}, Count: {sol[6]}")
         return sols
 
 class XtalManager:
-    def __init__(self, spg, species, numIons, cell, WPs, count=None):
+    def __init__(self, spg, species, numIons, cell, WPs, count=None, emit_summary=True):
         """
         Crystal Manager is used to handle crystal structure related operations.
 
@@ -928,7 +930,8 @@ class XtalManager:
         volume = self.cell.volume if hasattr(self.cell, 'volume') else None
         vol_str = f", Volume: {volume:.2f}" if volume is not None else ""
         count_str = f", Count: {count}" if count is not None else ""
-        print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}{vol_str}{count_str}")
+        if emit_summary:
+            print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}{vol_str}{count_str}")
 
     def generate_structure(self, use_asu=False):
         """

@@ -11,10 +11,12 @@ import traceback
 import copy
 from pathlib import Path
 from uuid import uuid4
+from functools import lru_cache
 from importlib import import_module
 from importlib.metadata import version as pkg_version, PackageNotFoundError
 import pandas as pd
 import numpy as np
+from pyxtal.symmetry import Group
 from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv_files, resolve_cli_symmetry, run_csv_batch
 from pxrd_app.inference import (
     CRYSTAL_SYSTEM_PRIORITY,
@@ -520,6 +522,26 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
     return result
 
 
+@lru_cache(maxsize=256)
+def _get_group(spg: int) -> Group:
+    return Group(int(spg))
+
+
+def _format_wyckoff_labels_from_ids(spg: int, wp_ids) -> str:
+    try:
+        group = _get_group(int(spg))
+        labels_nested = []
+        for sub in (wp_ids or []):
+            one_species = []
+            for wp in (sub or []):
+                label = group[int(wp)].get_label()
+                one_species.append(str(label))
+            labels_nested.append(one_species)
+        return str(labels_nested)
+    except Exception:
+        return "[]"
+
+
 def _run_cell_solver_stage(state: dict) -> dict:
     spg = state.get("spg")
     formula = state.get("formula")
@@ -675,7 +697,7 @@ def _plot_energy_vs_r2(
             x_min = min(float(e) for e in engs)
             x_max = max(float(e) for e in engs)
             if (x_max - x_min) < 0.1:
-                ax.set_xlim(x_min - 0.05, x_max + 0.05)
+                ax.set_xlim(x_min - 0.01, x_max + 0.09)
 
         ax.set_xlabel("Energy per atom (eV)")
         ax.set_ylabel("R² score  (0 = not refined)")
@@ -1560,8 +1582,10 @@ def _run_pipeline_fallback(
                             )
                             continue
 
+                        wp_labels_text = _format_wyckoff_labels_from_ids(spg_val, wp_ids)
                         _emit_progress(
-                            f"  WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, n_wps={num_wps}"
+                            f"  WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
+                            f"n_wps={num_wps}, wyckoff={wp_labels_text}"
                         )
 
                         trial_state = copy.deepcopy(state)

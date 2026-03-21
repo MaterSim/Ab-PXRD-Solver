@@ -1667,7 +1667,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             )
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
-                xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count)
+                xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count, emit_summary=False)
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
