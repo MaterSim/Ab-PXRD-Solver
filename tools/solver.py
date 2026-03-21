@@ -1473,6 +1473,46 @@ def perturb_atoms(atoms, displacement=0.06):
     trial_atoms.set_positions(positions)
     return trial_atoms
 
+
+def _normalize_signature_value(value):
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalize_signature_value(item) for item in value)
+    try:
+        return round(float(value), 6)
+    except Exception:
+        return str(value)
+
+
+def _cell_signature(cell_obj):
+    return _normalize_signature_value(getattr(cell_obj, "dims", cell_obj))
+
+
+def _wp_signature(spg_sol, wp_ids):
+    return (
+        int(spg_sol),
+        tuple(tuple(str(wp) for wp in group) for group in wp_ids),
+    )
+
+
+def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count, Z, sites):
+    cell_sig = _cell_signature(cell_obj)
+    wp_sig = _wp_signature(spg_sol, wp_ids)
+    return {
+        "spg": int(spg_sol),
+        "cell_dims": list(getattr(cell_obj, "dims", [])),
+        "cell_signature": cell_sig,
+        "wp_signature": wp_sig,
+        "setting_signature": (cell_sig, wp_sig),
+        "wp_labels": [list(group) for group in sites],
+        "wp_ids": [list(group) for group in wp_ids],
+        "num_wps": int(num_wps),
+        "dof": int(dof),
+        "count": None if count is None else int(count),
+        "Z": int(Z),
+    }
+
 def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
                     match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, max_force,
                     max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
@@ -1481,7 +1521,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     max_local_boosts=1, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=None,
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
-                    forced_wp_solution=None):
+                    forced_wp_solution=None, max_structures_total=None):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1521,10 +1561,50 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     best_refined_energy_ok_score = -1e9
     _slog = structure_log if structure_log is not None else []
     min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
+    structure_budget = None if max_structures_total is None else max(0, int(max_structures_total))
     if max_eng_rel_early_stop is None:
         max_eng_rel_for_termination = max(float(refine_eng_window), 0.30)
     else:
         max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
+
+    def _finalize_result(result):
+        if result is None:
+            return None
+        wr, r2, chi2, xtal, _eng_best_at_selection, selected_eng, _selected_eng_rel = result
+        final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
+        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel)
+
+    def _structure_budget_reached() -> bool:
+        return structure_budget is not None and len(_slog) >= structure_budget
+
+    def _return_best_available(local_candidate=None):
+        if local_candidate is not None:
+            logger.info(
+                "Structure generation budget exhausted; returning best accepted candidate "
+                "from the current Wyckoff setting."
+            )
+            return _finalize_result(local_candidate)
+
+        if best_refined_result_energy_ok is not None:
+            logger.info(
+                "Structure generation budget exhausted; returning best refined fallback "
+                "candidate that satisfies the relative-energy criterion."
+            )
+            return _finalize_result(best_refined_result_energy_ok)
+
+        if best_refined_result is not None:
+            logger.info(
+                "Structure generation budget exhausted before any energy-qualified "
+                "accepted candidate was found; returning no solution."
+            )
+            return (None, None, None, None, eng_best, None, None)
+
+        logger.info("Structure generation budget exhausted with no refined candidates.")
+        return (None, None, None, None, eng_best, None, None)
+
+    if structure_budget == 0:
+        logger.info("Structure generation budget is zero; skipping structure search.")
+        return (None, None, None, None, eng_best, None, None)
 
     trial_cells = list(cells[:N1])
     smallest_cell_volume = min([cell.size for cell in trial_cells], default=None)
@@ -1588,6 +1668,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
                 xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count)
+                log_metadata = _make_structure_log_metadata(
+                    cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
+                )
                 N4 = xm.dof * 3 if xm.dof != 1 else 4
                 N_false = 0
                 extra_trials = 0
@@ -1609,6 +1692,12 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 )
                 trial_idx = 0
                 while trial_idx < (N4 + 1 + extra_trials):
+                    if _structure_budget_reached():
+                        logger.info(
+                            f"Structure generation budget exhausted ({len(_slog)}/{structure_budget}); "
+                            "stopping search."
+                        )
+                        return _return_best_available(local_accepted_result)
                     trial_idx += 1
                     if N_false > max([4, N4 // 2]):
                         logger.info("Too many invalid structures, skip to next WP set.")
@@ -1628,7 +1717,10 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     if stress > max_stress or fmax > max_force:
                         N_false += 1
                         continue
-                    is_new_best_energy = eng < eng_best
+                    prev_eng_best = eng_best
+                    next_eng_best = min(prev_eng_best, eng)
+                    eng_rel = max(0.0, eng - next_eng_best)
+                    is_new_best_energy = eng < prev_eng_best
                     if is_new_best_energy:
                         eng_best = eng
 
@@ -1654,7 +1746,16 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         )
                         break
                     msg = f"{xtal.get_xtal_string()}, {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                    log_entry = {"eng": eng, "sim": sim, "r2": 0.0, "wr": None, "chi2": None, "refined": False}
+                    log_entry = {
+                        "eng": eng,
+                        "eng_rel": eng_rel,
+                        "sim": sim,
+                        "r2": 0.0,
+                        "wr": None,
+                        "chi2": None,
+                        "refined": False,
+                        **log_metadata,
+                    }
                     _slog.append(log_entry)
                     refined_score = None
 
@@ -1664,7 +1765,6 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     #      eV/atom of the best structure seen so far in this run.
                     # Both conditions must hold.  The energy criterion is measured relative to
                     # the running minimum (eng_best), so it adapts automatically to any system.
-                    eng_rel = max(0.0, eng - eng_best)  # >= 0; 0 means current best
                     refine_reason = None
                     refine_skip_reason = None
                     if sim >= max(sim_max - refine_margin, 0.0):
@@ -1769,7 +1869,10 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 )
                                 continue
 
-                            p_is_new_best_energy = p_eng < eng_best
+                            prev_eng_best = eng_best
+                            next_eng_best = min(prev_eng_best, p_eng)
+                            p_eng_rel = max(0.0, p_eng - next_eng_best)
+                            p_is_new_best_energy = p_eng < prev_eng_best
                             if p_is_new_best_energy:
                                 eng_best = p_eng
 
@@ -1783,10 +1886,17 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 f"{xtal.get_xtal_string()}, {p_sim:.3f}, {p_eng:.3f}, "
                                 f"{p_stress:.3f}, {p_fmax:.3f} [perturb:{perturb_idx + 1}]"
                             )
-                            p_log_entry = {"eng": p_eng, "sim": p_sim, "r2": 0.0, "wr": None, "chi2": None, "refined": False}
+                            p_log_entry = {
+                                "eng": p_eng,
+                                "eng_rel": p_eng_rel,
+                                "sim": p_sim,
+                                "r2": 0.0,
+                                "wr": None,
+                                "chi2": None,
+                                "refined": False,
+                                **log_metadata,
+                            }
                             _slog.append(p_log_entry)
-
-                            p_eng_rel = max(0.0, p_eng - eng_best)
                             p_refine_reason = None
                             p_refine_skip_reason = None
                             p_refined_score = None
@@ -1847,7 +1957,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                     p_r2, p_chi2, p_eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
                                 ):
                                     if len(_slog) >= min_structures_before_early_stop:
-                                        return (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
+                                        return _finalize_result((p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel))
                                     logger.info(
                                         f"  Early-stop deferred: explored {len(_slog)} structure(s), "
                                         f"need >= {min_structures_before_early_stop}."
@@ -1857,6 +1967,13 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                         f"  Good refined fit found but energy is too high for early stop: "
                                         f"eng_rel={p_eng_rel:.3f} eV/atom (threshold={max_eng_rel_for_termination:.3f})."
                                     )
+
+                            if _structure_budget_reached():
+                                logger.info(
+                                    f"Structure generation budget exhausted ({len(_slog)}/{structure_budget}) "
+                                    "after evaluating the latest perturbation."
+                                )
+                                return _return_best_available(local_accepted_result)
 
                     if is_new_best_energy:
                         msg += ' +++++'
@@ -1873,7 +1990,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
                         ):
                             if len(_slog) >= min_structures_before_early_stop:
-                                return (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
+                                return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel))
                             logger.info(
                                 f"  Early-stop deferred: explored {len(_slog)} structure(s), "
                                 f"need >= {min_structures_before_early_stop}."
@@ -1883,9 +2000,16 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 f"  Good refined fit found but energy is too high for early stop: "
                                 f"eng_rel={eng_rel:.3f} eV/atom (threshold={max_eng_rel_for_termination:.3f})."
                             )
+
+                    if _structure_budget_reached():
+                        logger.info(
+                            f"Structure generation budget exhausted ({len(_slog)}/{structure_budget}) "
+                            "after evaluating the latest structure."
+                        )
+                        return _return_best_available(local_accepted_result)
                 if local_accepted_result is not None:
                     logger.info("Returning best locally intensified accepted candidate for current WP setting.")
-                    return local_accepted_result
+                    return _finalize_result(local_accepted_result)
             prev_limit = limit
 
     if best_refined_result_energy_ok is not None:
@@ -1893,7 +2017,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             "No candidate met the acceptance threshold; returning best refined fallback candidate "
             "that satisfies the relative-energy criterion."
         )
-        return best_refined_result_energy_ok
+        return _finalize_result(best_refined_result_energy_ok)
 
     if best_refined_result is not None:
         logger.info(

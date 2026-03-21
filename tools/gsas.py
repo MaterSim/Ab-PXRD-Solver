@@ -290,9 +290,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
                 weighted_chi2 = float((weighted_res**2).sum() / (len(yobs) - 1))
                 print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
 
-            refined_cif = cif_file.replace('.cif', '_refined.cif')
-            phase.export_CIF(refined_cif)
-            # print(f"Saved refined structure to {refined_cif}")
+            refined_cif = cif_file
     except Exception as e:
         print(f"GSAS refinement failed for {os.path.basename(cif_file)}: {e}")
         return None, None, None, None

@@ -10,13 +10,14 @@ from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect
 from PXRD_agent import (
     _attach_system_run_log,
     _detach_system_run_log,
+    _plot_energy_vs_r2,
     _run_cell_solver_stage,
     _run_pipeline_fallback,
     _run_wyckoff_solver_stage,
     default_state,
     logger,
 )
-from tools.solver import enumerate_wyckoff_multi_spg
+from tools.solver import enumerate_wyckoff_multi_spg, score_wp_candidate
 
 
 def _safe_float(value, default=None):
@@ -90,6 +91,10 @@ def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
     best_refined_r2 = max((_safe_float(entry.get("r2"), -1.0) for entry in refined_entries), default=None)
     best_refined_chi2 = min((_safe_float(entry.get("chi2"), 1e9) for entry in refined_entries), default=None)
     min_energy = min((_safe_float(entry.get("eng"), 1e9) for entry in structure_log), default=None)
+    selected_energy = _safe_float(wyckoff_result.get("selected_energy"))
+    eng_rel = _safe_float(wyckoff_result.get("eng_rel"))
+    if eng_rel is None and selected_energy is not None and min_energy is not None:
+        eng_rel = max(0.0, selected_energy - min_energy)
 
     return {
         "label": label,
@@ -102,8 +107,8 @@ def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
         "r2": _safe_float(wyckoff_result.get("r2")),
         "chi2": _safe_float(wyckoff_result.get("chi2")),
         "score": _safe_float(wyckoff_result.get("score")),
-        "selected_energy": _safe_float(wyckoff_result.get("selected_energy")),
-        "eng_rel": _safe_float(wyckoff_result.get("eng_rel")),
+        "selected_energy": selected_energy,
+        "eng_rel": eng_rel,
         "attempt": _safe_int(wyckoff_result.get("attempt")),
         "seed": _safe_int(wyckoff_result.get("seed")),
         "cell_count": len(state.get("cells") or []),
@@ -220,14 +225,181 @@ def _enumerate_quick_check_wp_solutions(base_state: dict, cell, spg: int) -> lis
     return enumerate_wyckoff_multi_spg(cell.dims, [int(spg)], composition, ref_den=ref_den)
 
 
+def _normalize_wp_candidate(candidate):
+    return candidate[:8] if len(candidate) >= 9 else candidate
+
+
+def _candidate_rank_key(candidate) -> tuple:
+    normalized = _normalize_wp_candidate(candidate)
+    max_dof = _safe_int(normalized[5], None)
+    return score_wp_candidate(normalized, max_dof=max_dof)
+
+
+def _candidate_summary(candidate) -> str:
+    normalized = _normalize_wp_candidate(candidate)
+    return (
+        f"Z={normalized[7]} count={normalized[6]} dof={normalized[5]} "
+        f"n_wps={normalized[4]}"
+    )
+
+
+def _normalize_signature(value):
+    if isinstance(value, list):
+        return tuple(_normalize_signature(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_normalize_signature(item) for item in value)
+    return value
+
+
+def _cell_signature(cell) -> tuple:
+    dims = getattr(cell, "dims", cell)
+    return tuple(round(float(item), 6) for item in dims)
+
+
+def _candidate_wp_signature(candidate) -> tuple:
+    normalized = _normalize_wp_candidate(candidate)
+    return (
+        int(normalized[0]),
+        tuple(tuple(str(wp) for wp in group) for group in normalized[3]),
+    )
+
+
+def _observed_setting_stats(structure_log: list[dict]) -> tuple[dict, dict]:
+    setting_stats: dict = {}
+    wp_stats: dict = {}
+
+    def _update(stats: dict, key, entry: dict) -> None:
+        current = stats.setdefault(
+            key,
+            {
+                "seen": 0,
+                "refined": 0,
+                "best_r2": -1.0,
+                "best_sim": -1.0,
+                "best_eng": float("inf"),
+                "best_chi2": float("inf"),
+            },
+        )
+        current["seen"] += 1
+        sim = _safe_float(entry.get("sim"), -1.0)
+        eng = _safe_float(entry.get("eng"), float("inf"))
+        r2 = _safe_float(entry.get("r2"), -1.0)
+        chi2 = _safe_float(entry.get("chi2"), float("inf"))
+        current["best_sim"] = max(current["best_sim"], sim)
+        current["best_eng"] = min(current["best_eng"], eng)
+        current["best_r2"] = max(current["best_r2"], r2)
+        current["best_chi2"] = min(current["best_chi2"], chi2)
+        if entry.get("refined"):
+            current["refined"] += 1
+
+    for entry in structure_log or []:
+        setting_key = _normalize_signature(entry.get("setting_signature"))
+        wp_key = _normalize_signature(entry.get("wp_signature"))
+        if setting_key is not None:
+            _update(setting_stats, setting_key, entry)
+        if wp_key is not None:
+            _update(wp_stats, wp_key, entry)
+    return setting_stats, wp_stats
+
+
+def _observed_rank_key(setting_stats: dict | None, wp_stats: dict | None) -> tuple:
+    setting_stats = setting_stats or {}
+    wp_stats = wp_stats or {}
+    setting_best_eng = setting_stats.get("best_eng", float("inf"))
+    wp_best_eng = wp_stats.get("best_eng", float("inf"))
+    setting_best_chi2 = setting_stats.get("best_chi2", float("inf"))
+    wp_best_chi2 = wp_stats.get("best_chi2", float("inf"))
+    return (
+        1 if setting_stats else 0,
+        1 if setting_stats.get("refined", 0) > 0 else 0,
+        setting_stats.get("best_r2", -1.0),
+        -setting_best_chi2 if setting_best_chi2 != float("inf") else -1e9,
+        -setting_best_eng if setting_best_eng != float("inf") else -1e9,
+        setting_stats.get("best_sim", -1.0),
+        1 if wp_stats else 0,
+        1 if wp_stats.get("refined", 0) > 0 else 0,
+        wp_stats.get("best_r2", -1.0),
+        -wp_best_chi2 if wp_best_chi2 != float("inf") else -1e9,
+        -wp_best_eng if wp_best_eng != float("inf") else -1e9,
+        wp_stats.get("best_sim", -1.0),
+    )
+
+
+def _ranked_lack_sampling_trials(base_state: dict, args: argparse.Namespace) -> list[dict]:
+    cells = base_state.get("cells") or []
+    if not cells:
+        return []
+
+    spg = int(base_state["spg"])
+    setting_stats_map, wp_stats_map = _observed_setting_stats(base_state.get("structure_log") or [])
+    top_cells = cells[: max(1, int(args.resample_top_cells))]
+    per_cell_limit = max(1, int(args.resample_attempts))
+    ranked_trials: list[dict] = []
+    for cell_index, cell in enumerate(top_cells, start=1):
+        wp_candidates = _enumerate_quick_check_wp_solutions(base_state, cell, spg)
+        if not wp_candidates:
+            continue
+        cell_sig = _cell_signature(cell)
+        wp_candidates = sorted(
+            wp_candidates,
+            key=lambda candidate: (
+                _observed_rank_key(
+                    setting_stats_map.get((cell_sig, _candidate_wp_signature(candidate))),
+                    wp_stats_map.get(_candidate_wp_signature(candidate)),
+                ),
+                _candidate_rank_key(candidate),
+            ),
+            reverse=True,
+        )
+        for candidate_rank, candidate in enumerate(wp_candidates[:per_cell_limit], start=1):
+            candidate_wp_sig = _candidate_wp_signature(candidate)
+            exact_stats = setting_stats_map.get((cell_sig, candidate_wp_sig))
+            wp_stats = wp_stats_map.get(candidate_wp_sig)
+            ranked_trials.append(
+                {
+                    "label": f"focused_cell_{cell_index}_wp_{candidate_rank}",
+                    "cell": cell,
+                    "cell_index": cell_index,
+                    "candidate_rank": candidate_rank,
+                    "candidate": _normalize_wp_candidate(candidate),
+                    "rank_key": _candidate_rank_key(candidate),
+                    "observed_rank_key": _observed_rank_key(exact_stats, wp_stats),
+                    "exact_stats": exact_stats,
+                    "wp_stats": wp_stats,
+                    "summary": _candidate_summary(candidate),
+                }
+            )
+
+    ranked_trials.sort(
+        key=lambda trial: (
+            trial["observed_rank_key"],
+            trial["rank_key"],
+            -trial["cell_index"],
+            -trial["candidate_rank"],
+        ),
+        reverse=True,
+    )
+    return ranked_trials
+
+
+def _is_good_sampling_outcome(outcome: dict, args: argparse.Namespace) -> bool:
+    if not outcome.get("accepted"):
+        return False
+    eng_rel = _safe_float(outcome.get("eng_rel"), None)
+    if eng_rel is None:
+        return True
+    return eng_rel <= float(args.success_max_eng_rel)
+
+
 def _run_quick_check_trials(
     base_state: dict,
     *,
     cell,
     spg: int,
     quick_check_index: int,
+    structure_budget: int,
     args: argparse.Namespace,
-) -> list[tuple[dict, dict]]:
+) -> tuple[list[tuple[dict, dict]], int]:
     wp_candidates = _enumerate_quick_check_wp_solutions(base_state, cell, spg)
     total_candidates = len(wp_candidates)
     max_trials = max(1, int(args.quick_check_max_trials))
@@ -236,7 +408,7 @@ def _run_quick_check_trials(
     )
 
     if total_candidates == 0:
-        return []
+        return [], max(0, int(structure_budget))
 
     if total_candidates > max_trials:
         rng_seed = int(base_state.get("seed_base", 20260315)) + (1009 * quick_check_index)
@@ -250,8 +422,15 @@ def _run_quick_check_trials(
         selected_candidates = list(wp_candidates)
         print(f"Quick-check cell {quick_check_index}: trying all {len(selected_candidates)} WP trial(s).")
 
+    remaining_structure_budget = max(0, int(structure_budget))
     outcomes: list[tuple[dict, dict]] = []
     for trial_idx, candidate in enumerate(selected_candidates, start=1):
+        if remaining_structure_budget <= 0:
+            print(
+                f"Quick-check cell {quick_check_index}: structure budget exhausted; "
+                "skipping remaining WP trial(s)."
+            )
+            break
         forced_wp_solution = candidate[:8] if len(candidate) >= 9 else candidate
         trial_state, trial_outcome = _run_structure_trial(
             base_state,
@@ -264,10 +443,31 @@ def _run_quick_check_trials(
                 "max_local_perturbations": 0,
                 "forced_wp_solution": forced_wp_solution,
                 "suppress_local_energy_plot": True,
+                "max_structures_total": remaining_structure_budget,
             },
         )
         outcomes.append((trial_state, trial_outcome))
-    return outcomes
+        generated_structures = len(trial_state.get("structure_log") or [])
+        remaining_structure_budget = max(0, remaining_structure_budget - generated_structures)
+        if remaining_structure_budget <= 0:
+            print(
+                f"Quick-check cell {quick_check_index}: reached the total structure budget "
+                f"after generating {generated_structures} structure(s) in the latest trial."
+            )
+            break
+    return outcomes, remaining_structure_budget
+
+
+def _refresh_energy_plot(formula: str | None, spg: int | None, structure_log: list[dict], accepted: bool) -> None:
+    if not formula or spg is None or not structure_log:
+        return
+    _plot_energy_vs_r2(
+        structure_log,
+        formula,
+        int(spg),
+        str(Path("Results") / f"EnergyR2_{formula}_{spg}.png"),
+        status="Success" if accepted else "Failure",
+    )
 
 
 def _run_expanded_cell_trial(
@@ -290,30 +490,41 @@ def _run_expanded_cell_trial(
     return trial_state, outcome
 
 
-def _handle_near_success(base_state: dict, winner_state: dict, winner_outcome: dict, args: argparse.Namespace) -> tuple[dict, dict, list[dict]]:
+def _handle_near_success(
+    base_state: dict,
+    winner_state: dict,
+    winner_outcome: dict,
+    args: argparse.Namespace,
+) -> tuple[dict, dict, list[dict], list[dict]]:
     trials = []
     cells = winner_state.get("cells") or []
+    combined_plot_log = copy.deepcopy(winner_state.get("structure_log") or [])
     if args.quick_check_cells <= 0 or len(cells) <= 1:
-        return winner_state, winner_outcome, trials
+        return winner_state, winner_outcome, trials, combined_plot_log
 
     same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_near_success")
+    remaining_structure_budget = max(0, int(args.quick_check_structure_budget))
     for idx, cell in enumerate(cells[1:1 + args.quick_check_cells], start=1):
-        quick_trials = _run_quick_check_trials(
+        if remaining_structure_budget <= 0:
+            break
+        quick_trials, remaining_structure_budget = _run_quick_check_trials(
             base_state,
             cell=cell,
             spg=int(winner_outcome["spg"]),
             quick_check_index=idx,
+            structure_budget=remaining_structure_budget,
             args=args,
         )
         for trial_state, trial_outcome in quick_trials:
             trials.append(trial_outcome)
+            combined_plot_log.extend(copy.deepcopy(trial_state.get("structure_log") or []))
             if _is_better_outcome(trial_outcome, winner_outcome):
                 winner_state = trial_state
                 winner_outcome = trial_outcome
                 same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_near_success")
             else:
                 _restore_artifacts(same_spg_snapshot)
-    return winner_state, winner_outcome, trials
+    return winner_state, winner_outcome, trials, combined_plot_log
 
 
 def _handle_lack_sampling(base_state: dict, winner_state: dict, winner_outcome: dict, args: argparse.Namespace) -> tuple[dict, dict, list[dict]]:
@@ -323,6 +534,46 @@ def _handle_lack_sampling(base_state: dict, winner_state: dict, winner_outcome: 
         return winner_state, winner_outcome, trials
 
     same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_lack_sampling")
+
+    ranked_trials = _ranked_lack_sampling_trials(base_state, args)
+    if ranked_trials:
+        preview = " | ".join(trial["summary"] for trial in ranked_trials[: min(5, len(ranked_trials))])
+        print(
+            f"Lack-sampling focus queue: prioritizing {len(ranked_trials)} spg/cell/Wyckoff setting(s). "
+            f"Top candidates: {preview}"
+        )
+
+    for trial in ranked_trials:
+        print(
+            f"Focused lack-sampling trial '{trial['label']}': cell={trial['cell_index']}, {trial['summary']}"
+        )
+        trial_state, trial_outcome = _run_structure_trial(
+            base_state,
+            trial["label"],
+            spg=int(base_state["spg"]),
+            cells=[trial["cell"]],
+            overrides={
+                "multi_attempts": 1,
+                "forced_wp_solution": trial["candidate"],
+                "max_local_boosts": max(int(base_state.get("max_local_boosts", 0)), int(args.resample_local_boosts)),
+                "max_local_perturbations": max(int(base_state.get("max_local_perturbations", 0)), int(args.resample_local_perturbations)),
+                "perturb_displacement": max(float(base_state.get("perturb_displacement", 0.06)), float(args.resample_perturb_displacement)),
+            },
+        )
+        trials.append(trial_outcome)
+        if _is_better_outcome(trial_outcome, winner_outcome):
+            winner_state = trial_state
+            winner_outcome = trial_outcome
+            same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_lack_sampling")
+        else:
+            _restore_artifacts(same_spg_snapshot)
+
+        if _is_good_sampling_outcome(winner_outcome, args):
+            print(
+                f"Focused lack-sampling search found an accepted low-dE candidate in '{winner_outcome.get('label')}'; "
+                "stopping follow-up search early."
+            )
+            return winner_state, winner_outcome, trials
 
     pooled_state, pooled_outcome = _run_structure_trial(
         base_state,
@@ -344,6 +595,13 @@ def _handle_lack_sampling(base_state: dict, winner_state: dict, winner_outcome: 
     else:
         _restore_artifacts(same_spg_snapshot)
 
+    if _is_good_sampling_outcome(winner_outcome, args):
+        print(
+            f"Resample pool found an accepted low-dE candidate in '{winner_outcome.get('label')}'; "
+            "stopping follow-up search early."
+        )
+        return winner_state, winner_outcome, trials
+
     for idx, cell in enumerate(cells[: max(1, int(args.resample_top_cells))], start=1):
         trial_state, trial_outcome = _run_structure_trial(
             base_state,
@@ -364,6 +622,12 @@ def _handle_lack_sampling(base_state: dict, winner_state: dict, winner_outcome: 
             same_spg_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "winner_lack_sampling")
         else:
             _restore_artifacts(same_spg_snapshot)
+        if _is_good_sampling_outcome(winner_outcome, args):
+            print(
+                f"Cell-specific resampling found an accepted low-dE candidate in '{winner_outcome.get('label')}'; "
+                "stopping follow-up search early."
+            )
+            break
     return winner_state, winner_outcome, trials
 
 
@@ -417,7 +681,7 @@ def _write_report(
     baseline_outcome: dict,
     followup_trials: list[dict],
     final_outcome: dict,
-) -> tuple[Path, Path]:
+) -> Path:
     md_path, json_path = _report_paths(csv_path)
     md_lines = [
         f"# PXRD Agent 2 Report: {_system_stem(csv_path)}",
@@ -466,21 +730,9 @@ def _write_report(
         "",
     ])
     md_path.write_text("\n".join(md_lines), encoding="utf-8")
-    json_path.write_text(
-        json.dumps(
-            {
-                "csv_path": csv_path,
-                "scenario": scenario,
-                "reasons": reasons,
-                "baseline": baseline_outcome,
-                "followup_trials": followup_trials,
-                "final": final_outcome,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    return md_path, json_path
+    if json_path.exists():
+        json_path.unlink()
+    return md_path
 
 
 def run_agent2(csv_path: str, args: argparse.Namespace) -> None:
@@ -489,6 +741,7 @@ def run_agent2(csv_path: str, args: argparse.Namespace) -> None:
     winner_state = run_state
     winner_outcome = None
     followup_trials: list[dict] = []
+    combined_plot_log: list[dict] | None = None
 
     try:
         print("Starting PXRD agent 2 workflow.")
@@ -509,7 +762,7 @@ def run_agent2(csv_path: str, args: argparse.Namespace) -> None:
 
         followup_base_state = copy.deepcopy(run_state)
         if scenario == "near-success":
-            winner_state, winner_outcome, followup_trials = _handle_near_success(
+            winner_state, winner_outcome, followup_trials, combined_plot_log = _handle_near_success(
                 followup_base_state,
                 winner_state,
                 winner_outcome,
@@ -534,7 +787,15 @@ def run_agent2(csv_path: str, args: argparse.Namespace) -> None:
             _print_outcome(f"Follow-up {trial.get('label')}", trial)
         _print_outcome("Final", winner_outcome)
 
-        md_path, json_path = _write_report(
+        if scenario == "near-success" and combined_plot_log:
+            _refresh_energy_plot(
+                winner_outcome.get("formula") or baseline_outcome.get("formula"),
+                winner_outcome.get("spg") or baseline_outcome.get("spg"),
+                combined_plot_log,
+                bool(winner_outcome.get("accepted")),
+            )
+
+        md_path = _write_report(
             csv_path,
             scenario,
             reasons,
@@ -543,7 +804,6 @@ def run_agent2(csv_path: str, args: argparse.Namespace) -> None:
             winner_outcome,
         )
         print(f"Saved agent-2 markdown report to {md_path}")
-        print(f"Saved agent-2 JSON report to {json_path}")
     except KeyboardInterrupt:
         print("Process interrupted by user")
     finally:
@@ -585,6 +845,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Maximum number of random forced WP trials per quick-check cell.",
+    )
+    parser.add_argument(
+        "--quick-check-structure-budget",
+        type=int,
+        default=10,
+        help="Total number of newly generated structures allowed across quick-check follow-up trials.",
     )
     parser.add_argument(
         "--quick-check-local-boosts",

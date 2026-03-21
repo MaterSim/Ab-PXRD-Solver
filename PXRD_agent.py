@@ -761,6 +761,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     max_local_boosts = max(0, int(state.get("max_local_boosts", 1)))
     max_local_perturbations = max(0, int(state.get("max_local_perturbations", 2)))
     perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
+    max_structures_total = state.get("max_structures_total")
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     suppress_local_energy_plot = bool(state.get("suppress_local_energy_plot", False))
@@ -772,6 +773,15 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
 
     title = f'{formula} PXRD Prediction: Space Group {spg}'
     match_cif = f'Results/Match_{formula}_{spg}.cif'
+    stale_result_cifs = [
+        *Path("Results").glob(f"Match_{formula}_{spg}_attempt*.cif"),
+        *Path("Results").glob(f"Match_{formula}_{spg}_attempt*_refined.cif"),
+    ]
+    for stale_path in stale_result_cifs:
+        try:
+            stale_path.unlink()
+        except FileNotFoundError:
+            pass
     attempts = max(1, int(state.get("multi_attempts", 3)))
     seed_base = int(state.get("seed_base", 20260315))
 
@@ -803,12 +813,11 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         return float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
 
     def _meets_acceptance(res: dict) -> bool:
-        hard_accept = bool(res["r2"] > min_r2 or res["chi2"] < max_chi2)
-        soft_accept = bool(
-            res["r2"] >= max(min_r2 - 0.10, 0.85)
-            and res["chi2"] <= max_chi2 * 2.0
-        )
-        return hard_accept or soft_accept
+        r2 = res.get("r2")
+        chi2 = res.get("chi2")
+        if r2 is None or chi2 is None:
+            return False
+        return bool(r2 >= min_r2 and chi2 <= max_chi2)
 
     best_result = None
     best_score = -1e9
@@ -821,7 +830,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         _set_seed(seed)
 
         attempt_png = f"tmp/Match_{formula}_{spg}_attempt{attempt_idx + 1}.png"
-        attempt_cif = f"Results/Match_{formula}_{spg}_attempt{attempt_idx + 1}.cif"
+        attempt_cif = f"tmp/Match_{formula}_{spg}_attempt{attempt_idx + 1}.cif"
         attempt_refinement_png = attempt_cif.replace(".cif", "_refinement.png")
         logger.info(
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
@@ -863,6 +872,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             max_eng_rel_early_stop=max_eng_rel_early_stop,
             min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
+            max_structures_total=max_structures_total,
         )
 
         if wr is None:
@@ -940,8 +950,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         text += "No satisfactory solution found.\n"
         return text
 
-    if os.path.exists(best_result["cif"]):
-        shutil.copy2(best_result["cif"], match_cif)
+    best_result["xtal"].to_file(match_cif)
 
     wr = best_result["wr"]
     r2 = best_result["r2"]

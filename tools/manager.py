@@ -840,7 +840,7 @@ class WPManager:
             sols = sorted(sols, key=lambda x: (x[5], x[4]))
         for sol in sols:
             wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
-            print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
+            # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
     def get_wyckoff_positions(self):
@@ -895,7 +895,7 @@ class WPManager:
         sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))
         for sol in sols:
             wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
-            print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}, Count: {sol[6]}")
+            # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}, Count: {sol[6]}")
         return sols
 
 class XtalManager:
