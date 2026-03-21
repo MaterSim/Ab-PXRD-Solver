@@ -1,1 +1,0 @@
-from pxrd_app.inference import *

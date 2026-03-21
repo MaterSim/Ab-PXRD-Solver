@@ -5,6 +5,8 @@ add_safe_globals([slice])
 
 import signal
 import warnings
+import os
+import multiprocessing as mp
 import numpy as np
 from ase.constraints import FixSymmetry
 from ase.filters import UnitCellFilter
@@ -14,6 +16,99 @@ from ase.atoms import Atoms
 
 _cached_mace = None
 _cached_uma = None
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ase_relax_impl(
+    atoms,
+    calculator="MACE",
+    opt_lat=True,
+    step=300,
+    fmax=0.5,
+    logfile=None,
+    max_time=15.0,
+    label="ase",
+    use_fix_symmetry=True,
+):
+    logger = logging.getLogger()
+    timeout = int(max_time * 60)  # seconds
+
+    import threading
+    is_main_thread = threading.current_thread() == threading.main_thread()
+    timer = None
+
+    if is_main_thread:
+        def handler(signum, frame):
+            raise TimeoutError("Optimization timed out")
+        signal.signal(signal.SIGALRM, handler)
+        signal.alarm(timeout)
+    else:
+        logger.warning("Warning: ASE_relax called from non-main thread; timeout disabled.")
+        timeout_event = threading.Event()
+        timer = threading.Timer(timeout, timeout_event.set)
+        timer.daemon = True
+        timer.start()
+
+    step_init = min([30, int(step / 2)])
+
+    try:
+        atoms.calc = get_calculator(calculator)
+        if use_fix_symmetry:
+            atoms.set_constraint(FixSymmetry(atoms))
+
+        if opt_lat:
+            ecf = UnitCellFilter(atoms)
+            dyn = FIRE(ecf, a=0.1, logfile=logfile) if logfile is not None else FIRE(ecf, a=0.1)
+        else:
+            dyn = FIRE(atoms, a=0.1, logfile=logfile) if logfile is not None else FIRE(atoms, a=0.1)
+
+        with np.errstate(under='ignore'):
+            dyn.run(fmax=fmax, steps=step_init)
+        forces = atoms.get_forces()
+        _fmax = np.sqrt((forces**2).sum(axis=1).max())
+
+        if _fmax < 1e3 and step > step_init:
+            with np.errstate(under='ignore'):
+                dyn.run(fmax=fmax, steps=step - step_init)
+            forces = atoms.get_forces()
+            _fmax = np.sqrt((forces**2).sum(axis=1).max())
+            if _fmax > 100:
+                atoms = None
+        else:
+            atoms = None
+
+    except TimeoutError:
+        logger.warning(f"Warning {label} timed out after {timeout} seconds.")
+        atoms = None
+
+    except TypeError:
+        logger.warning(f"Warning {label} spglib error in getting the lattice")
+        atoms = None
+
+    except FloatingPointError:
+        logger.warning(f"Warning {label} FloatingPointError (underflow) during symmetry-constrained relaxation")
+        atoms = None
+
+    finally:
+        signal.alarm(0)
+        if timer is not None:
+            timer.cancel()
+
+    return atoms
+
+
+def _ase_relax_worker(queue, atoms, kwargs):
+    try:
+        result = _ase_relax_impl(atoms, **kwargs)
+        queue.put(("ok", result))
+    except Exception as exc:
+        queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 def get_calculator(calculator):
     """
@@ -62,6 +157,7 @@ def ASE_relax(
     logfile=None,
     max_time=15.0,
     label="ase",
+    use_fix_symmetry=None,
 ):
     """
     ASE optimizer used by pyxtal/DFS.
@@ -82,24 +178,6 @@ def ASE_relax(
 
 
     logger = logging.getLogger()
-    timeout = int(max_time * 60)  # seconds
-
-    # Start wall-clock timeout
-    import threading
-    is_main_thread = threading.current_thread() == threading.main_thread()
-    timer = None
-
-    if is_main_thread:
-        def handler(signum, frame):
-            raise TimeoutError("Optimization timed out")
-        signal.signal(signal.SIGALRM, handler)
-        signal.alarm(timeout)
-    else:
-        logger.warning(f"Warning: ASE_relax called from non-main thread; timeout disabled.")
-        timeout_event = threading.Event()
-        timer = threading.Timer(timeout, timeout_event.set)
-        timer.daemon = True  # Make timer a daemon thread so it doesn't block exit
-        timer.start()
 
     # Convert to ASE Atoms if needed
     if isinstance(struc, Atoms):
@@ -109,54 +187,60 @@ def ASE_relax(
     else:
         raise TypeError("ASE_relax expects an ASE Atoms or a pyxtal object with .to_ase().")
 
-    step_init = min([30, int(step / 2)])
-    _fmax = 1e5
+    if use_fix_symmetry is None:
+        use_fix_symmetry = _env_flag("PXRD_USE_FIX_SYMMETRY", default=True)
 
-    try:
-        atoms.calc = get_calculator(calculator)#; print("The current Path:", os.getcwd())
-        atoms.set_constraint(FixSymmetry(atoms))
+    isolate_fix_symmetry = _env_flag("PXRD_ISOLATE_FIX_SYMMETRY", default=True)
+    if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
+        context = mp.get_context("spawn")
+        queue = context.Queue(maxsize=1)
+        kwargs = {
+            "calculator": calculator,
+            "opt_lat": opt_lat,
+            "step": step,
+            "fmax": fmax,
+            "logfile": logfile,
+            "max_time": max_time,
+            "label": label,
+            "use_fix_symmetry": use_fix_symmetry,
+        }
+        process = context.Process(target=_ase_relax_worker, args=(queue, atoms, kwargs))
+        process.daemon = True
+        process.start()
+        wait_seconds = max(10, int(max_time * 60) + 20)
+        process.join(timeout=wait_seconds)
 
-        if opt_lat:
-            ecf = UnitCellFilter(atoms)
-            dyn = FIRE(ecf, a=0.1, logfile=logfile) if logfile is not None else FIRE(ecf, a=0.1)
-        else:
-            dyn = FIRE(atoms, a=0.1, logfile=logfile) if logfile is not None else FIRE(atoms, a=0.1)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            logger.warning(f"Warning {label} timed out in isolated relaxation process.")
+            return None
 
-        # First stage (suppress numpy underflow which can occur in spglib symmetrize_rank1)
-        with np.errstate(under='ignore'):
-            dyn.run(fmax=fmax, steps=step_init)
-        forces = atoms.get_forces()
-        _fmax = np.sqrt((forces**2).sum(axis=1).max())
+        if process.exitcode not in (0, None):
+            logger.warning(
+                f"Warning {label} isolated relaxation process crashed (exitcode={process.exitcode}); "
+                "skipping this structure."
+            )
+            return None
 
-        # Second stage (only if not completely insane)
-        if _fmax < 1e3 and step > step_init:
-            with np.errstate(under='ignore'):
-                dyn.run(fmax=fmax, steps=step - step_init)
-            forces = atoms.get_forces()
-            _fmax = np.sqrt((forces**2).sum(axis=1).max())
-            if _fmax > 100:
-                atoms = None
-        else:
-            atoms = None
+        if not queue.empty():
+            status, payload = queue.get()
+            if status == "ok":
+                return payload
+            logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
+            return None
 
-    except TimeoutError:
-        logger.warning(f"Warning {label} timed out after {timeout} seconds.")
-        atoms = None
+        logger.warning(f"Warning {label} isolated relaxation returned no result; skipping structure.")
+        return None
 
-    except TypeError:
-        logger.warning(f"Warning {label} spglib error in getting the lattice")
-        atoms = None
-
-    except FloatingPointError:
-        logger.warning(f"Warning {label} FloatingPointError (underflow) during symmetry-constrained relaxation")
-        atoms = None
-
-    finally:
-        # Always cancel alarm to avoid affecting later code
-        signal.alarm(0)
-
-        # Cancel timer if it was created
-        if timer is not None:
-            timer.cancel()
-
-    return atoms
+    return _ase_relax_impl(
+        atoms,
+        calculator=calculator,
+        opt_lat=opt_lat,
+        step=step,
+        fmax=fmax,
+        logfile=logfile,
+        max_time=max_time,
+        label=label,
+        use_fix_symmetry=use_fix_symmetry,
+    )
