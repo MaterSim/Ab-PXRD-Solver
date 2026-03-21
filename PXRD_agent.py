@@ -143,7 +143,7 @@ def _is_important_runlog_message(message: str) -> bool:
         "Unknown lattice symmetry filter",
         "Selected inferred space group:",
         "Cell solving completed",
-        "Cell solve phase 1",
+        "Phase 1",
         "No inferred SG candidate produced valid cells",
         "No valid unit cells found.",
         "Phase 2:",
@@ -1296,7 +1296,7 @@ def _run_pipeline_fallback(
         all_seed_cells: list = []  # (volume, cell, seed_spg)
         for seed_rank, seed_spg in enumerate(predicted_spgs, start=1):
             _emit_progress(
-                f"Cell solve phase 1 — SG rank {seed_rank}/{len(predicted_spgs)}: collecting cells for spg={seed_spg}"
+                f"Phase 1 — SG rank {seed_rank}/{len(predicted_spgs)}: collecting cells for spg={seed_spg}"
             )
             seed_state = copy.deepcopy(state)
             seed_state["spg"] = seed_spg
@@ -1306,6 +1306,16 @@ def _run_pipeline_fallback(
             if not seed_cells:
                 _emit_progress(f"spg={seed_spg} produced no candidate cells.")
                 continue
+
+            # Show volume range of cells found for this SPG
+            volumes = [float(getattr(cell, "size", 0.0)) for cell in seed_cells]
+            vol_min, vol_max = min(volumes), max(volumes)
+            vol_info = (
+                f"vol={vol_min:.1f}–{vol_max:.1f} Å³"
+                if vol_min != vol_max
+                else f"vol={vol_min:.1f} Å³"
+            )
+            _emit_progress(f"  Found {len(seed_cells)} cell(s) for spg={seed_spg}: {vol_info}")
 
             any_seed_had_cells = True
             for cell in seed_cells:
@@ -1330,12 +1340,14 @@ def _run_pipeline_fallback(
                 grouped_seed_cells.setdefault(sig, []).append(item)
 
             planned_groups = []
+            skipped_pairs = []
             for sig, members in grouped_seed_cells.items():
                 enriched_members = []
                 for _vol, _cell, _spg in members:
                     cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg)
                     if cand_count == 0:
-                        continue  # no valid Wyckoff assignments — skip
+                        skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
+                        continue
                     enriched_members.append(
                         {
                             "vol": float(_vol),
@@ -1347,7 +1359,12 @@ def _run_pipeline_fallback(
                     )
 
                 if not enriched_members:
-                    continue  # all members in this family had no valid Wyckoff assignments
+                    # all members in this family had no valid Wyckoff assignments
+                    _emit_progress(
+                        f"Skipped cell family (sig={sig}) — no valid Wyckoff positions in entire family "
+                        f"({len(members)} member(s))"
+                    )
+                    continue
 
                 enriched_members.sort(
                     key=lambda m: (
@@ -1465,6 +1482,13 @@ def _run_pipeline_fallback(
                     f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_balance_score:<9.3f} {_dims_str}"
                 )
             _emit_progress("")
+
+            # ─ Summary of skipped pairs ─
+            if skipped_pairs:
+                _emit_progress(
+                    f"Skipped {len(skipped_pairs)} individual (cell, SPG) pair(s) due to zero valid Wyckoff "
+                    f"position(s) in the given Z range."
+                )
 
             spg_cell_phase_end_time = time.perf_counter()
             structure_phase_start_time = spg_cell_phase_end_time
@@ -1599,7 +1623,7 @@ def _run_pipeline_fallback(
                                         global_structure_log,
                                         formula_str,
                                         "all",
-                                        f"Results/EnergyR2_{formula_str}_global.png",
+                                        f"Results/EnergyR2_{formula_str}.png",
                                         status="Success",
                                         elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
                                         timing_breakdown_seconds=timing_breakdown,
@@ -1646,7 +1670,7 @@ def _run_pipeline_fallback(
                     global_structure_log,
                     formula_str,
                     "all",
-                    f"Results/EnergyR2_{formula_str}_global.png",
+                    f"Results/EnergyR2_{formula_str}.png",
                     status=global_plot_status,
                     elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
                     timing_breakdown_seconds=timing_breakdown,

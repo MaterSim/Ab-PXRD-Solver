@@ -1745,7 +1745,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             f"skipping remaining trials for this WP set."
                         )
                         break
-                    msg = f"{xtal.get_xtal_string()}, {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+                    cell_volume = getattr(cell, 'size', None)
+                    volume_str = f" vol={cell_volume:.2f}Å³" if cell_volume is not None else ""
+                    msg = f"{xtal.get_xtal_string()}, {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}{volume_str}"
                     log_entry = {
                         "eng": eng,
                         "eng_rel": eng_rel,
@@ -1882,9 +1884,11 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                                               bg_ratio=0.0, mix_ratio=0.0)
                             p_y2 = RawDataManager(p_x2, p_y2, bg_subtract=False).y
                             p_sim = Similarity((x1, y1), (p_x2, p_y2)).value
+                            p_cell_volume = getattr(cell, 'size', None)
+                            p_volume_str = f" vol={p_cell_volume:.2f}Å³" if p_cell_volume is not None else ""
                             p_msg = (
                                 f"{xtal.get_xtal_string()}, {p_sim:.3f}, {p_eng:.3f}, "
-                                f"{p_stress:.3f}, {p_fmax:.3f} [perturb:{perturb_idx + 1}]"
+                                f"{p_stress:.3f}, {p_fmax:.3f}{p_volume_str} [perturb:{perturb_idx + 1}]"
                             )
                             p_log_entry = {
                                 "eng": p_eng,

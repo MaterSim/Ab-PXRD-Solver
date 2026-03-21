@@ -835,12 +835,13 @@ class WPManager:
                         wp_lists.append(tmp)
                         sols.append((self.spg, comp, self.lattice, id, len(tmp), sum(dof)))
                         #print("Added:", self.spg, comp, id)
-            print(f"Z={Z}: Kept {len(sols)} Wyckoff position combinations.")
+            if len(sols) > 0:
+                print(f"Z={Z}: Kept {len(sols)} Wyckoff position combinations.")
             # sort sols by DOF and number of WPs
             sols = sorted(sols, key=lambda x: (x[5], x[4]))
-        for sol in sols:
-            wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
-            # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
+        #for sol in sols:
+        #    wp_labels = [[self.group[w].get_label() for w in wp] for wp in sol[3]]
+        #    # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
     def get_wyckoff_positions(self):

@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect_input_csv_files, run_csv_batch
-from pxrd_app.runtime import print_result_summary
+from pxrd_app.runtime import print_result_summary, write_results_csv
 from PXRD_agent import (
     _attach_system_run_log,
     _detach_system_run_log,
@@ -40,6 +40,7 @@ def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
             success_message="Deterministic pipeline completed successfully!",
             failure_prefix="Deterministic pipeline finished without a solution",
         )
+        write_results_csv(csv_path, run_state, result)
         print("Exiting deterministic main thread")
 
 
