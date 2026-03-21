@@ -6,12 +6,14 @@ add_safe_globals([slice])
 import signal
 import warnings
 import os
+import sys
 import multiprocessing as mp
 import numpy as np
 from ase.constraints import FixSymmetry
 from ase.filters import UnitCellFilter
 from ase.optimize.fire import FIRE
 import logging
+from queue import Empty
 from ase.atoms import Atoms
 
 _cached_mace = None
@@ -23,6 +25,26 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _default_isolate_fix_symmetry() -> bool:
+    """
+    Isolated relaxation is helpful for hard symmetry-related hangs, but on macOS the
+    required `spawn` start method can make every relaxation look stuck because the
+    child process must cold-start PyTorch/MACE for each attempt.
+    """
+    return sys.platform != "darwin"
+
+
+def _strip_atoms_for_ipc(atoms):
+    """Return a light-weight `Atoms` copy that can safely cross process boundaries."""
+    if atoms is None:
+        return None
+
+    clean_atoms = atoms.copy()
+    clean_atoms.calc = None
+    clean_atoms.set_constraint()
+    return clean_atoms
 
 
 def _ase_relax_impl(
@@ -106,9 +128,12 @@ def _ase_relax_impl(
 def _ase_relax_worker(queue, atoms, kwargs):
     try:
         result = _ase_relax_impl(atoms, **kwargs)
-        queue.put(("ok", result))
+        queue.put(("ok", _strip_atoms_for_ipc(result)))
     except Exception as exc:
         queue.put(("error", f"{type(exc).__name__}: {exc}"))
+    finally:
+        queue.close()
+        queue.cancel_join_thread()
 
 def get_calculator(calculator):
     """
@@ -190,7 +215,10 @@ def ASE_relax(
     if use_fix_symmetry is None:
         use_fix_symmetry = _env_flag("PXRD_USE_FIX_SYMMETRY", default=True)
 
-    isolate_fix_symmetry = _env_flag("PXRD_ISOLATE_FIX_SYMMETRY", default=True)
+    isolate_fix_symmetry = _env_flag(
+        "PXRD_ISOLATE_FIX_SYMMETRY",
+        default=_default_isolate_fix_symmetry(),
+    )
     if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
         context = mp.get_context("spawn")
         queue = context.Queue(maxsize=1)
@@ -205,7 +233,6 @@ def ASE_relax(
             "use_fix_symmetry": use_fix_symmetry,
         }
         process = context.Process(target=_ase_relax_worker, args=(queue, atoms, kwargs))
-        process.daemon = True
         process.start()
         wait_seconds = max(10, int(max_time * 60) + 20)
         process.join(timeout=wait_seconds)
@@ -223,12 +250,17 @@ def ASE_relax(
             )
             return None
 
-        if not queue.empty():
-            status, payload = queue.get()
+        try:
+            status, payload = queue.get(timeout=2)
             if status == "ok":
                 return payload
             logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
             return None
+        except Empty:
+            pass
+        finally:
+            queue.close()
+            queue.cancel_join_thread()
 
         logger.warning(f"Warning {label} isolated relaxation returned no result; skipping structure.")
         return None
