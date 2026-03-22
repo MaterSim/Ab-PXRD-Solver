@@ -11,6 +11,9 @@ from pxrd_app.core import (
     logger,
 )
 
+# Test logger output at startup
+logger.info("[LOGGER TEST] PXRD_solve.py logger.info is working. This should appear in both PXRD_solver.log and the console.")
+
 
 def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
     run_state = build_run_state_from_args(default_state, logger, args, csv_path)

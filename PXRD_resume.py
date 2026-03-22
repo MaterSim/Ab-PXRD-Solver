@@ -78,12 +78,18 @@ def _build_resume_log_handler(state: dict) -> logging.Handler:
     state["system_run_log"] = str(log_path)
     banner = (
         f"\n{'=' * 80}\n"
-        f"Resume run started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Run started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"Input: {state.get('pxrd_csv')}\n"
-        f"Source run log: {state.get('source_run_log')}\n"
-        f"{'=' * 80}"
+        f"{'=' * 80}\n"
+        f"Per-system run log: {log_path}\n"
     )
     print(banner)
+    # Write banner to the log file directly
+    try:
+        with open(log_path, "a") as f:
+            f.write(banner)
+    except Exception as exc:
+        print(f"[WARN] Could not write resume banner to log: {exc}")
     print(f"Appending resume output to log: {log_path}")
     return handler
 

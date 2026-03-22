@@ -38,6 +38,10 @@ DEFAULT_STATE = {
     "wavelength": 1.54184,
     "min_r2": 0.95,
     "max_chi2": 0.12,
+    # Structure generation cap
+    "max_structures_total": 10,
+    # Track total number of generated structures
+    "Struc_count": 0,
     "INST_FILE": "tools/INST_XRY.PRM",
     "SCALED_INTENSITY_TOL": 0.01,
     "thetas": [10, 80],

@@ -581,7 +581,7 @@ class CellSolver:
         right = np.searchsorted(exp_sorted, self.thetas + tol, side='right')
         has_obs_match = left < right
         ids_matched = np.where(has_obs_match)[0]
-        
+
         # Compute observability for mismatch accounting.
         observable_sorted = np.zeros(len(exp_sorted), dtype=bool)
         for lo, hi in zip(left, right):
@@ -589,7 +589,7 @@ class CellSolver:
                 observable_sorted[lo:hi] = True
         used_exp_mask = np.zeros(len(exp_thetas), dtype=bool)
         used_exp_mask[sort_ids] = observable_sorted
-        
+
         if len(ids_matched) == self.theta_count:
             # Greedy global assignment of matched peaks.
             matched_exp_ids = []
@@ -604,10 +604,10 @@ class CellSolver:
                     assigned_exp[exp_id] = True
                     matched_exp_ids.append(exp_id)
                     errs.append(float(obs_theta - exp_thetas[exp_id]))
-            
+
             if len(matched_exp_ids) < self.theta_count:
                 return None, f"Rejected cell: {cell_str}, matched {len(matched_exp_ids)}/{self.theta_count} peaks"
-            
+
             # Get the obs. peaks
             matched_peaks = []
             for obs_id, hkl_id in zip(ids_matched, matched_exp_ids):
@@ -1327,29 +1327,29 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
 def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
     """
     Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
-    
+
     Consolidates all candidates from all SPGs and sorts them globally by count (highest first),
     then by DOF, then by other metrics. This avoids redundant structure generation and
     prioritizes real structural precedents across the entire SPG candidate set.
-    
+
     Args:
         cell_dims: Cell dimensions (e.g., [a, b, c, alpha, beta, gamma])
         spg_list: List of space group integers to enumerate
         composition: Dictionary of element -> count
         ref_den: (density_min, density_max) tuple for density filtering
-        
+
     Returns:
         List of consolidated Wyckoff candidates sorted by global priority:
             [(spg, comp, lattice, wp_ids, num_wps, dof, count, Z, original_spg), ...]
         Each tuple includes the original SPG for reference.
     """
     all_candidates = []
-    
+
     for spg in spg_list:
         try:
             wp_manager = WPManager(spg, cell_dims, composition, max_dof=10, ref_den=ref_den)
             local_sols = wp_manager.get_wyckoff_positions()
-            
+
             # Tag each solution with which SPG it came from
             for sol in local_sols:
                 # sol = (spg, comp, lattice, wp_ids, num_wps, dof, count, Z)
@@ -1359,20 +1359,20 @@ def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
         except Exception as e:
             # Skip SPGs that fail enumeration
             continue
-    
+
     if not all_candidates:
         return []
-    
+
     # Sort by count (descending), then by DOF (ascending), then by num_wps, then by Z
     # This prioritizes high-count (real structure) assignments globally
     all_candidates.sort(
         key=lambda x: (-x[6], x[5], -x[4], x[7]),
         reverse=False  # Lower values earlier except for count
     )
-    
+
     # Actually, let's fix the sort: count is highest priority (descending), DOF second (ascending)
     all_candidates.sort(key=lambda x: (-x[6], x[5], -x[4], x[7]))
-    
+
     return all_candidates
 
 
@@ -1415,8 +1415,7 @@ def get_adaptive_wp_limits(total_candidates, max_to_try):
     return limits
 
 
-def should_intensify_regen(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2,
-                           refine_sim_min, refine_eng_window):
+def should_boost(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2, refine_sim_min, refine_eng_window):
     """
     Decide whether a promising candidate justifies extra regeneration trials.
     Gated by max_local_boosts counter.
@@ -1432,8 +1431,7 @@ def should_intensify_regen(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2,
     return (strong_similarity and low_relative_energy) or (near_miss_similarity and near_miss_energy)
 
 
-def should_perturb_candidate(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2,
-                             refine_sim_min, refine_eng_window):
+def should_perturb(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2, refine_sim_min, refine_eng_window):
     """
     Decide whether ANY candidate deserves a perturb-and-relax trial,
     independently of the regen-boost budget.
@@ -1457,8 +1455,7 @@ def is_excellent_refinement(r2, chi2, min_r2, max_chi2):
     return r2 >= max(min_r2 + 0.03, 0.98) or chi2 <= min(max_chi2 * 0.75, 0.08)
 
 
-def should_terminate_on_refined_candidate(r2, chi2, eng_rel, min_r2, max_chi2,
-                                          max_eng_rel_for_termination):
+def should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
     """Allow immediate termination only for excellent fit quality AND near-best energy."""
     if not is_excellent_refinement(r2, chi2, min_r2, max_chi2):
         return False
@@ -1485,37 +1482,9 @@ def _normalize_signature_value(value):
         return str(value)
 
 
-def _cell_signature(cell_obj):
-    return _normalize_signature_value(getattr(cell_obj, "dims", cell_obj))
-
-
-def _wp_signature(spg_sol, wp_ids):
-    return (
-        int(spg_sol),
-        tuple(tuple(str(wp) for wp in group) for group in wp_ids),
-    )
-
-
-def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count, Z, sites):
-    cell_sig = _cell_signature(cell_obj)
-    wp_sig = _wp_signature(spg_sol, wp_ids)
-    return {
-        "spg": int(spg_sol),
-        "cell_dims": list(getattr(cell_obj, "dims", [])),
-        "cell_signature": cell_sig,
-        "wp_signature": wp_sig,
-        "setting_signature": (cell_sig, wp_sig),
-        "wp_labels": [list(group) for group in sites],
-        "wp_ids": [list(group) for group in wp_ids],
-        "num_wps": int(num_wps),
-        "dof": int(dof),
-        "count": None if count is None else int(count),
-        "Z": int(Z),
-    }
-
 def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
-                    match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, max_force,
-                    max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
+                    match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count, 
+                    max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5,
                     max_local_boosts=1, max_local_perturbations=2,
@@ -1539,6 +1508,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         eng_min: Current minimum energy.
         sim_max: Current maximum similarity.
         N1, N2, N3: Limits for loops.
+        struc_count: Number of structures successfully generated so far.
         max_force: Maximum allowed force for relaxed structures.
         max_stress: Maximum allowed stress for relaxed structures.
         wavelength: X-ray wavelength for XRD simulation.
@@ -1553,131 +1523,52 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     Returns:
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
-
+    #print(f"\n{'='*60}, struc_count={struc_count}, energy window for early stop: {max_eng_rel_early_stop}")
     eng_best = eng_min
     best_refined_result = None
-    best_refined_score = -1e9
-    best_refined_result_energy_ok = None
-    best_refined_energy_ok_score = -1e9
-    _slog = structure_log if structure_log is not None else []
     min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
-    structure_budget = None if max_structures_total is None else max(0, int(max_structures_total))
     if max_eng_rel_early_stop is None:
         max_eng_rel_for_termination = max(float(refine_eng_window), 0.30)
     else:
         max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
 
     def _finalize_result(result):
-        if result is None:
-            return None
-        wr, r2, chi2, xtal, _eng_best_at_selection, selected_eng, _selected_eng_rel = result
+        if result is None: return None
+        wr, r2, chi2, xtal, _eng_best_at_sel, selected_eng, _selected_eng_rel, count = result
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
-        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel)
-
-    def _structure_budget_reached() -> bool:
-        return structure_budget is not None and len(_slog) >= structure_budget
-
-    def _return_best_available(local_candidate=None):
-        if local_candidate is not None:
-            logger.info(
-                "Structure generation budget exhausted; returning best accepted candidate "
-                "from the current Wyckoff setting."
-            )
-            return _finalize_result(local_candidate)
-
-        if best_refined_result_energy_ok is not None:
-            logger.info(
-                "Structure generation budget exhausted; returning best refined fallback "
-                "candidate that satisfies the relative-energy criterion."
-            )
-            return _finalize_result(best_refined_result_energy_ok)
-
-        if best_refined_result is not None:
-            logger.info(
-                "Structure generation budget exhausted before any energy-qualified "
-                "accepted candidate was found; returning no solution."
-            )
-            return (None, None, None, None, eng_best, None, None)
-
-        logger.info("Structure generation budget exhausted with no refined candidates.")
-        return (None, None, None, None, eng_best, None, None)
-
-    if structure_budget == 0:
-        logger.info("Structure generation budget is zero; skipping structure search.")
-        return (None, None, None, None, eng_best, None, None)
+        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count)
 
     trial_cells = list(cells[:N1])
-    smallest_cell_volume = min([cell.size for cell in trial_cells], default=None)
-
-    def _get_cell_search_budget(cell_obj):
-        if smallest_cell_volume is None or smallest_cell_volume <= 0:
-            return N2, N3, 1.0, False
-
-        ratio = float(cell_obj.size / smallest_cell_volume)
-        nearest_integer = int(round(ratio))
-        is_likely_supercell = nearest_integer >= 2 and abs(ratio - nearest_integer) <= 0.15
-        if not is_likely_supercell:
-            return N2, N3, ratio, False
-
-        scale = 1.0 / max(1.0, min(float(nearest_integer), 5.0))
-        n2_eff = max(3, int(np.ceil(N2 * scale)))
-        n3_eff = max(6, int(np.ceil(N3 * 0.80)))
-        return n2_eff, n3_eff, ratio, True
+    early_stop = False
 
     for cell in trial_cells:
         logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
-        N2_eff, N3_eff, vol_ratio, is_supercell_like = _get_cell_search_budget(cell)
-        if is_supercell_like:
-            logger.info(
-                f"Supercell-aware budget: volume ratio={vol_ratio:.2f}x vs smallest cell; "
-                f"N2 {N2}->{N2_eff}, N3 {N3}->{N3_eff}."
-            )
         if forced_wp_solution is not None:
             normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
-            ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= N3_eff else []
-            logger.info(
-                f"Using forced Wyckoff candidate for cell {cell.dims}: "
-                f"count={normalized_forced_wp[6]}, dof={normalized_forced_wp[5]}, n_wps={normalized_forced_wp[4]}"
-            )
+            ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= N3 else []
         else:
             wp_manager = WPManager(spg, cell.dims, composition, ref_den=ref_den)
             sols = wp_manager.get_wyckoff_positions()
-            ranked_sols = [sol for sol in sols if sol[5] <= N3_eff]
+            ranked_sols = [sol for sol in sols if sol[5] <= N3]
         if len(ranked_sols) == 0:
-            logger.info(f"No Wyckoff candidates satisfy DOF <= {N3_eff} for cell {cell.dims}.")
+            logger.info(f"No Wyckoff candidates satisfy DOF <= {N3} for cell {cell.dims}.")
             continue
 
         if forced_wp_solution is None:
-            ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol, max_dof=N3_eff), reverse=True)
-        wp_limits = get_adaptive_wp_limits(len(ranked_sols), N2_eff)
-        preview = [
-            f"Z={sol[7]} count={sol[6]} dof={sol[5]} n_wps={sol[4]}"
-            for sol in ranked_sols[:min(3, len(ranked_sols))]
-        ]
-        logger.info(
-            f"Reranked {len(ranked_sols)} Wyckoff candidates for cell {cell.dims}. "
-            f"Top candidates: {' | '.join(preview)}"
-        )
+            ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol, max_dof=N3), reverse=True)
+        wp_limits = get_adaptive_wp_limits(len(ranked_sols), N2)
 
         prev_limit = 0
         for limit in wp_limits:
-            logger.info(
-                f"Adaptive Wyckoff expansion for cell {cell.dims}: trying ranked candidates "
-                f"{prev_limit + 1}-{limit} of {len(ranked_sols)}."
-            )
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
                 xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count, emit_summary=False)
-                log_metadata = _make_structure_log_metadata(
-                    cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
-                )
-                N4 = xm.dof * 3 if xm.dof != 1 else 4
+
+                # If DOF=0, allow 1 trial; if DOF=1, use 4; else use DOF*3
+                N4 = 1 if xm.dof == 0 else (4 if xm.dof == 1 else xm.dof * 3)
                 N_false = 0
                 extra_trials = 0
-                local_boosts = 0
                 local_perturbations = 0
-                local_accepted_result = None
-                local_accepted_score = -1e9
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 # Exit a WP set early if the first warm-up trials all yield very low sim.
@@ -1687,17 +1578,11 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 wpset_low_sim_exit = max(0.35, refine_sim_min - 0.35)
                 combined_cost_val = dof + 1.5 * num_wps
                 logger.info(
-                    f"{cell.chi2:.3f}, Z={Z}, count={count}, dof={dof}, n_wps={num_wps}, "
+                    f"Trying WP: {cell.chi2:.3f}, Z={Z}, count={count}, dof={dof}, n_wps={num_wps}, "
                     f"combined_cost={combined_cost_val:.1f}, sites={xm.sites}, {N4} trials"
                 )
                 trial_idx = 0
                 while trial_idx < (N4 + 1 + extra_trials):
-                    if _structure_budget_reached():
-                        logger.info(
-                            f"Structure generation budget exhausted ({len(_slog)}/{structure_budget}); "
-                            "stopping search."
-                        )
-                        return _return_best_available(local_accepted_result)
                     trial_idx += 1
                     if N_false > max([4, N4 // 2]):
                         logger.info("Too many invalid structures, skip to next WP set.")
@@ -1732,8 +1617,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     y2 = RawDataManager(x2, y2, bg_subtract=False).y
                     sim = Similarity((x1, y1), (x2, y2)).value
                     valid_trials_in_wpset += 1
-                    if sim > best_sim_in_wpset:
-                        best_sim_in_wpset = sim
+                    if sim > best_sim_in_wpset: best_sim_in_wpset = sim
                     # Early exit: if after the warm-up window the WP set has never reached
                     # even a very low sim, it is very unlikely to produce a useful structure.
                     if (valid_trials_in_wpset >= wpset_warmup and
@@ -1745,293 +1629,111 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             f"skipping remaining trials for this WP set."
                         )
                         break
+
+                    struc_count += 1
                     cell_volume = getattr(cell, 'size', None)
                     volume_str = f" vol={cell_volume:.2f}Å³" if cell_volume is not None else ""
-                    msg = f"{xtal.get_xtal_string()}, {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}{volume_str}"
-                    log_entry = {
-                        "eng": eng,
-                        "eng_rel": eng_rel,
-                        "sim": sim,
-                        "r2": 0.0,
-                        "wr": None,
-                        "chi2": None,
-                        "refined": False,
-                        **log_metadata,
-                    }
-                    _slog.append(log_entry)
-                    refined_score = None
+                    msg = f"ID{struc_count: 3d}: {xtal.get_xtal_string()}, {volume_str}" 
 
                     # Composite refinement trigger using two independent, system-agnostic criteria:
                     #   1. sim >= refine_sim_min: structure has meaningful pattern agreement.
                     #   2. eng_rel <= refine_eng_window: energy is within `refine_eng_window`
                     #      eV/atom of the best structure seen so far in this run.
-                    # Both conditions must hold.  The energy criterion is measured relative to
-                    # the running minimum (eng_best), so it adapts automatically to any system.
-                    refine_reason = None
-                    refine_skip_reason = None
-                    if sim >= max(sim_max - refine_margin, 0.0):
-                        refine_reason = f"sim≥threshold({sim:.3f}>={sim_max - refine_margin:.3f})"
-                    elif sim >= refine_sim_min and eng_rel <= refine_eng_window:
-                        refine_reason = (
-                            f"composite(sim={sim:.3f}≥{refine_sim_min:.2f},"
-                            f" eng_rel={eng_rel:.3f}≤{refine_eng_window:.1f}eV/atom)"
-                        )
-                    elif sim >= refine_sim_min:
-                        refine_skip_reason = (
-                            f"Refinement skipped: sim={sim:.3f} is promising but "
-                            f"eng_rel={eng_rel:.3f} exceeds {refine_eng_window:.1f} eV/atom "
-                            f"(current eng_best={eng_best:.3f})."
-                        )
-                    should_refine = refine_reason is not None
-
-                    if should_refine:
-                        logger.info(f"  Refinement triggered: {refine_reason}")
+                    if sim >= max(sim_max - refine_margin, 0.0) or (sim >= refine_sim_min and eng_rel <= refine_eng_window):
                         title0 = title + f' {eng:.3f}/{eng_best:.3f}'
                         plot_XRD(x1, y1, x2, y2, x1[peaks], y1[peaks], title0, match_png)
                         xtal.from_seed(atoms)
                         xtal.to_file(match_cif)
                         wr, r2, chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
-                        if wr is not None and r2 is not None and chi2 is not None:
+
+                        if wr is not None:
+                            _do_perturb = (
+                                (local_perturbations < max_local_perturbations or is_new_best_energy) and
+                                should_perturb(sim, eng_rel, wr, r2, chi2,
+                                    min_r2, max_chi2, refine_sim_min, refine_eng_window,
+                                )
+                            )
+                            if _do_perturb:
+                                remaining_perturbations = max_local_perturbations - local_perturbations
+                                # If triggered by a new-best-energy bypass, always allow at least 1 trial
+                                if remaining_perturbations <= 0 and is_new_best_energy:
+                                    remaining_perturbations = 1
+                                perturb_trials = min(remaining_perturbations, 1 if wr is not None else 2)
+                                for perturb_idx in range(perturb_trials):
+                                    local_perturbations += 1
+                                    displacement = max(0.02, perturb_displacement * (0.67 if wr is not None else 1.0))
+                                    perturbed_atoms = perturb_atoms(atoms, displacement=displacement)
+                                    perturbed_atoms = relax_structure(perturbed_atoms, xm.dof)
+                                    if perturbed_atoms is None: continue
+
+                                    p_eng = perturbed_atoms.get_potential_energy() / len(perturbed_atoms)
+                                    p_stress = abs(perturbed_atoms.get_stress()[:3].mean())
+                                    p_fmax = abs(perturbed_atoms.get_forces()).max()
+                                    if p_stress > max_stress or p_fmax > max_force:
+                                        logger.info(
+                                            f"  Perturbation {perturb_idx + 1}/{perturb_trials} rejected by stress/force "
+                                            f"filters ({p_stress:.3f}, {p_fmax:.3f})."
+                                        )
+                                        continue
+
+                                    prev_eng_best = eng_best
+                                    next_eng_best = min(prev_eng_best, p_eng)
+                                    p_eng_rel = max(0.0, p_eng - next_eng_best)
+                                    p_is_new_best_energy = p_eng < prev_eng_best
+                                    if p_is_new_best_energy: eng_best = p_eng
+
+                                    p_xrd = XRD(perturbed_atoms, wavelength=wavelength, thetas=thetas,
+                                                res=resolution, SCALED_INTENSITY_TOL=SCALED_INTENSITY_TOL)
+                                    p_x2, p_y2 = p_xrd.get_plot_gsas2(U=0.1, V=-0.1, W=0.5, X=0.1, Y=0.1,
+                                                                      bg_ratio=0.0, mix_ratio=0.0)
+                                    p_y2 = RawDataManager(p_x2, p_y2, bg_subtract=False).y
+                                    p_sim = Similarity((x1, y1), (p_x2, p_y2)).value
+                                    if p_sim >= max(sim_max - refine_margin, 0.0) or (p_sim >= refine_sim_min and p_eng_rel <= refine_eng_window):
+                                        xtal.from_seed(perturbed_atoms)
+                                        xtal.to_file(match_cif)
+                                        p_wr, p_r2, p_chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
+                                        if p_wr is not None and p_r2 is not None and p_chi2 is not None:
+                                            if p_r2 > r2 and p_chi2 < chi2:
+                                                wr, r2, chi2 = p_wr, p_r2, p_chi2
+                                                eng, eng_rel, sim = p_eng, p_eng_rel, p_sim
+                                                stress, fmax = p_stress, p_fmax
+                                                is_new_best_energy = p_is_new_best_energy
+                            msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
                             msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
-                            refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
-                            log_entry.update({"r2": r2, "wr": wr, "chi2": chi2, "refined": True})
-                            if refined_score > best_refined_score:
-                                best_refined_score = refined_score
-                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
-                            if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
-                                best_refined_energy_ok_score = refined_score
-                                best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
+                            if is_new_best_energy: msg += ' +++++'
+
+                            print(msg)
+                            logger.info(msg)
                         else:
                             logger.info("  Refinement failed; continuing search without refined metrics.")
                             msg += " [refine-failed]"
                     else:
-                        wr = None
-                        r2 = None
-                        chi2 = None
-                        if refine_skip_reason is not None:
-                            logger.info(f"  {refine_skip_reason}")
-                            msg += f" [skip: eng_rel={eng_rel:.3f}]"
+                        wr, r2, chi2 = None, None, None
 
-                    should_regen_boost = (
-                        local_boosts < max_local_boosts and
-                        should_intensify_regen(
-                            sim, eng_rel, wr, r2, chi2,
-                            min_r2, max_chi2, refine_sim_min, refine_eng_window,
-                        )
-                    )
-                    if should_regen_boost:
-                        added_trials = max(2, min(6, N4 // 2 if N4 > 1 else 2))
-                        extra_trials += added_trials
-                        local_boosts += 1
-                        logger.info(
-                            f"  Promising local minimum for current WP setting; adding "
-                            f"{added_trials} extra regeneration trials (total extra={extra_trials})."
-                        )
-                        msg += f" [boost:+{added_trials}]"
-
-                    _do_perturb = (
-                        (local_perturbations < max_local_perturbations or is_new_best_energy) and
-                        should_perturb_candidate(
-                            sim, eng_rel, wr, r2, chi2,
-                            min_r2, max_chi2, refine_sim_min, refine_eng_window,
-                        )
-                    )
-                    if _do_perturb:
-                        remaining_perturbations = max_local_perturbations - local_perturbations
-                        # If triggered by a new-best-energy bypass, always allow at least 1 trial
-                        if remaining_perturbations <= 0 and is_new_best_energy:
-                            remaining_perturbations = 1
+                    if struc_count >= min_structures_before_early_stop:
+                        if early_stop:
                             logger.info(
-                                "  Perturbation budget exhausted but new-best-energy bypass active; "
-                                "granting 1 extra perturbation trial."
+                                f"Reached max structures total ({max_structures_total}) with early stop enabled; "
+                                f"terminating search."
                             )
-                        perturb_trials = min(remaining_perturbations, 1 if wr is not None else 2)
-                        if perturb_trials > 0:
-                            logger.info(
-                                f"  Running {perturb_trials} local perturbation trial(s) around current structure."
-                            )
-                        for perturb_idx in range(perturb_trials):
-                            local_perturbations += 1
-                            displacement = max(0.02, perturb_displacement * (0.67 if wr is not None else 1.0))
-                            perturbed_atoms = perturb_atoms(atoms, displacement=displacement)
-                            perturbed_atoms = relax_structure(perturbed_atoms, xm.dof)
-                            if perturbed_atoms is None:
-                                logger.info(
-                                    f"  Perturbation {perturb_idx + 1}/{perturb_trials} failed during relaxation."
-                                )
-                                continue
-
-                            p_eng = perturbed_atoms.get_potential_energy() / len(perturbed_atoms)
-                            p_stress = abs(perturbed_atoms.get_stress()[:3].mean())
-                            p_fmax = abs(perturbed_atoms.get_forces()).max()
-                            if p_stress > max_stress or p_fmax > max_force:
-                                logger.info(
-                                    f"  Perturbation {perturb_idx + 1}/{perturb_trials} rejected by stress/force "
-                                    f"filters ({p_stress:.3f}, {p_fmax:.3f})."
-                                )
-                                continue
-
-                            prev_eng_best = eng_best
-                            next_eng_best = min(prev_eng_best, p_eng)
-                            p_eng_rel = max(0.0, p_eng - next_eng_best)
-                            p_is_new_best_energy = p_eng < prev_eng_best
-                            if p_is_new_best_energy:
-                                eng_best = p_eng
-
-                            p_xrd = XRD(perturbed_atoms, wavelength=wavelength, thetas=thetas,
-                                        res=resolution, SCALED_INTENSITY_TOL=SCALED_INTENSITY_TOL)
-                            p_x2, p_y2 = p_xrd.get_plot_gsas2(U=0.1, V=-0.1, W=0.5, X=0.1, Y=0.1,
-                                                              bg_ratio=0.0, mix_ratio=0.0)
-                            p_y2 = RawDataManager(p_x2, p_y2, bg_subtract=False).y
-                            p_sim = Similarity((x1, y1), (p_x2, p_y2)).value
-                            p_cell_volume = getattr(cell, 'size', None)
-                            p_volume_str = f" vol={p_cell_volume:.2f}Å³" if p_cell_volume is not None else ""
-                            p_msg = (
-                                f"{xtal.get_xtal_string()}, {p_sim:.3f}, {p_eng:.3f}, "
-                                f"{p_stress:.3f}, {p_fmax:.3f}{p_volume_str} [perturb:{perturb_idx + 1}]"
-                            )
-                            p_log_entry = {
-                                "eng": p_eng,
-                                "eng_rel": p_eng_rel,
-                                "sim": p_sim,
-                                "r2": 0.0,
-                                "wr": None,
-                                "chi2": None,
-                                "refined": False,
-                                **log_metadata,
-                            }
-                            _slog.append(p_log_entry)
-                            p_refine_reason = None
-                            p_refine_skip_reason = None
-                            p_refined_score = None
-                            if p_sim >= max(sim_max - refine_margin, 0.0):
-                                p_refine_reason = f"sim≥threshold({p_sim:.3f}>={sim_max - refine_margin:.3f})"
-                            elif p_sim >= refine_sim_min and p_eng_rel <= refine_eng_window:
-                                p_refine_reason = (
-                                    f"composite(sim={p_sim:.3f}≥{refine_sim_min:.2f},"
-                                    f" eng_rel={p_eng_rel:.3f}≤{refine_eng_window:.1f}eV/atom)"
-                                )
-                            elif p_sim >= refine_sim_min:
-                                p_refine_skip_reason = (
-                                    f"Perturbed refinement skipped: sim={p_sim:.3f} is promising but "
-                                    f"eng_rel={p_eng_rel:.3f} exceeds {refine_eng_window:.1f} eV/atom "
-                                    f"(current eng_best={eng_best:.3f})."
-                                )
-
-                            if p_refine_reason is not None:
-                                logger.info(f"  Perturbation refinement triggered: {p_refine_reason}")
-                                title0 = title + f' {p_eng:.3f}/{eng_best:.3f}'
-                                plot_XRD(x1, y1, p_x2, p_y2, x1[peaks], y1[peaks], title0, match_png)
-                                xtal.from_seed(perturbed_atoms)
-                                xtal.to_file(match_cif)
-                                p_wr, p_r2, p_chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
-                                if p_wr is not None and p_r2 is not None and p_chi2 is not None:
-                                    p_msg += f" {p_wr:6.3f}, {p_r2:6.3f}, {p_chi2:6.3f}"
-                                    p_refined_score = float((1.5 * p_r2) - (0.4 * p_wr) - (0.2 * p_chi2))
-                                    p_log_entry.update({"r2": p_r2, "wr": p_wr, "chi2": p_chi2, "refined": True})
-                                    if p_refined_score > best_refined_score:
-                                        best_refined_score = p_refined_score
-                                        best_refined_result = (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
-                                    if p_eng_rel <= max_eng_rel_for_termination and p_refined_score > best_refined_energy_ok_score:
-                                        best_refined_energy_ok_score = p_refined_score
-                                        best_refined_result_energy_ok = (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
-                                else:
-                                    logger.info("  Perturbation refinement failed; continuing local search.")
-                                    p_msg += " [refine-failed]"
-                            else:
-                                p_wr = None
-                                p_r2 = None
-                                p_chi2 = None
-                                if p_refine_skip_reason is not None:
-                                    logger.info(f"  {p_refine_skip_reason}")
-                                    p_msg += f" [skip: eng_rel={p_eng_rel:.3f}]"
-
-                            if p_is_new_best_energy:
-                                p_msg += ' +++++'
-
-                            print(p_msg)
-                            logger.info(p_msg)
-
-                            if p_wr is not None and (p_r2 > min_r2 or p_chi2 < max_chi2):
-                                p_energy_ok = p_eng_rel <= max_eng_rel_for_termination
-                                if p_refined_score is not None and p_refined_score > local_accepted_score and p_energy_ok:
-                                    local_accepted_score = p_refined_score
-                                    local_accepted_result = (p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel)
-                                if should_terminate_on_refined_candidate(
-                                    p_r2, p_chi2, p_eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
-                                ):
-                                    if len(_slog) >= min_structures_before_early_stop:
-                                        return _finalize_result((p_wr, p_r2, p_chi2, xtal, eng_best, p_eng, p_eng_rel))
-                                    logger.info(
-                                        f"  Early-stop deferred: explored {len(_slog)} structure(s), "
-                                        f"need >= {min_structures_before_early_stop}."
-                                    )
-                                if not p_energy_ok:
-                                    logger.info(
-                                        f"  Good refined fit found but energy is too high for early stop: "
-                                        f"eng_rel={p_eng_rel:.3f} eV/atom (threshold={max_eng_rel_for_termination:.3f})."
-                                    )
-
-                            if _structure_budget_reached():
-                                logger.info(
-                                    f"Structure generation budget exhausted ({len(_slog)}/{structure_budget}) "
-                                    "after evaluating the latest perturbation."
-                                )
-                                return _return_best_available(local_accepted_result)
-
-                    if is_new_best_energy:
-                        msg += ' +++++'
-
-                    print(msg)
-                    logger.info(msg)
-
+                            return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
+                    
                     if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
-                        energy_ok = eng_rel <= max_eng_rel_for_termination
-                        if refined_score is not None and refined_score > local_accepted_score and energy_ok:
-                            local_accepted_score = refined_score
-                            local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
-                        if should_terminate_on_refined_candidate(
-                            r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination
-                        ):
-                            if len(_slog) >= min_structures_before_early_stop:
-                                return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel))
-                            logger.info(
-                                f"  Early-stop deferred: explored {len(_slog)} structure(s), "
-                                f"need >= {min_structures_before_early_stop}."
-                            )
-                        if not energy_ok:
-                            logger.info(
-                                f"  Good refined fit found but energy is too high for early stop: "
-                                f"eng_rel={eng_rel:.3f} eV/atom (threshold={max_eng_rel_for_termination:.3f})."
-                            )
+                        if should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
+                            early_stop = True
+                            if struc_count >= min_structures_before_early_stop:
+                                return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
 
-                    if _structure_budget_reached():
-                        logger.info(
-                            f"Structure generation budget exhausted ({len(_slog)}/{structure_budget}) "
-                            "after evaluating the latest structure."
-                        )
-                        return _return_best_available(local_accepted_result)
-                if local_accepted_result is not None:
-                    logger.info("Returning best locally intensified accepted candidate for current WP setting.")
-                    return _finalize_result(local_accepted_result)
             prev_limit = limit
-
-    if best_refined_result_energy_ok is not None:
-        logger.info(
-            "No candidate met the acceptance threshold; returning best refined fallback candidate "
-            "that satisfies the relative-energy criterion."
-        )
-        return _finalize_result(best_refined_result_energy_ok)
 
     if best_refined_result is not None:
         logger.info(
             "No candidate met the acceptance threshold, and refined fallback candidates "
             "exceed the relative-energy criterion; returning no solution."
         )
-        return (None, None, None, None, eng_best, None, None)
+        return (None, None, None, None, eng_best, None, None, struc_count)
 
-    return (None, None, None, None, eng_best, None, None)
-
+    return (None, None, None, None, eng_best, None, None, struc_count)
 
 
 if __name__ == "__main__":
