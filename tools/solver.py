@@ -1542,7 +1542,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     early_stop = False
 
     for cell in trial_cells:
-        logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
+        # logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
         if forced_wp_solution is not None:
             normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
             ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= N3 else []
@@ -1576,11 +1576,6 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 # truly hopeless WP combinations are skipped.
                 wpset_warmup = max(4, N4 // 3)
                 wpset_low_sim_exit = max(0.35, refine_sim_min - 0.35)
-                combined_cost_val = dof + 1.5 * num_wps
-                logger.info(
-                    f"Trying WP: {cell.chi2:.3f}, Z={Z}, count={count}, dof={dof}, n_wps={num_wps}, "
-                    f"combined_cost={combined_cost_val:.1f}, sites={xm.sites}, {N4} trials"
-                )
                 trial_idx = 0
                 while trial_idx < (N4 + 1 + extra_trials):
                     trial_idx += 1

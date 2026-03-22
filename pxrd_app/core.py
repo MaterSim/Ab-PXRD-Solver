@@ -661,7 +661,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     all_structure_log: list = []
     struc_count = state.get("Struc_count")
 
-    logger.info(f"Adaptive Wyckoff solve: {attempts} attempt(s), seed_base={seed_base}")
+    #logger.info(f"Adaptive Wyckoff solve: {attempts} attempt(s), seed_base={seed_base}")
     for attempt_idx in range(attempts):
         seed = seed_base + 9973 * attempt_idx
         N1, N2, N3 = _attempt_schedule(attempt_idx)
@@ -1359,7 +1359,7 @@ def _run_pipeline_fallback(
 
                         wp_labels_text = _format_wyckoff_labels_from_ids(spg_val, wp_ids)
                         _emit_progress(
-                            f"  WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
+                            f"WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
                             f"n_wps={num_wps}, wyckoff={wp_labels_text}"
                         )
 
