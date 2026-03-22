@@ -139,7 +139,6 @@ def _is_important_runlog_message(message: str) -> bool:
         "Best inferred-SG score observed:",
         "Best accepted inferred-SG solution details:",
         "Accepted solution details:",
-        "Accepted artifacts:",
         "Good solution found early:",
         "Timing breakdown:",
         "1) SPG + cell inference:",
@@ -204,9 +203,20 @@ def _attach_system_run_log(state: dict) -> logging.Handler | None:
         handler.addFilter(_SystemRunLogFilter())
         logging.root.addHandler(handler)
         state["system_run_log"] = log_path
-        run_banner = f"\n{'=' * 80}\nRun started: {time.strftime('%Y-%m-%d %H:%M:%S')}\nInput: {state.get('pxrd_csv')}\n{'=' * 80}"
+        run_banner = (
+            f"\n{'=' * 80}\n"
+            f"Run started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Input: {state.get('pxrd_csv')}\n"
+            f"{'=' * 80}\n"
+            f"Per-system run log: {log_path}\n"
+        )
         print(run_banner)
-        print(f"Per-system run log: {log_path}")
+        # Write banner to the log file directly
+        try:
+            with open(log_path, "a") as f:
+                f.write(run_banner)
+        except Exception as exc:
+            print(f"[WARN] Could not write run banner to log: {exc}")
         return handler
     except Exception as exc:
         print(f"Warning: failed to create per-system run log ({exc}).")
@@ -586,7 +596,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     max_structures_total = state.get("max_structures_total")
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
-    suppress_local_energy_plot = bool(state.get("suppress_local_energy_plot", False))
+
 
     eng_min, sim_max = 1e10, 0.90
 
@@ -649,6 +659,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     best_result = None
     best_score = -1e9
     all_structure_log: list = []
+    struc_count = state.get("Struc_count")
 
     logger.info(f"Adaptive Wyckoff solve: {attempts} attempt(s), seed_base={seed_base}")
     for attempt_idx in range(attempts):
@@ -659,14 +670,12 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         attempt_prefix = run_tmp_dir / f"Match_{formula}_{spg}_attempt{attempt_idx + 1}"
         attempt_png = str(attempt_prefix.with_suffix(".png"))
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
-        attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
         logger.info(
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
-            f"local_boosts={max_local_boosts}, local_perturbations={max_local_perturbations}, "
-            f"perturb_displacement={perturb_displacement:.3f}"
-        )
+            f"Boosts={max_local_boosts}, Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
+            f"{struc_count} structures")
 
-        wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel = search_solution(
+        wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel, struc_count = search_solution(
             cells[:N1],
             spg,
             composition,
@@ -683,6 +692,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             N1,
             N2,
             N3,
+            struc_count,
             max_force,
             max_stress,
             wavelength,
@@ -703,9 +713,10 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             max_structures_total=max_structures_total,
         )
 
-        if wr is None:
-            logger.info(f"Attempt {attempt_idx + 1}: no refined solution found.")
-            continue
+        # Update struc_count with the number of new structures generated in this attempt
+        state["Struc_count"] = struc_count
+
+        if wr is None: continue
 
         candidate = {
             "wr": float(wr),
@@ -717,7 +728,6 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             "eng_rel": float(selected_eng_rel) if selected_eng_rel is not None else None,
             "attempt": attempt_idx + 1,
             "seed": seed,
-            "png": attempt_refinement_png,
             "cif": attempt_cif,
             "accepted": False,
         }
@@ -737,6 +747,8 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             best_score = score
             best_result = candidate
 
+
+        # Early stop: excellent solution found
         if candidate["accepted"] and len(all_structure_log) >= min_structures_before_early_stop and (
             candidate["r2"] >= max(min_r2 + 0.02, 0.97)
             or candidate["chi2"] <= min(max_chi2 * 0.7, 0.08)
@@ -744,8 +756,13 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             logger.info(f"Early stop: excellent solution found at attempt {attempt_idx + 1}.")
             break
 
+        # Hard cap: exit immediately if max_structures_total is reached
+        if max_structures_total is not None and len(all_structure_log) >= max_structures_total:
+            logger.info(f"Structure cap reached ({len(all_structure_log)}/{max_structures_total}); exiting search loop.")
+            break
+
     local_plot_status = "Success" if (best_result is not None and best_result.get("accepted", False)) else "Failure"
-    if all_structure_log and not suppress_local_energy_plot:
+    if all_structure_log:
         elapsed_stage = time.perf_counter() - stage_start_time
         plot_energy_vs_r2(
             all_structure_log, formula, spg,
@@ -756,12 +773,14 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         )
 
     state["structure_log"] = all_structure_log
+    state["Struc_count"] = struc_count
 
     if best_result is None:
         logger.info("No satisfactory solution found across all attempts.")
         state["wyckoff_result"] = {
             "spg": spg,
             "accepted": False,
+                "Struc_count": struc_count,
             "wr": None,
             "r2": None,
             "chi2": None,
@@ -790,10 +809,11 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     logger.info(
         f"Selected attempt {best_result['attempt']} (seed={best_result['seed']}, score={best_score:.4f})"
     )
-    logger.info(best_result["xtal"])
+    #logger.info(best_result["xtal"])
     best_result["spg"] = spg
     best_result["score"] = best_score
     state["wyckoff_result"] = best_result
+    best_result["Struc_count"] = struc_count
 
     text = f"Wyckoff solving completed for formula {formula} in space group {spg}.\n"
     text += f"Adaptive attempts: {attempts}, seed_base: {seed_base}\n"
@@ -825,6 +845,22 @@ def _run_pipeline_fallback(
 
     def _emit_progress(message: str) -> None:
         print(message)
+        # Also write to the per-system run log if available
+        log_path = None
+        # Try to get the log path from the state if available in the closure
+        try:
+            if 'system_run_log' in state:
+                log_path = state['system_run_log']
+            elif 'source_run_log' in state:
+                log_path = state['source_run_log']
+        except Exception:
+            pass
+        if log_path:
+            try:
+                with open(log_path, "a") as f:
+                    f.write(str(message) + "\n")
+            except Exception as exc:
+                print(f"[WARN] Could not write progress to log: {exc}")
 
     def _format_elapsed(seconds: float) -> str:
         total_seconds = max(0.0, float(seconds))
@@ -876,6 +912,25 @@ def _run_pipeline_fallback(
         cif = result.get("cif")
         png = result.get("png")
 
+        # Deduplication logic: only emit if not already present in global_structure_log
+        global global_structure_log
+        def _structure_signature(res):
+            # Use spg, wr, r2, chi2, selected_energy, and attempt as signature
+            return (
+                res.get("spg"),
+                round(float(res.get("wr", 0)), 4) if res.get("wr") is not None else None,
+                round(float(res.get("r2", 0)), 4) if res.get("r2") is not None else None,
+                round(float(res.get("chi2", 0)), 4) if res.get("chi2") is not None else None,
+                round(float(res.get("selected_energy", 0)), 4) if res.get("selected_energy") is not None else None,
+                res.get("attempt"),
+                tuple(np.round(np.array(res.get("cell", [])), 4)) if res.get("cell") is not None else None,
+            )
+
+        this_sig = _structure_signature(result)
+        existing_sigs = set(_structure_signature(entry) for entry in global_structure_log if isinstance(entry, dict))
+        if this_sig in existing_sigs:
+            return  # Skip duplicate print
+
         wr_text = f"{float(wr):.4f}" if wr is not None else "n/a"
         r2_text = f"{float(r2):.4f}" if r2 is not None else "n/a"
         chi2_text = f"{float(chi2):.4f}" if chi2 is not None else "n/a"
@@ -892,7 +947,7 @@ def _run_pipeline_fallback(
             f"Chi2={chi2_text}, score={score_text}, E={energy_text}, dE={eng_rel_text}, "
             f"attempt={attempt_text}, seed={seed_text}"
         )
-        _emit_progress(f"Accepted artifacts: CIF={cif_text}, PNG={png_text}")
+        _emit_progress(f"CIF={cif_text}, PNG={png_text}")
 
     def _validate_reused_cell_for_spg(cell_obj, spg_value: int, peak_positions: np.ndarray):
         try:
@@ -1060,16 +1115,13 @@ def _run_pipeline_fallback(
         # ── Phase 1: collect all (cell, spg) pairs from every seed SPG ──────────
         all_seed_cells: list = []  # (volume, cell, seed_spg)
         for seed_rank, seed_spg in enumerate(predicted_spgs, start=1):
-            _emit_progress(
-                f"Phase 1 — SG rank {seed_rank}/{len(predicted_spgs)}: collecting cells for spg={seed_spg}"
-            )
             seed_state = copy.deepcopy(state)
             seed_state["spg"] = seed_spg
             _run_cell_solver_stage(seed_state)
             seed_cells = seed_state.get("cells") or []
 
             if not seed_cells:
-                _emit_progress(f"spg={seed_spg} produced no candidate cells.")
+                _emit_progress(f"Phase 1 — rank {seed_rank:2d}/{len(predicted_spgs)}: spg={seed_spg} | No candidate cells found.")
                 continue
 
             # Show volume range of cells found for this SPG
@@ -1080,7 +1132,9 @@ def _run_pipeline_fallback(
                 if vol_min != vol_max
                 else f"vol={vol_min:.1f} Å³"
             )
-            _emit_progress(f"  Found {len(seed_cells)} cell(s) for spg={seed_spg}: {vol_info}")
+            _emit_progress(
+                f"Phase 1 — rank {seed_rank:2d}/{len(predicted_spgs)}: spg={seed_spg} | Found {len(seed_cells)} cell(s): {vol_info}"
+            )
 
             any_seed_had_cells = True
             for cell in seed_cells:
@@ -1124,11 +1178,6 @@ def _run_pipeline_fallback(
                     )
 
                 if not enriched_members:
-                    # all members in this family had no valid Wyckoff assignments
-                    _emit_progress(
-                        f"Skipped cell family (sig={sig}) — no valid Wyckoff positions in entire family "
-                        f"({len(members)} member(s))"
-                    )
                     continue
 
                 enriched_members.sort(
@@ -1262,30 +1311,22 @@ def _run_pipeline_fallback(
             # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
             # only for that SPG to avoid redundant work across identical cell dims.
             for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
-                pair_desc = (
-                    f"[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, "
-                    f"spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}"
-                )
-
                 try:
                     consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg)
                 except Exception as exc:
-                    _emit_progress(f"{pair_desc}: Wyckoff enumeration failed ({exc}). Skipping.")
+                    _emit_progress(f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: Wyckoff enumeration failed ({exc}). Skipping.")
                     continue
 
                 if not consolidated_wp:
-                    _emit_progress(f"{pair_desc}: no Wyckoff candidates found. Skipping.")
+                    _emit_progress(f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: no Wyckoff candidates found. Skipping.")
                     continue
-
-                _emit_progress(pair_desc)
 
                 top_preview = [
                     f"spg={s[0]} count={s[6]} dof={s[5]}"
                     for s in consolidated_wp[:3]
                 ]
                 _emit_progress(
-                    f"  Pair {rank_idx}: {len(consolidated_wp)} WP candidates. "
-                    f"Top: {' | '.join(top_preview)}"
+                    f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: {len(consolidated_wp)} WP candidates. Top: {' | '.join(top_preview)}"
                 )
 
                 wp_limits = get_adaptive_wp_limits(len(consolidated_wp), 20)
@@ -1307,12 +1348,12 @@ def _run_pipeline_fallback(
                             )
                             if not passed:
                                 _emit_progress(
-                                    f"    Pair {rank_idx} rejected for spg={spg_val}: {reject_reason}"
+                                    f"\nPair {rank_idx} rejected for spg={spg_val}: {reject_reason}"
                                 )
                                 continue
                         except Exception as exc:
                             _emit_progress(
-                                f"    Pair {rank_idx} precheck error for spg={spg_val}: {exc}"
+                                f"\nPair {rank_idx} precheck error for spg={spg_val}: {exc}"
                             )
                             continue
 
@@ -1330,6 +1371,8 @@ def _run_pipeline_fallback(
                         trial_state["forced_wp_solution"] = forced_wp_solution
 
                         trial_message = _run_wyckoff_solver_stage(trial_state)
+                        # After running, update the main state's Struc_count by accumulating
+                        state["Struc_count"] = trial_state.get("Struc_count")
                         trial_result = trial_state.get("wyckoff_result") or {}
 
                         # Accumulate structure log across all trials for global plot
@@ -1415,9 +1458,11 @@ def _run_pipeline_fallback(
                                         f"Good refined fit found for spg={spg_val}, but skipping early stop "
                                         f"because global energy comparison is unavailable."
                                     )
+
+                            n_structures = len(global_structure_log)
                             _emit_progress(
                                 f"Accepted solution found for spg={spg_val}; continuing "
-                                f"(early-stop criteria not met or disabled)."
+                                f"(early-stop criteria not met or disabled, {n_structures} structures explored so far)."
                             )
 
                     prev_limit = limit
