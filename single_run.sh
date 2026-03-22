@@ -6,5 +6,5 @@
 #SBATCH --mem=32G
 #SBATCH --time=12:00:00
 
-python PXRD_solve.py --infer-spg --spg-backend smart-cell --input Examples --workers 8 --output Results-s2
-python PXRD_solve.py --infer-spg --spg-backend smart-cell --input Examples --workers 8 --output Results-s3
+python PXRD_solve.py --infer-spg --spg-backend smart-cell --input Examples --workers 8 --output Results
+python PXRD_resume.py --summary Results/summary.csv --examples-dir Examples --output Results

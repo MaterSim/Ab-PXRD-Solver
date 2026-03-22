@@ -8,17 +8,15 @@ import sys
 import time
 from pathlib import Path
 
+from pxrd_app.constants import DEFAULT_STATE as default_state
 from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect_input_csv_files
-from PXRD_agent import (
+from pxrd_app.plot import plot_energy_vs_r2
+from pxrd_app.core import (
     _detach_system_run_log,
     _format_wyckoff_labels_from_ids,
-    _plot_energy_vs_r2,
     _run_data_preprocessor_stage,
     _run_wyckoff_solver_stage,
-    default_state,
     logger,
-)
-from PXRD_agent_2 import (
     _extract_outcome,
     _is_better_outcome,
     _is_good_sampling_outcome,
@@ -61,9 +59,7 @@ def _system_stem(csv_path: str) -> str:
 
 def _resume_report_paths(csv_path: str, results_dir: str) -> tuple[Path, Path]:
     stem = _system_stem(csv_path)
-    return (
-        Path(results_dir) / f"ResumeReport_{stem}.md",
-    )
+    return Path(results_dir) / f"ResumeReport_{stem}.md"
 
 
 def _merged_plot_path(formula: str, results_dir: str) -> Path:
@@ -617,14 +613,10 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace) -
 
 def _write_resume_report(
     csv_path: str,
-    log_path: Path,
-    baseline_outcome: dict,
-    followup_trials: list[dict],
     final_outcome: dict,
-    merged_plot: Path,
     results_dir: str,
 ) -> Path:
-    md_path, json_path = _resume_report_paths(csv_path, results_dir)
+    md_path = _resume_report_paths(csv_path, results_dir)
     # Append new result to summary.csv
     summary_path = Path(results_dir) / "summary.csv"
     # Prepare row data from final_outcome
@@ -658,99 +650,6 @@ def _write_resume_report(
     except Exception as e:
         print(f"[WARN] Could not append to summary.csv: {e}")
     return md_path
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = build_common_parser("Resume PXRD search from a failed run log")
-    parser.add_argument(
-        "--summary-csv",
-        default="",
-        help="Optional path to Results/summary.csv. When set, all failed systems are resumed.",
-    )
-    parser.add_argument(
-        "--examples-dir",
-        default="Examples",
-        help="Directory used to resolve csv_file_name entries from --summary-csv.",
-    )
-    parser.add_argument(
-        "--log-path",
-        default="",
-        help="Optional explicit RunLog path for single-file resume runs.",
-    )
-    parser.add_argument(
-        "--pair-limit",
-        type=int,
-        default=8,
-        help="Maximum number of Phase 2 ranked pairs to consider from the previous run log.",
-    )
-    parser.add_argument(
-        "--candidate-limit",
-        type=int,
-        default=12,
-        help="Maximum number of targeted forced-WP resume trials to execute.",
-    )
-    parser.add_argument(
-        "--include-unseen-per-pair",
-        type=int,
-        default=1,
-        help="Additional untested WP candidates to include per Phase 2 pair.",
-    )
-    parser.add_argument(
-        "--resume-attempts",
-        type=int,
-        default=3,
-        help="Adaptive multi-attempt count for each resume trial.",
-    )
-    parser.add_argument(
-        "--resume-local-boosts",
-        type=int,
-        default=2,
-        help="Maximum local regeneration boosts for each resume trial.",
-    )
-    parser.add_argument(
-        "--resume-local-perturbations",
-        type=int,
-        default=2,
-        help="Maximum local perturb-and-relax trials for each resume trial.",
-    )
-    parser.add_argument(
-        "--resume-perturb-displacement",
-        type=float,
-        default=0.08,
-        help="Perturbation displacement in A for resume trials.",
-    )
-    parser.add_argument(
-        "--success-max-eng-rel",
-        type=float,
-        default=0.20,
-        help="Stop once an accepted candidate has dE below this threshold.",
-    )
-    return parser
-
-
-def main() -> None:
-    parser = _build_parser()
-    args = parser.parse_args()
-
-    if args.summary_csv:
-        csv_paths = _resolve_failure_csvs_from_summary(args.summary_csv, args.examples_dir)
-        if not csv_paths:
-            print(f"No failed systems found in summary CSV: {args.summary_csv}")
-            sys.exit(1)
-    else:
-        try:
-            csv_paths = [str(path) for path in collect_input_csv_files(args.input)]
-        except FileNotFoundError as exc:
-            print(str(exc))
-            sys.exit(1)
-
-    for csv_path in csv_paths:
-        try:
-            run_resume(csv_path, args)
-        except Exception as exc:
-            print(f"Resume failed for {csv_path}: {exc}")
-            raise
-
 
 def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> list:
     failures = []
@@ -809,7 +708,6 @@ def run_resume(csv_path, args):
             f"{len(ranked_trials)} resume trial(s)."
         )
         _emit_resume_strategy(ranked_trials, args)
-        early_terminated = False
         for trial in ranked_trials:
             trial_state, trial_outcome = _run_resume_trial(winner_state, trial, args)
             followup_trials.append(trial_outcome)
@@ -831,26 +729,22 @@ def run_resume(csv_path, args):
                     f"Accepted low-dE result found in {trial_outcome.get('label')}; "
                     "stopping resume search early."
                 )
-                early_terminated = True
                 break
 
         merged_plot = _merged_plot_path(winner_state.get("formula") or _system_stem(csv_path), args.output)
         if combined_plot_log:
-            _plot_energy_vs_r2(
+            plot_energy_vs_r2(
                 combined_plot_log,
                 winner_state.get("formula") or _system_stem(csv_path),
                 "resume",
                 str(merged_plot),
                 status="Success" if bool(winner_outcome.get("accepted")) else "Failure",
             )
+            logger.info(f"Energy–R² plot saved to {merged_plot}")
 
         report_path = _write_resume_report(
             csv_path,
-            source_log,
-            baseline_outcome,
-            followup_trials,
             winner_outcome,
-            merged_plot,
             args.output,
         )
         print(f"Saved resume report to {report_path}")
@@ -858,5 +752,90 @@ def run_resume(csv_path, args):
         _detach_system_run_log(resume_handler)
 
 
+
 if __name__ == "__main__":
-    main()
+    parser = build_common_parser("Resume PXRD search from a failed run log")
+    parser.add_argument(
+        "--summary",
+        default="",
+        help="Optional path to Results/summary.csv. When set, all failed systems are resumed.",
+    )
+    parser.add_argument(
+        "--examples-dir",
+        default="Examples",
+        help="Directory used to resolve csv_file_name entries from --summary.",
+    )
+    parser.add_argument(
+        "--log-path",
+        default="",
+        help="Optional explicit RunLog path for single-file resume runs.",
+    )
+    parser.add_argument(
+        "--pair-limit",
+        type=int,
+        default=8,
+        help="Maximum number of Phase 2 ranked pairs to consider from the previous run log.",
+    )
+    parser.add_argument(
+        "--candidate-limit",
+        type=int,
+        default=12,
+        help="Maximum number of targeted forced-WP resume trials to execute.",
+    )
+    parser.add_argument(
+        "--include-unseen-per-pair",
+        type=int,
+        default=1,
+        help="Additional untested WP candidates to include per Phase 2 pair.",
+    )
+    parser.add_argument(
+        "--resume-attempts",
+        type=int,
+        default=3,
+        help="Adaptive multi-attempt count for each resume trial.",
+    )
+    parser.add_argument(
+        "--resume-local-boosts",
+        type=int,
+        default=2,
+        help="Maximum local regeneration boosts for each resume trial.",
+    )
+    parser.add_argument(
+        "--resume-local-perturbations",
+        type=int,
+        default=2,
+        help="Maximum local perturb-and-relax trials for each resume trial.",
+    )
+    parser.add_argument(
+        "--resume-perturb-displacement",
+        type=float,
+        default=0.08,
+        help="Perturbation displacement in A for resume trials.",
+    )
+    parser.add_argument(
+        "--success-max-eng-rel",
+        type=float,
+        default=0.20,
+        help="Stop once an accepted candidate has dE below this threshold.",
+    )
+
+    args = parser.parse_args()
+    if args.summary:
+        csv_paths = _resolve_failure_csvs_from_summary(args.summary, args.examples_dir)
+        if not csv_paths:
+            print(f"No failed systems found in summary CSV: {args.summary}")
+            sys.exit(1)
+    else:
+        try:
+            csv_paths = [str(path) for path in collect_input_csv_files(args.input)]
+        except FileNotFoundError as exc:
+            print(str(exc))
+            sys.exit(1)
+
+    for csv_path in csv_paths:
+        try:
+            run_resume(csv_path, args)
+        except Exception as exc:
+            print(f"Resume failed for {csv_path}: {exc}")
+            raise
+

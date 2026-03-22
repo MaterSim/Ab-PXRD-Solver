@@ -3,11 +3,11 @@ import sys
 
 from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect_input_csv_files, run_csv_batch
 from pxrd_app.runtime import print_result_summary, write_results_csv
-from PXRD_agent import (
+from pxrd_app.constants import DEFAULT_STATE as default_state
+from pxrd_app.core import (
     _attach_system_run_log,
     _detach_system_run_log,
     _run_pipeline_fallback,
-    default_state,
     logger,
 )
 

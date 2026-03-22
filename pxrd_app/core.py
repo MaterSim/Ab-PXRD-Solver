@@ -1,22 +1,19 @@
-import argparse
 import logging
 import os
-import inspect
 import random
 import re
 import sys
 import time
-import traceback
 import copy
 from pathlib import Path
 from uuid import uuid4
 from functools import lru_cache
-from importlib import import_module
-from importlib.metadata import version as pkg_version, PackageNotFoundError
+import shutil
 import pandas as pd
 import numpy as np
-from pyxtal.symmetry import Group
-from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv_files, resolve_cli_symmetry, run_csv_batch
+
+import argparse
+from pxrd_app.constants import VALID_LATTICE_SYMMETRIES
 from pxrd_app.inference import (
     CRYSTAL_SYSTEM_PRIORITY,
     SPG_INFER_BACKENDS,
@@ -24,41 +21,7 @@ from pxrd_app.inference import (
     infer_spacegroups_from_backend,
     spg_to_crystal_system,
 )
-from pxrd_app.runtime import FAILURE_STATUSES, print_result_summary
-
-STRANDS_RUNTIME_AVAILABLE = False
-
-try:
-    strands_module = import_module("strands")
-    Agent = strands_module.Agent
-    tool = strands_module.tool
-    ToolContext = strands_module.ToolContext
-    GeminiModel = import_module("strands.models.gemini").GeminiModel
-    GraphBuilder = import_module("strands.multiagent.graph").GraphBuilder
-    STRANDS_RUNTIME_AVAILABLE = True
-except Exception:
-    try:
-        # Compatibility path for newer strands-agents releases where top-level
-        # exports are split across submodules.
-        Agent = import_module("strands.agent").Agent
-        tool = import_module("strands.tools").tool
-        ToolContext = import_module("strands.types.tools").ToolContext
-        GeminiModel = import_module("strands.models.gemini").GeminiModel
-        GraphBuilder = import_module("strands.multiagent.graph").GraphBuilder
-        STRANDS_RUNTIME_AVAILABLE = True
-    except Exception:
-        Agent = None
-        GeminiModel = None
-        GraphBuilder = None
-
-        class ToolContext:  # type: ignore[no-redef]
-            invocation_state: dict
-
-        def tool(*args, **kwargs):
-            def decorator(func):
-                return func
-
-            return decorator
+from pxrd_app.plot import plot_energy_vs_r2
 
 from tools.manager import RawDataManager, CellManager
 from tools.solver import (
@@ -69,20 +32,38 @@ from tools.solver import (
 )
 from tools.utils import parse_formula, get_volume_from_density
 from tools.density import predict_density_ensemble
+from pyxtal.symmetry import Group
 
 # Configure logging with both file and console handlers
-file_handler = logging.FileHandler('PXRD_agent.log')
+logger = logging.getLogger("pxrd_agent")
+logger.setLevel(logging.INFO)
+
+file_handler = logging.FileHandler('PXRD_solver.log')
 console_handler = logging.StreamHandler()
 formatter = logging.Formatter("%(message)s")
 file_handler.setFormatter(formatter)
 console_handler.setFormatter(formatter)
 
-logging.root.addHandler(file_handler)
-logging.root.addHandler(console_handler)
-logging.root.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
-logger = logging.getLogger("strands.multiagent")
-logger.setLevel(logging.ERROR)
+
+def _safe_float(value, default=None):
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_int(value, default=None):
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
 
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
@@ -213,36 +194,35 @@ class _SystemRunLogFilter(logging.Filter):
         except Exception:
             return True
 
+def _attach_system_run_log(state: dict) -> logging.Handler | None:
+    try:
+        results_dir = state.get("results_dir", "Results")
+        os.makedirs(results_dir, exist_ok=True)
+        log_path = _get_system_run_log_path(state)
+        handler = logging.FileHandler(log_path, mode="a")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.addFilter(_SystemRunLogFilter())
+        logging.root.addHandler(handler)
+        state["system_run_log"] = log_path
+        run_banner = f"\n{'=' * 80}\nRun started: {time.strftime('%Y-%m-%d %H:%M:%S')}\nInput: {state.get('pxrd_csv')}\n{'=' * 80}"
+        print(run_banner)
+        print(f"Per-system run log: {log_path}")
+        return handler
+    except Exception as exc:
+        print(f"Warning: failed to create per-system run log ({exc}).")
+        return None
 
-#def _attach_system_run_log(state: dict) -> logging.Handler | None:
-#    try:
-#        results_dir = state.get("results_dir", "Results")
-#        os.makedirs(results_dir, exist_ok=True)
-#        log_path = _get_system_run_log_path(state)
-#        handler = logging.FileHandler(log_path, mode="a")
-#        handler.setFormatter(logging.Formatter("%(message)s"))
-#        handler.addFilter(_SystemRunLogFilter())
-#        logging.root.addHandler(handler)
-#        state["system_run_log"] = log_path
-#        run_banner = f"\n{'=' * 80}\nRun started: {time.strftime('%Y-%m-%d %H:%M:%S')}\nInput: {state.get('pxrd_csv')}\n{'=' * 80}"
-#        print(run_banner)
-#        print(f"Per-system run log: {log_path}")
-#        return handler
-#    except Exception as exc:
-#        print(f"Warning: failed to create per-system run log ({exc}).")
-#        return None
-#
-#
-#def _detach_system_run_log(handler: logging.Handler | None) -> None:
-#    if handler is None:
-#        return
-#    try:
-#        logging.root.removeHandler(handler)
-#    finally:
-#        try:
-#            handler.close()
-#        except Exception:
-#            pass
+
+def _detach_system_run_log(handler: logging.Handler | None) -> None:
+    if handler is None:
+        return
+    try:
+        logging.root.removeHandler(handler)
+    finally:
+        try:
+            handler.close()
+        except Exception:
+            pass
 
 
 def _env_int(name: str, default: int, min_value: int | None = None) -> int:
@@ -286,81 +266,8 @@ class StreamToLogger:
 
 
 # Redirect stdout/stderr to logging to capture all output including strands library
-sys.stdout = StreamToLogger(logging.getLogger("stdout"), logging.INFO)
+#sys.stdout = StreamToLogger(logging.getLogger("stdout"), logging.INFO)
 #sys.stderr = StreamToLogger(logging.getLogger("stderr"), logging.WARNING)
-
-
-default_state = {
-    # Raw inputs
-    "pxrd_csv": "Examples/PXRD_PrYMg2_123.csv",
-    "formula": "",
-    "composition": {},
-    # To be filled by Data Agents
-    "x1": [],
-    "y1": [],
-    "peaks": [],
-    "peak_positions": [],
-    # To be filled by Solver Agents
-    "spg": 0,
-    "density_min": 0.0,
-    "density_max": 0.0,
-    "min_volume": 0.0,
-    "min_abc": 2.0,
-    "cells": [],
-    # Constraints and parameters
-    "wavelength": 1.54184,
-    "min_r2": 0.95,
-    "max_chi2": 0.12,
-    "INST_FILE": "tools/INST_XRY.PRM",
-    "SCALED_INTENSITY_TOL": 0.01,
-    "thetas": [10, 80],
-    "resolution": 0.02,
-    "max_force": 0.5,
-    "max_stress": 0.3,
-    "max_cells": 10,
-    "max_cell_volume": None,
-    "cell_solver_max_mismatch": 12,
-    "cell_solver_hkl_max": (2, 5, 6),
-    "cell_solver_max_square": 28,
-    "cell_solver_total_square": 40,
-    "cell_solver_theta_tols": [0.1, 0.15, 0.5],
-    "cell_solver_max_chi2": 0.5,
-    "cell_solver_max_guess": 50000,
-    "multi_attempts": _env_int("PXRD_MULTI_ATTEMPTS", 1, min_value=1),
-    "seed_base": _env_int("PXRD_SEED_BASE", 20260315),
-    "spg_top_k": 25,
-    "spg_infer_backend": "model",
-    "stop_on_first_accepted_inferred_spg": True,
-    "show_spg_predictions": True,
-    "max_local_boosts": _env_int("PXRD_LOCAL_BOOSTS", 1, min_value=0),
-    "max_local_perturbations": _env_int("PXRD_LOCAL_PERTURBS", 2, min_value=0),
-    "perturb_displacement": float(os.getenv("PXRD_PERTURB_DISPLACEMENT", "0.06")),
-    "max_eng_rel_early_stop": 0.20,
-    "max_eng_rel": None,
-    "min_structures_before_early_stop": 10,
-}
-
-
-gemini_model = None
-if STRANDS_RUNTIME_AVAILABLE:
-    gemini_model = GeminiModel(
-        client_args={'api_key': 'AIzaSyA2TT4RqCvrY-RwRNmhT8AnCLwH-IwvdE8'},
-        model_id='gemini-2.5-pro',
-        params={"temperature": 0.7}
-    )
-
-INPUT_PROMPT = "Process the PXRD data from Examples/PXRD_PrYMg2_123.csv"
-
-VALID_LATTICE_SYMMETRIES = {
-    "triclinic",
-    "monoclinic",
-    "orthorhombic",
-    "tetragonal",
-    "trigonal",
-    "hexagonal",
-    "cubic",
-}
-
 
 def _get_cell_solver_kwargs(state: dict) -> dict:
     hkl_max_raw = state.get("cell_solver_hkl_max", (2, 5, 6))
@@ -648,105 +555,6 @@ def _run_cell_solver_stage(state: dict) -> dict:
     }
 
 
-def _plot_energy_vs_r2(
-    structure_log: list,
-    formula: str,
-    spg: int,
-    output_png: str,
-    status: str = "Failure",
-    elapsed_seconds: float | None = None,
-    timing_breakdown_seconds: dict | None = None,
-) -> None:
-    """Scatter plot of energy-per-atom vs R² for every relaxed structure explored.
-    Structures that were never refined receive R²=0.
-    """
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        engs = [e["eng"] for e in structure_log]
-        r2s  = [e["r2"]  for e in structure_log]
-        mask = [e.get("refined", False) for e in structure_log]
-
-        unref = [(e, r) for e, r, m in zip(engs, r2s, mask) if not m]
-        ref   = [(e, r) for e, r, m in zip(engs, r2s, mask) if m]
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        if unref:
-            ue, ur = zip(*unref)
-            ax.scatter(ue, ur, c="steelblue", s=25, alpha=0.5,
-                       label=f"Relaxed only (N={len(ue)})")
-        if ref:
-            re, rr = zip(*ref)
-            ax.scatter(re, rr, c="crimson", marker="*", s=140, alpha=0.7,
-                       label=f"Refined (N={len(re)})")
-
-        if engs:
-            x_min = min(float(e) for e in engs)
-            x_max = max(float(e) for e in engs)
-            if (x_max - x_min) < 0.1:
-                ax.set_xlim(x_min - 0.01, x_max + 0.09)
-
-        ax.set_xlabel("Energy per atom (eV)")
-        ax.set_ylabel("R² score  (0 = not refined)")
-        ax.set_ylim(-0.2, 1.1)
-        if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
-            total_seconds = max(0.0, float(timing_breakdown_seconds.get("total", 0.0)))
-        elif elapsed_seconds is not None:
-            total_seconds = max(0.0, float(elapsed_seconds))
-            total_minutes = int(total_seconds // 60)
-            seconds_remain = total_seconds - (60 * total_minutes)
-            if total_minutes >= 60:
-                hours = total_minutes // 60
-                minutes = total_minutes % 60
-                time_text = f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-            else:
-                time_text = f"{total_minutes}m {seconds_remain:04.1f}s"
-        else:
-            time_text = "n/a"
-        if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
-            total_minutes = int(total_seconds // 60)
-            seconds_remain = total_seconds - (60 * total_minutes)
-            if total_minutes >= 60:
-                hours = total_minutes // 60
-                minutes = total_minutes % 60
-                time_text = f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-            else:
-                time_text = f"{total_minutes}m {seconds_remain:04.1f}s"
-        breakdown_text = None
-        if timing_breakdown_seconds:
-            spg_cell_seconds = max(0.0, float(timing_breakdown_seconds.get("spg_and_cell", 0.0)))
-            structure_seconds = max(0.0, float(timing_breakdown_seconds.get("structure_inference", 0.0)))
-
-            def _fmt_breakdown(seconds: float) -> str:
-                total_minutes = int(seconds // 60)
-                seconds_remain = seconds - (60 * total_minutes)
-                if total_minutes >= 60:
-                    hours = total_minutes // 60
-                    minutes = total_minutes % 60
-                    return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-                return f"{total_minutes}m {seconds_remain:04.1f}s"
-
-            breakdown_text = (
-                f"SPG+Cell: {_fmt_breakdown(spg_cell_seconds)} | "
-                f"Structure: {_fmt_breakdown(structure_seconds)}"
-            )
-        ax.set_title(
-            f"{formula}  SPG {spg} — Energy vs R²  ({len(structure_log)} structures)  "
-            f"[{status}]  [Time: {time_text}]"
-            + (f"\n[{breakdown_text}]" if breakdown_text else "")
-        )
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(output_png, dpi=150)
-        plt.close(fig)
-        logger.info(f"Energy–R² plot saved to {output_png}")
-    except Exception as exc:
-        logger.warning(f"Failed to generate Energy–R² plot: {exc}")
-
-
 def _run_wyckoff_solver_stage(state: dict) -> str:
     stage_start_time = time.perf_counter()
     spg = state.get("spg")
@@ -939,7 +747,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     local_plot_status = "Success" if (best_result is not None and best_result.get("accepted", False)) else "Failure"
     if all_structure_log and not suppress_local_energy_plot:
         elapsed_stage = time.perf_counter() - stage_start_time
-        _plot_energy_vs_r2(
+        plot_energy_vs_r2(
             all_structure_log, formula, spg,
             f"{results_dir}/EnergyR2_{formula}_{spg}.png",
             status=local_plot_status,
@@ -998,69 +806,6 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         text += f"Best refinement plot saved to {best_result['png']}\n"
     text += f"Best structure saved to {match_cif}\n"
     return text
-
-
-def _is_strands_gemini_stream_bug(error: BaseException) -> bool:
-    error_text = f"{error}\n{traceback.format_exc()}"
-    return (
-        "strands/models/gemini.py" in error_text
-        and "candidate" in error_text
-        and "UnboundLocalError" in error_text
-    )
-
-
-def _get_strands_version() -> str:
-    try:
-        return pkg_version("strands")
-    except PackageNotFoundError:
-        return "unknown"
-
-
-def _has_known_gemini_stream_candidate_bug() -> bool:
-    if GeminiModel is None:
-        return False
-    try:
-        src = inspect.getsource(GeminiModel.stream)
-    except Exception:
-        return False
-    vulnerable_finish_reason_line = "candidate.finish_reason if candidate else \"STOP\""
-    has_guard_initialization = "candidate = None" in src
-    return vulnerable_finish_reason_line in src and not has_guard_initialization
-
-
-def _startup_runtime_mode() -> tuple[bool, str]:
-    strands_version = _get_strands_version()
-    if not STRANDS_RUNTIME_AVAILABLE:
-        logger.info("Runtime mode: fallback (Strands runtime unavailable)")
-        return True, strands_version
-
-    force_fallback_raw = os.getenv("STRANDS_FORCE_FALLBACK", "0")
-    allow_graph_raw = os.getenv("STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG", "0")
-    env_force_fallback = force_fallback_raw == "1"
-    env_allow_graph = allow_graph_raw == "1"
-    has_known_bug = _has_known_gemini_stream_candidate_bug()
-
-    if has_known_bug:
-        logger.warning(
-            "Detected known Strands Gemini streaming candidate bug in installed package "
-            f"(strands=={strands_version}). "
-            "Graph execution may crash; fallback mode is recommended."
-        )
-
-    use_fallback = env_force_fallback or (has_known_bug and not env_allow_graph)
-    mode = "fallback" if use_fallback else "graph"
-    print(
-        "Startup flags: "
-        f"STRANDS_FORCE_FALLBACK={force_fallback_raw}, "
-        f"STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG={allow_graph_raw}"
-    )
-    logger.info(
-        f"Runtime mode: {mode} (strands=={strands_version}, "
-        f"known_gemini_stream_bug={has_known_bug}, "
-        f"STRANDS_FORCE_FALLBACK={env_force_fallback}, "
-        f"STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG={env_allow_graph})"
-    )
-    return use_fallback, strands_version
 
 
 def _run_pipeline_fallback(
@@ -1641,7 +1386,7 @@ def _run_pipeline_fallback(
                                     timing_breakdown = _current_timing_breakdown_seconds()
                                     state["timing_breakdown_seconds"] = timing_breakdown
                                     formula_str = state.get("formula", "unknown")
-                                    _plot_energy_vs_r2(
+                                    plot_energy_vs_r2(
                                         global_structure_log,
                                         formula_str,
                                         "all",
@@ -1688,7 +1433,7 @@ def _run_pipeline_fallback(
                 state["timing_breakdown_seconds"] = timing_breakdown
                 formula_str = state.get("formula", "unknown")
                 global_plot_status = "Success" if (best_trial_state and (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)) else "Failure"
-                _plot_energy_vs_r2(
+                plot_energy_vs_r2(
                     global_structure_log,
                     formula_str,
                     "all",
@@ -1756,266 +1501,219 @@ def _run_pipeline_fallback(
     }
 
 
-def _run_pipeline_graph_consistent(state: dict) -> dict:
-    return _run_pipeline_fallback(
-        state,
-        announce_bug_switch=False,
-        status_label="graph_success",
+
+def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
+    wyckoff_result = state.get("wyckoff_result") or {}
+    structure_log = state.get("structure_log") or []
+    refined_entries = [entry for entry in structure_log if entry.get("refined")]
+    best_refined_r2 = max((_safe_float(entry.get("r2"), -1.0) for entry in refined_entries), default=None)
+    best_refined_chi2 = min((_safe_float(entry.get("chi2"), 1e9) for entry in refined_entries), default=None)
+    min_energy = min((_safe_float(entry.get("eng"), 1e9) for entry in structure_log), default=None)
+    selected_energy = _safe_float(wyckoff_result.get("selected_energy"))
+    eng_rel = _safe_float(wyckoff_result.get("eng_rel"))
+    if eng_rel is None and selected_energy is not None and min_energy is not None:
+        eng_rel = max(0.0, selected_energy - min_energy)
+
+    return {
+        "label": label,
+        "status": (result or {}).get("status", "unknown"),
+        "message": (result or {}).get("message", ""),
+        "spg": state.get("spg"),
+        "formula": state.get("formula"),
+        "accepted": bool(wyckoff_result.get("accepted", False)),
+        "wr": _safe_float(wyckoff_result.get("wr")),
+        "r2": _safe_float(wyckoff_result.get("r2")),
+        "chi2": _safe_float(wyckoff_result.get("chi2")),
+        "score": _safe_float(wyckoff_result.get("score")),
+        "selected_energy": selected_energy,
+        "eng_rel": eng_rel,
+        "attempt": _safe_int(wyckoff_result.get("attempt")),
+        "seed": _safe_int(wyckoff_result.get("seed")),
+        "cell_count": len(state.get("cells") or []),
+        "structure_count": len(structure_log),
+        "refined_count": len(refined_entries),
+        "best_refined_r2": best_refined_r2,
+        "best_refined_chi2": best_refined_chi2,
+        "min_energy": min_energy,
+        "log_path": state.get("system_run_log"),
+    }
+
+def _outcome_rank_key(outcome: dict) -> tuple:
+    accepted = 1 if outcome.get("accepted") else 0
+    score = _safe_float(outcome.get("score"), -1e9)
+    r2 = _safe_float(outcome.get("r2"), -1.0)
+    chi2 = _safe_float(outcome.get("chi2"), 1e9)
+    eng_rel = _safe_float(outcome.get("eng_rel"), 1e9)
+    structure_count = _safe_int(outcome.get("structure_count"), 0)
+    cell_count = _safe_int(outcome.get("cell_count"), 0)
+    return (accepted, score, r2, -chi2, -eng_rel, structure_count, cell_count)
+
+
+def _is_better_outcome(candidate: dict, incumbent: dict) -> bool:
+    return _outcome_rank_key(candidate) > _outcome_rank_key(incumbent)
+
+def _is_good_sampling_outcome(outcome: dict, args: argparse.Namespace) -> bool:
+    if not outcome.get("accepted"):
+        return False
+    eng_rel = _safe_float(outcome.get("eng_rel"), None)
+    if eng_rel is None:
+        return True
+    return eng_rel <= float(args.success_max_eng_rel)
+
+
+def _artifact_paths(formula: str | None, spg: int | None) -> list[Path]:
+    if not formula or not spg:
+        return []
+    return [
+        Path("Results") / f"Match_{formula}_{spg}.cif",
+        Path("Results") / f"EnergyR2_{formula}_{spg}.png",
+    ]
+
+
+def _restore_artifacts(snapshot: dict[str, str]) -> None:
+    for target, source in snapshot.items():
+        source_path = Path(source)
+        if not source_path.exists():
+            continue
+        target_path = Path(target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+
+def _outcome_rank_key(outcome: dict) -> tuple:
+    accepted = 1 if outcome.get("accepted") else 0
+    score = _safe_float(outcome.get("score"), -1e9)
+    r2 = _safe_float(outcome.get("r2"), -1.0)
+    chi2 = _safe_float(outcome.get("chi2"), 1e9)
+    eng_rel = _safe_float(outcome.get("eng_rel"), 1e9)
+    structure_count = _safe_int(outcome.get("structure_count"), 0)
+    cell_count = _safe_int(outcome.get("cell_count"), 0)
+    return (accepted, score, r2, -chi2, -eng_rel, structure_count, cell_count)
+
+def _normalize_wp_candidate(candidate):
+    return candidate[:8] if len(candidate) >= 9 else candidate
+
+def _normalize_signature(value):
+    if isinstance(value, list):
+        return tuple(_normalize_signature(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_normalize_signature(item) for item in value)
+    return value
+
+def _prepare_trial_state(base_state: dict, *, spg: int | None = None, cells=None, overrides: dict | None = None) -> dict:
+    trial_state = copy.deepcopy(base_state)
+    if spg is not None:
+        trial_state["spg"] = int(spg)
+    if cells is not None:
+        trial_state["cells"] = copy.deepcopy(cells)
+    if overrides:
+        trial_state.update(overrides)
+    return trial_state
+
+
+def _cell_signature(cell) -> tuple:
+    dims = getattr(cell, "dims", cell)
+    return tuple(round(float(item), 6) for item in dims)
+
+
+def _candidate_wp_signature(candidate) -> tuple:
+    normalized = _normalize_wp_candidate(candidate)
+    return (
+        int(normalized[0]),
+        tuple(tuple(str(wp) for wp in group) for group in normalized[3]),
     )
 
-@tool(context=True)
-def WyckoffSolverTool(tool_context: ToolContext) -> str:
-    return _run_wyckoff_solver_stage(tool_context.invocation_state)
 
-@tool(context=True)
-def CellSolverTool(tool_context: ToolContext) -> dict:
-    return _run_cell_solver_stage(tool_context.invocation_state)
+def _observed_setting_stats(structure_log: list[dict]) -> tuple[dict, dict]:
+    setting_stats: dict = {}
+    wp_stats: dict = {}
 
-@tool(context=True)
-def DataPreprocessor(pxrd_csv: str, tool_context: ToolContext) -> dict:
-    return _run_data_preprocessor_stage(pxrd_csv, tool_context.invocation_state)
-
-if STRANDS_RUNTIME_AVAILABLE:
-    DataPreprocessAgent = Agent(
-        model=gemini_model,
-        tools=[DataPreprocessor],
-        system_prompt=(
-            "You are a PXRD (Powder X-Ray Diffraction) data analysis specialist.\n\n"
-            "Your primary task is to preprocess experimental PXRD data for crystal structure determination.\n\n"
-            "When given a PXRD CSV file path, you should:\n"
-            "1. Extract the chemical formula and space group from the filename\n"
-            "2. Load and process the diffraction pattern data\n"
-            "3. Identify characteristic peaks using scipy algorithms\n"
-            "4. Predict material density using ensemble ML models\n"
-            "5. Calculate minimum volume constraints for unit cell indexing\n\n"
-            "Always use the tool named exactly 'DataPreprocessor' to perform these tasks.\n"
-            "Do not call method-style names such as 'DataPreprocessor.run'.\n"
-            "Report any issues with data quality or processing errors immediately.\n"
-            "The return format should include status, messages, and all relevant computed parameters."
+    def _update(stats: dict, key, entry: dict) -> None:
+        current = stats.setdefault(
+            key,
+            {
+                "seen": 0,
+                "refined": 0,
+                "best_r2": -1.0,
+                "best_sim": -1.0,
+                "best_eng": float("inf"),
+                "best_chi2": float("inf"),
+            },
         )
-    )
+        current["seen"] += 1
+        sim = _safe_float(entry.get("sim"), -1.0)
+        eng = _safe_float(entry.get("eng"), float("inf"))
+        r2 = _safe_float(entry.get("r2"), -1.0)
+        chi2 = _safe_float(entry.get("chi2"), float("inf"))
+        current["best_sim"] = max(current["best_sim"], sim)
+        current["best_eng"] = min(current["best_eng"], eng)
+        current["best_r2"] = max(current["best_r2"], r2)
+        current["best_chi2"] = min(current["best_chi2"], chi2)
+        if entry.get("refined"):
+            current["refined"] += 1
 
-    CellManagerAgent = Agent(
-        model=gemini_model,
-        tools=[CellSolverTool],
-        system_prompt=(
-            "You are a PXRD unit cell solver specialist.\n\n"
-            "Your primary task is to determine unit cell parameters from the given PXRD peak data.\n\n"
-            "For the given peak positions, chemical composition, space group, and constraints, you should:\n"
-            "1. Use indexing algorithms to find candidate unit cells that fit the peak data\n"
-            "2. Apply constraints based on composition and predicted density to filter solutions\n"
-            "3. Rank candidate cells based on fit quality and physical plausibility\n\n"
-            "Always use the tool named exactly 'CellSolverTool' to perform these tasks.\n"
-            "Do not call method-style names such as 'CellSolverTool.run'.\n"
-            "Report any issues with indexing or solution quality immediately.\n"
-            "The return format should include status, messages, and all relevant computed unit cell parameters."
-        )
-    )
-
-    WyckoffSolverAgent = Agent(
-        model=gemini_model,
-        tools=[WyckoffSolverTool],
-        system_prompt=(
-            "You are a specialist in crystal structure generation and optimization.\n\n"
-            "Your primary task is to generate candidate crystal structures from indexed unit cells "
-            "and optimize them to match experimental PXRD data.\n\n"
-
-            "**Your Workflow:**\n"
-            "1. **Wyckoff Position Assignment**\n"
-            "   - For each candidate unit cell, enumerate possible Wyckoff position combinations\n"
-            "   - Consider space group symmetry constraints\n"
-            "   - Filter based on composition and density constraints\n\n"
-
-            "2. **Structure Generation**\n"
-            "   - Generate initial atomic positions using symmetry operations\n"
-            "   - Validate structural geometry and atomic overlaps\n"
-            "   - Generate multiple random configurations per Wyckoff assignment\n\n"
-
-            "3. **Geometry Optimization**\n"
-            "   - Relax atomic positions using ASE with MACE force field\n"
-            "   - Track energy minimization to identify stable configurations\n\n"
-            "   - Apply stress constraints (max stress < 0.5 GPa initially)\n"
-
-            "4. **XRD Pattern Matching**\n"
-            "   - Calculate theoretical XRD patterns for optimized structures\n"
-            "   - Compare with experimental data using similarity metrics\n"
-            "   - Track best matches (similarity > 0.90)\n\n"
-
-            "5. **Rietveld Refinement**\n"
-            "   - Perform full-pattern refinement using GSAS-II for promising candidates\n"
-            "   - Calculate fit metrics: Rwp, R², χ²\n"
-            "   - Accept solutions with R² > 0.95 or χ² < 0.12\n\n"
-
-            "**Search Strategy:**\n"
-            "- Test top 5 unit cells (ranked by missing peaks)\n"
-            "- Evaluate up to 20 Wyckoff position combinations per cell\n"
-            "- Generate 3×DOF + 1 random structures per combination (max DOF=9)\n"
-            "- Stop immediately when R² > 0.95 or χ² < 0.12 is achieved\n\n"
-
-            "**Quality Criteria:**\n"
-            "- Structural validity (no atomic overlaps)\n"
-            "- Converged geometry (stress < 0.5 GPa)\n"
-            "- Low potential energy per atom\n"
-            "- High XRD pattern similarity (> 0.90)\n"
-            "- Excellent Rietveld fit (R² > 0.95 or χ² < 0.12)\n\n"
-
-            "**Expected Input (from previous agents):**\n"
-            "- Space group number\n"
-            "- Chemical formula and composition\n"
-            "- List of indexed unit cells with dimensions\n"
-            "- Experimental PXRD data (x1, y1, peaks)\n"
-            "- Density constraints (min, max)\n"
-            "- X-ray wavelength\n\n"
-
-            "**Output Format:**\n"
-            "Report the following:\n"
-            "1. Number of cells tested\n"
-            "2. Total structures generated and optimized\n"
-            "3. Best similarity score and energy achieved\n"
-            "4. Final Rietveld refinement metrics (Rwp, R², χ²)\n"
-            "5. Whether a satisfactory solution was found (R² > 0.95)\n"
-            "6. Paths to saved structure file (.cif) and XRD comparison plot (.png)\n\n"
-
-            "Always use the tool named exactly 'WyckoffSolverTool' to perform these computationally intensive tasks.\n"
-            "Do not call method-style names such as 'WyckoffSolverTool.run'.\n"
-            "This tool may take several minutes to hours depending on complexity.\n"
-            "Report progress updates and immediately notify when a satisfactory solution is found.\n"
-            "If no solution meets the R² threshold after exhausting the search space, "
-            "recommend adjustments to constraints or suggest alternative space groups."
-        )
-    )
-
-    builder = GraphBuilder()
-    builder.add_node(DataPreprocessAgent, "DataPreprocessorAgent")
-    builder.add_node(CellManagerAgent, "CellSolverAgent")
-    builder.add_node(WyckoffSolverAgent, "WyckoffSolverAgent")
-    builder.add_edge("DataPreprocessorAgent", "CellSolverAgent")
-    builder.add_edge("CellSolverAgent", "WyckoffSolverAgent")
-    builder.set_entry_point("DataPreprocessorAgent")
-    graph = builder.build()
-else:
-    DataPreprocessAgent = None
-    CellManagerAgent = None
-    WyckoffSolverAgent = None
-    graph = None
-
-def main(
-    state: dict | None = None,
-    input_prompt: str | None = None,
-    pxrd_csv: str | None = None,
-    formula: str | None = None,
-    multi_attempts: int | None = None,
-    seed_base: int | None = None,
-    infer_spg_from_pxrd: bool | None = None,
-    try_all_inferred_spg: bool | None = None,
-    spg_top_k: int | None = None,
-    spg_infer_backend: str | None = None,
-    show_spg_predictions: bool | None = None,
-    lattice_symmetry: str | None = None,
-    max_local_boosts: int | None = None,
-    max_local_perturbations: int | None = None,
-    perturb_displacement: float | None = None,
-    max_eng_rel: float | None = None,
-    max_cell_volume: float | None = None,
-) -> None:
-    run_state = build_run_state(
-        default_state,
-        logger,
-        state=state,
-        pxrd_csv=pxrd_csv,
-        formula=formula,
-        multi_attempts=multi_attempts,
-        seed_base=seed_base,
-        infer_spg_from_pxrd=infer_spg_from_pxrd,
-        try_all_inferred_spg=try_all_inferred_spg,
-        spg_top_k=spg_top_k,
-        spg_infer_backend=spg_infer_backend,
-        show_spg_predictions=show_spg_predictions,
-        lattice_symmetry=lattice_symmetry,
-        max_local_boosts=max_local_boosts,
-        max_local_perturbations=max_local_perturbations,
-        perturb_displacement=perturb_displacement,
-        max_eng_rel=max_eng_rel,
-        max_cell_volume=max_cell_volume,
-    )
-    run_prompt = INPUT_PROMPT if input_prompt is None else input_prompt
-    force_fallback, _ = _startup_runtime_mode()
-    system_log_handler = _attach_system_run_log(run_state)
-    result = None
-
-    try:
-        if force_fallback:
-            print("Starting pipeline in fallback mode.")
-            result = _run_pipeline_fallback(run_state)
-        else:
-            if bool(run_state.get("infer_spg_from_pxrd", False)):
-                print("Starting pipeline in graph-consistent deterministic mode.")
-                result = _run_pipeline_graph_consistent(run_state)
-            else:
-                result = graph(run_prompt,
-                               invocation_state=run_state)
-    except KeyboardInterrupt:
-        print("Process interrupted by user")
-        print("Exiting main thread")
-        return
-    except Exception as exc:
-        if _is_strands_gemini_stream_bug(exc):
-            print("Strands Gemini streaming error detected; retrying with fallback execution.")
-            result = _run_pipeline_fallback(run_state)
-        else:
-            raise
-    finally:
-        system_log_path = run_state.get("system_run_log")
-        if system_log_path:
-            print(f"Saved consolidated run log to {system_log_path}")
-        _detach_system_run_log(system_log_handler)
-
-    print_result_summary(
-        logger,
-        run_state,
-        result,
-        success_message="Pipeline completed successfully!",
-        failure_prefix="Pipeline finished without a solution",
-    )
-    print("Exiting main thread")
+    for entry in structure_log or []:
+        setting_key = _normalize_signature(entry.get("setting_signature"))
+        wp_key = _normalize_signature(entry.get("wp_signature"))
+        if setting_key is not None:
+            _update(setting_stats, setting_key, entry)
+        if wp_key is not None:
+            _update(wp_stats, wp_key, entry)
+    return setting_stats, wp_stats
 
 
-def run_agent_csv(csv_path: str, args: argparse.Namespace) -> None:
-    symmetry = resolve_cli_symmetry(args)
-    shared_kwargs = dict(
-        formula=args.input_formula,
-        multi_attempts=args.multi_attempts,
-        seed_base=args.seed_base,
-        infer_spg_from_pxrd=args.infer_spg,
-        try_all_inferred_spg=args.try_all_inferred_spg,
-        spg_top_k=args.spg_top_k,
-        spg_infer_backend=args.spg_infer_backend,
-        lattice_symmetry=symmetry,
-        max_local_boosts=args.local_boosts,
-        max_local_perturbations=args.local_perturbations,
-        perturb_displacement=args.perturb_displacement,
-        max_eng_rel=args.max_eng_rel,
-        max_cell_volume=args.max_cell_volume,
-        show_spg_predictions=True,
-    )
-    main(
-        pxrd_csv=csv_path,
-        input_prompt=f"Process the PXRD data from {csv_path}",
-        **shared_kwargs,
+def _artifact_paths(formula: str | None, spg: int | None) -> list[Path]:
+    if not formula or not spg:
+        return []
+    return [
+        Path("Results") / f"Match_{formula}_{spg}.cif",
+        Path("Results") / f"EnergyR2_{formula}_{spg}.png",
+    ]
+
+
+def _snapshot_artifacts(formula: str | None, spg: int | None, label: str) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    if not formula or not spg:
+        return snapshot
+    snapshot_dir = Path("tmp") / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    for artifact in _artifact_paths(formula, spg):
+        if not artifact.exists():
+            continue
+        snapshot_path = snapshot_dir / f"{label}_{artifact.name}"
+        shutil.copy2(artifact, snapshot_path)
+        snapshot[str(artifact)] = str(snapshot_path)
+    return snapshot
+
+
+
+def _observed_rank_key(setting_stats: dict | None, wp_stats: dict | None) -> tuple:
+    setting_stats = setting_stats or {}
+    wp_stats = wp_stats or {}
+    setting_best_eng = setting_stats.get("best_eng", float("inf"))
+    wp_best_eng = wp_stats.get("best_eng", float("inf"))
+    setting_best_chi2 = setting_stats.get("best_chi2", float("inf"))
+    wp_best_chi2 = wp_stats.get("best_chi2", float("inf"))
+    return (
+        1 if setting_stats else 0,
+        1 if setting_stats.get("refined", 0) > 0 else 0,
+        setting_stats.get("best_r2", -1.0),
+        -setting_best_chi2 if setting_best_chi2 != float("inf") else -1e9,
+        -setting_best_eng if setting_best_eng != float("inf") else -1e9,
+        setting_stats.get("best_sim", -1.0),
+        1 if wp_stats else 0,
+        1 if wp_stats.get("refined", 0) > 0 else 0,
+        wp_stats.get("best_r2", -1.0),
+        -wp_best_chi2 if wp_best_chi2 != float("inf") else -1e9,
+        -wp_best_eng if wp_best_eng != float("inf") else -1e9,
+        wp_stats.get("best_sim", -1.0),
     )
 
 
-if __name__ == "__main__":
-    parser = build_common_parser("Run PXRD agent pipeline")
-    args = parser.parse_args()
+def _get_system_run_log_path(state: dict) -> str:
+    pxrd_csv = str(state.get("pxrd_csv") or "")
+    stem = Path(pxrd_csv).stem if pxrd_csv else "unknown_system"
+    log_name = f"RunLog_{_safe_name_token(stem)}.log"
+    results_dir = state.get("results_dir", "Results")
+    return str(Path(results_dir) / log_name)
 
-    try:
-        csv_files = collect_input_csv_files(args.input_csv)
-    except FileNotFoundError as exc:
-        print(str(exc))
-        sys.exit(1)
-    try:
-        run_csv_batch(csv_files, args, run_agent_csv)
-    except RuntimeError as exc:
-        print(str(exc))
-        sys.exit(1)
