@@ -117,7 +117,7 @@ def _extract_xtal_wyckoff(xtal) -> str | None:
 
 
 def write_results_csv(input_csv: str, run_state: dict | None, result: dict | None) -> None:
-    """Append one summary row to <results_dir>/results_summary.csv."""
+    """Append one summary row to <results_dir>/summary.csv."""
     run_state = run_state or {}
     result = result or {}
 
@@ -152,7 +152,7 @@ def write_results_csv(input_csv: str, run_state: dict | None, result: dict | Non
 
     csv_file_name = os.path.basename(input_csv)
 
-    results_csv = Path(run_state.get("results_dir") or _DEFAULT_RESULTS_DIR) / "results_summary.csv"
+    results_csv = Path(run_state.get("results_dir") or _DEFAULT_RESULTS_DIR) / "summary.csv"
     results_csv.parent.mkdir(parents=True, exist_ok=True)
     write_header = not results_csv.exists() or results_csv.stat().st_size == 0
     with open(results_csv, "a+", newline="") as fh:
