@@ -34,9 +34,14 @@ from tools.utils import parse_formula, get_volume_from_density
 from tools.density import predict_density_ensemble
 from pyxtal.symmetry import Group
 
-# Configure logging with both file and console handlers
+
+# Configure logging with both file and console handlers, avoiding duplicate handlers
 logger = logging.getLogger("pxrd_agent")
 logger.setLevel(logging.INFO)
+
+# Remove any existing handlers to avoid duplicates
+if logger.hasHandlers():
+    logger.handlers.clear()
 
 file_handler = logging.FileHandler('PXRD_solver.log')
 console_handler = logging.StreamHandler()
@@ -200,8 +205,9 @@ def _attach_system_run_log(state: dict) -> logging.Handler | None:
         log_path = _get_system_run_log_path(state)
         handler = logging.FileHandler(log_path, mode="a")
         handler.setFormatter(logging.Formatter("%(message)s"))
-        handler.addFilter(_SystemRunLogFilter())
-        logging.root.addHandler(handler)
+        # Removed filter so all messages are logged
+        # Attach to pxrd_agent logger instead of root
+        logger.addHandler(handler)
         state["system_run_log"] = log_path
         run_banner = (
             f"\n{'=' * 80}\n"
@@ -210,16 +216,10 @@ def _attach_system_run_log(state: dict) -> logging.Handler | None:
             f"{'=' * 80}\n"
             f"Per-system run log: {log_path}\n"
         )
-        print(run_banner)
-        # Write banner to the log file directly
-        try:
-            with open(log_path, "a") as f:
-                f.write(run_banner)
-        except Exception as exc:
-            print(f"[WARN] Could not write run banner to log: {exc}")
+        logger.info(run_banner)
         return handler
     except Exception as exc:
-        print(f"Warning: failed to create per-system run log ({exc}).")
+        logger.warning(f"Warning: failed to create per-system run log ({exc}).")
         return None
 
 
@@ -227,7 +227,7 @@ def _detach_system_run_log(handler: logging.Handler | None) -> None:
     if handler is None:
         return
     try:
-        logging.root.removeHandler(handler)
+        logger.removeHandler(handler)
     finally:
         try:
             handler.close()
@@ -596,8 +596,6 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     max_structures_total = state.get("max_structures_total")
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
-
-
     eng_min, sim_max = 1e10, 0.90
 
     results_dir = state.get("results_dir", "Results")
@@ -670,6 +668,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         attempt_prefix = run_tmp_dir / f"Match_{formula}_{spg}_attempt{attempt_idx + 1}"
         attempt_png = str(attempt_prefix.with_suffix(".png"))
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
+        attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
         logger.info(
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
             f"Boosts={max_local_boosts}, Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
@@ -728,6 +727,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             "eng_rel": float(selected_eng_rel) if selected_eng_rel is not None else None,
             "attempt": attempt_idx + 1,
             "seed": seed,
+            "png": attempt_refinement_png,
             "cif": attempt_cif,
             "accepted": False,
         }
@@ -739,7 +739,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             else ""
         )
         logger.info(
-            f"Attempt {attempt_idx + 1} metrics: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}, "
+            f"Metrics: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}, "
             f"score={score:.4f}, accepted={candidate['accepted']}{selected_energy_text}"
         )
 
@@ -760,17 +760,6 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
         if max_structures_total is not None and len(all_structure_log) >= max_structures_total:
             logger.info(f"Structure cap reached ({len(all_structure_log)}/{max_structures_total}); exiting search loop.")
             break
-
-    local_plot_status = "Success" if (best_result is not None and best_result.get("accepted", False)) else "Failure"
-    if all_structure_log:
-        elapsed_stage = time.perf_counter() - stage_start_time
-        plot_energy_vs_r2(
-            all_structure_log, formula, spg,
-            f"{results_dir}/EnergyR2_{formula}_{spg}.png",
-            status=local_plot_status,
-            elapsed_seconds=elapsed_stage,
-            timing_breakdown_seconds=state.get("timing_breakdown_seconds"),
-        )
 
     state["structure_log"] = all_structure_log
     state["Struc_count"] = struc_count
@@ -844,23 +833,8 @@ def _run_pipeline_fallback(
     _run_data_preprocessor_stage(state["pxrd_csv"], state)
 
     def _emit_progress(message: str) -> None:
-        print(message)
-        # Also write to the per-system run log if available
-        log_path = None
-        # Try to get the log path from the state if available in the closure
-        try:
-            if 'system_run_log' in state:
-                log_path = state['system_run_log']
-            elif 'source_run_log' in state:
-                log_path = state['source_run_log']
-        except Exception:
-            pass
-        if log_path:
-            try:
-                with open(log_path, "a") as f:
-                    f.write(str(message) + "\n")
-            except Exception as exc:
-                print(f"[WARN] Could not write progress to log: {exc}")
+        # Use the logger to handle both console and file output
+        logger.info(str(message))
 
     def _format_elapsed(seconds: float) -> str:
         total_seconds = max(0.0, float(seconds))
@@ -912,24 +886,7 @@ def _run_pipeline_fallback(
         cif = result.get("cif")
         png = result.get("png")
 
-        # Deduplication logic: only emit if not already present in global_structure_log
         global global_structure_log
-        def _structure_signature(res):
-            # Use spg, wr, r2, chi2, selected_energy, and attempt as signature
-            return (
-                res.get("spg"),
-                round(float(res.get("wr", 0)), 4) if res.get("wr") is not None else None,
-                round(float(res.get("r2", 0)), 4) if res.get("r2") is not None else None,
-                round(float(res.get("chi2", 0)), 4) if res.get("chi2") is not None else None,
-                round(float(res.get("selected_energy", 0)), 4) if res.get("selected_energy") is not None else None,
-                res.get("attempt"),
-                tuple(np.round(np.array(res.get("cell", [])), 4)) if res.get("cell") is not None else None,
-            )
-
-        this_sig = _structure_signature(result)
-        existing_sigs = set(_structure_signature(entry) for entry in global_structure_log if isinstance(entry, dict))
-        if this_sig in existing_sigs:
-            return  # Skip duplicate print
 
         wr_text = f"{float(wr):.4f}" if wr is not None else "n/a"
         r2_text = f"{float(r2):.4f}" if r2 is not None else "n/a"

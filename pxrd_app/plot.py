@@ -26,22 +26,27 @@ def plot_energy_vs_r2(
     fig, ax = plt.subplots(figsize=(8, 5))
     if unref:
         ue, ur = zip(*unref)
-        ax.scatter(ue, ur, c="steelblue", s=25, alpha=0.5,
+        ur = [0.0 for _ in ur]
+        ax.scatter(ue, ur, c="steelblue", s=50, alpha=0.5,
                    label=f"Relaxed only (N={len(ue)})")
     if ref:
         re, rr = zip(*ref)
-        ax.scatter(re, rr, c="crimson", marker="*", s=140, alpha=0.7,
-                   label=f"Refined (N={len(re)})")
+        scatter = ax.scatter(
+            re, rr, c=rr, cmap="Reds", marker="*", s=100, alpha=0.5,
+            label=f"Refined (N={len(re)})"
+        )
+        cbar = plt.colorbar(scatter, ax=ax, pad=0.02)
+        cbar.set_label("R² value")
 
     if engs:
         x_min = min(float(e) for e in engs)
         x_max = max(float(e) for e in engs)
-        if (x_max - x_min) < 0.1:
-            ax.set_xlim(x_min - 0.01, x_max + 0.09)
+        ax.set_xlim(x_min - 0.02, x_max + 0.09)
+        
 
     ax.set_xlabel("Energy per atom (eV)")
     ax.set_ylabel("R² score  (0 = not refined)")
-    ax.set_ylim(-0.2, 1.1)
+    ax.set_ylim(-0.1, 1.1)
     if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
         total_seconds = max(0.0, float(timing_breakdown_seconds.get("total", 0.0)))
     elif elapsed_seconds is not None:

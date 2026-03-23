@@ -1481,6 +1481,43 @@ def _normalize_signature_value(value):
     except Exception:
         return str(value)
 
+def _normalize_signature_value(value):
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalize_signature_value(item) for item in value)
+    try:
+        return round(float(value), 6)
+    except Exception:
+        return str(value)
+
+
+def _cell_signature(cell_obj):
+    return _normalize_signature_value(getattr(cell_obj, "dims", cell_obj))
+
+
+def _wp_signature(spg_sol, wp_ids):
+    return (
+        int(spg_sol),
+        tuple(tuple(str(wp) for wp in group) for group in wp_ids),
+    )
+
+def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count, Z, sites):
+    cell_sig = _cell_signature(cell_obj)
+    wp_sig = _wp_signature(spg_sol, wp_ids)
+    return {
+        "spg": int(spg_sol),
+        "cell_dims": list(getattr(cell_obj, "dims", [])),
+        "cell_signature": cell_sig,
+        "wp_signature": wp_sig,
+        "setting_signature": (cell_sig, wp_sig),
+        "wp_labels": [list(group) for group in sites],
+        "wp_ids": [list(group) for group in wp_ids],
+        "num_wps": int(num_wps),
+        "dof": int(dof),
+        "count": None if count is None else int(count),
+        "Z": int(Z),
+    }
 
 def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
                     match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count, 
@@ -1526,20 +1563,51 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     #print(f"\n{'='*60}, struc_count={struc_count}, energy window for early stop: {max_eng_rel_early_stop}")
     eng_best = eng_min
     best_refined_result = None
+    best_refined_score = -1e9
+    best_refined_result_energy_ok = None
+    best_refined_energy_ok_score = -1e9
     min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
+    _slog = structure_log if structure_log is not None else []
+
     if max_eng_rel_early_stop is None:
         max_eng_rel_for_termination = max(float(refine_eng_window), 0.30)
     else:
         max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
+
 
     def _finalize_result(result):
         if result is None: return None
         wr, r2, chi2, xtal, _eng_best_at_sel, selected_eng, _selected_eng_rel, count = result
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
         return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count)
+    
+    def _return_best_available(local_candidate=None):
+        if local_candidate is not None:
+            logger.info(
+                "Structure generation budget exhausted; returning best accepted candidate "
+                "from the current Wyckoff setting."
+            )
+            return _finalize_result(local_candidate)
+
+        if best_refined_result_energy_ok is not None:
+            logger.info(
+                "Structure generation budget exhausted; returning best refined fallback "
+                "candidate that satisfies the relative-energy criterion."
+            )
+            return _finalize_result(best_refined_result_energy_ok)
+
+        if best_refined_result is not None:
+            logger.info(
+                "Structure generation budget exhausted before any energy-qualified "
+                "accepted candidate was found; returning no solution."
+            )
+            return (None, None, None, None, eng_best, None, None, struc_count)
+
+        return (None, None, None, None, eng_best, None, None, struc_count)
 
     trial_cells = list(cells[:N1])
     early_stop = False
+    local_accepted_result = None
 
     for cell in trial_cells:
         # logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
@@ -1563,7 +1631,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
                 xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count, emit_summary=False)
-
+                log_metadata = _make_structure_log_metadata(
+                    cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
+                )
                 # If DOF=0, allow 1 trial; if DOF=1, use 4; else use DOF*3
                 N4 = 1 if xm.dof == 0 else (4 if xm.dof == 1 else xm.dof * 3)
                 N_false = 0
@@ -1571,6 +1641,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 local_perturbations = 0
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
+                local_accepted_score = -1e9
                 # Exit a WP set early if the first warm-up trials all yield very low sim.
                 # Use a conservative threshold — well below refine_sim_min — so only
                 # truly hopeless WP combinations are skipped.
@@ -1627,8 +1698,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
 
                     struc_count += 1
                     cell_volume = getattr(cell, 'size', None)
-                    volume_str = f" vol={cell_volume:.2f}Å³" if cell_volume is not None else ""
-                    msg = f"ID{struc_count: 3d}: {xtal.get_xtal_string()}, {volume_str}" 
+                    volume_str = f" vol={cell_volume:.1f} Å³" if cell_volume is not None else ""
+                    msg = f"ID{struc_count: 3d}: {xtal.get_xtal_string()}, {volume_str}"
+                    refined_score = None
 
                     # Composite refinement trigger using two independent, system-agnostic criteria:
                     #   1. sim >= refine_sim_min: structure has meaningful pattern agreement.
@@ -1642,6 +1714,14 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         wr, r2, chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
 
                         if wr is not None:
+                            refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
+                            if refined_score > best_refined_score:
+                                best_refined_score = refined_score
+                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
+                            if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
+                                    best_refined_energy_ok_score = refined_score
+                                    best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
+                            
                             _do_perturb = (
                                 (local_perturbations < max_local_perturbations or is_new_best_energy) and
                                 should_perturb(sim, eng_rel, wr, r2, chi2,
@@ -1697,38 +1777,51 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
                             if is_new_best_energy: msg += ' +++++'
 
-                            print(msg)
-                            logger.info(msg)
                         else:
                             logger.info("  Refinement failed; continuing search without refined metrics.")
                             msg += " [refine-failed]"
                     else:
                         wr, r2, chi2 = None, None, None
+                        msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+                    print(msg)
+                    logger.info(msg)
+                    log_entry = {
+                        "eng": eng,
+                        "eng_rel": eng_rel,
+                        "sim": sim,
+                        "r2": r2,
+                        "wr": wr,
+                        "chi2": chi2,
+                        "refined": r2 is not None,
+                        **log_metadata,
+                    }
+                    _slog.append(log_entry)
 
                     if struc_count >= min_structures_before_early_stop:
                         if early_stop:
                             logger.info(
-                                f"Reached max structures total ({max_structures_total}) with early stop enabled; "
+                                f"Reached ({min_structures_before_early_stop}) with early stop enabled; "
                                 f"terminating search."
                             )
                             return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
                     
                     if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
+                        energy_ok = eng_rel <= max_eng_rel_for_termination
+                        if refined_score is not None and refined_score > local_accepted_score and energy_ok:
+                            local_accepted_score = refined_score
+                            local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
+
                         if should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
                             early_stop = True
+                            logger.info(
+                                f"***Excellent fit (r2={r2:.3f}, chi2={chi2:.3f}) with energy (eng_rel={eng_rel:.3f} eV/atom); "
+                            )
                             if struc_count >= min_structures_before_early_stop:
                                 return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
 
             prev_limit = limit
 
-    if best_refined_result is not None:
-        logger.info(
-            "No candidate met the acceptance threshold, and refined fallback candidates "
-            "exceed the relative-energy criterion; returning no solution."
-        )
-        return (None, None, None, None, eng_best, None, None, struc_count)
-
-    return (None, None, None, None, eng_best, None, None, struc_count)
+    return _return_best_available(local_accepted_result)
 
 
 if __name__ == "__main__":
