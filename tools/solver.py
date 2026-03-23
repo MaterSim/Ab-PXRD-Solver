@@ -6,7 +6,7 @@ import sys
 import numpy as np
 from itertools import combinations
 from pyxtal.symmetry import Group
-
+from pyxtal.symmetry import get_bravais_lattice, get_lattice_type, generate_possible_hkls
 
 def _missing_gsas_refine_pxrd(*args, **kwargs):
     raise ModuleNotFoundError(
@@ -14,69 +14,6 @@ def _missing_gsas_refine_pxrd(*args, **kwargs):
         "Install GSAS-II (e.g., conda-forge gsas2pkg) to enable refinement."
     )
 
-try:
-    from pyxtal.symmetry import get_bravais_lattice, get_lattice_type, generate_possible_hkls
-except Exception:
-    # Compatibility shims for newer pyxtal releases where these free functions
-    # were removed from pyxtal.symmetry.
-    _BRA_TO_LTYPE = {
-        1: 1,   # triclinic
-        2: 2, 3: 2,  # monoclinic
-        4: 3, 5: 3, 6: 3, 7: 3, 8: 3,  # orthorhombic
-        9: 4, 10: 4,  # tetragonal
-        11: 5, 12: 5,  # hexagonal/trigonal
-        13: 6, 14: 6, 15: 6,  # cubic
-    }
-    _BRA_TO_REP_SPG = {
-        1: 1,
-        2: 3,
-        3: 5,
-        4: 16,
-        5: 38,
-        6: 20,
-        7: 23,
-        8: 22,
-        9: 75,
-        10: 79,
-        11: 168,
-        12: 146,
-        13: 195,
-        14: 197,
-        15: 196,
-    }
-
-    def _first_centering_symbol(symbol: str) -> str:
-        for ch in (symbol or ""):
-            if ch in {"P", "A", "B", "C", "I", "F", "R"}:
-                return ch
-        return "P"
-
-    def get_bravais_lattice(spg):
-        g = Group(int(spg))
-        lattice = str(getattr(g, "lattice_type", "")).lower()
-        center = _first_centering_symbol(getattr(g, "symbol", ""))
-
-        if lattice == "cubic":
-            return {"P": 13, "I": 14, "F": 15}.get(center, 13)
-        if lattice in {"hexagonal", "trigonal"}:
-            return 12 if center == "R" else 11
-        if lattice == "tetragonal":
-            return 10 if center == "I" else 9
-        if lattice == "orthorhombic":
-            return {"P": 4, "A": 5, "B": 5, "C": 6, "I": 7, "F": 8}.get(center, 4)
-        if lattice == "monoclinic":
-            return 3 if center in {"C", "A", "B"} else 2
-        return 1
-
-    def get_lattice_type(bravais):
-        bra = int(bravais)
-        if bra in _BRA_TO_LTYPE:
-            return _BRA_TO_LTYPE[bra]
-        raise ValueError(f"Unknown bravais index: {bravais}")
-
-    def generate_possible_hkls(bravais, h_max, k_max, l_max, max_index_sum):
-        rep_spg = _BRA_TO_REP_SPG.get(int(bravais), 1)
-        return Group(rep_spg).generate_possible_hkls(h_max, k_max, l_max, max_index_sum)
 try:
     from .manager import RawDataManager, CellManager, WPManager, XtalManager
     from .utils import plot_XRD, relax_structure
@@ -1636,6 +1573,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         for limit in wp_limits:
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
+                wp_labels = [str(wp) for group in wp_ids for wp in group]
+                print(f"Trying cell {cell.dims} with SPG {spg_sol}, DOF={dof}, WP IDs={wp_labels}, count={count}")
                 xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count, emit_summary=False)
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites

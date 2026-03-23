@@ -116,14 +116,12 @@ def _extract_xtal_wyckoff(xtal) -> str | None:
         return None
 
 
-def write_results_csv(input_csv: str, run_state: dict | None, result: dict | None) -> None:
+def write_results_csv(input_csv: str, run_state: dict | None, status: str | None) -> None:
     """Append one summary row to <results_dir>/summary.csv."""
     run_state = run_state or {}
-    result = result or {}
 
     # --- Status ---
-    status_raw = result.get("status", "unknown")
-    is_failure = status_raw in FAILURE_STATUSES or status_raw == "unknown"
+    is_failure = status in FAILURE_STATUSES or status == "unknown"
     status_label = "Failure" if is_failure else "Success"
 
     # --- Runtime ---

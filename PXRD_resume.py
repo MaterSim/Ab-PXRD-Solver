@@ -5,11 +5,13 @@ import csv
 import logging
 import re
 import sys
+import os
 import time
 from pathlib import Path
 
 from pxrd_app.constants import DEFAULT_STATE as default_state
 from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect_input_csv_files
+from pxrd_app.runtime import write_results_csv
 from pxrd_app.plot import plot_energy_vs_r2
 from pxrd_app.core import (
     _detach_system_run_log,
@@ -28,6 +30,7 @@ from pxrd_app.core import (
 from tools.manager import CellManager
 from tools.solver import enumerate_wyckoff_multi_spg, score_wp_candidate
 
+global_structure_log = []
 
 PAIR_TABLE_RE = re.compile(
     r"^\s*(?P<rank>\d+)\s+"
@@ -431,9 +434,14 @@ def _emit_resume_strategy(ranked_trials: list[dict], args: argparse.Namespace) -
         best_chi2 = _safe_float(observed.get("best_chi2"), None)
         best_eng = _safe_float(observed.get("best_eng"), None)
         best_sim = _safe_float(observed.get("best_sim"), None)
+        wp_index = trial.get('wp_index') or 0
+        try:
+            wp_index_int = int(wp_index)
+        except (ValueError, TypeError):
+            wp_index_int = 0  # or another default/fallback value
         print(
             f"{queue_idx:<3} {int(pair.get('spg') or trial['candidate'][0]):<5} "
-            f"{int(pair.get('rank') or 0):<5} {int(trial.get('wp_index') or 0):<6} "
+            f"{int(pair.get('rank') or 0):<5} {wp_index_int:<6} "
             f"{int(est.get('dof') or trial['candidate'][5]):<4} {int(observed.get('refined_count') or 0):<7} "
             f"{(f'{best_r2:.3f}' if best_r2 is not None and best_r2 > -1 else 'n/a'):<8} "
             f"{(f'{best_chi2:.3f}' if best_chi2 is not None and best_chi2 < float('inf') else 'n/a'):<9} "
@@ -593,74 +601,31 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace) -
     pair_dims = [round(float(value), 3) for value in trial["cell"].dims]
     forced_wp = trial["candidate"]
     forced_spg = int(forced_wp[0])
-    wp_index = int(trial.get("wp_index") or 9000)
+    #wp_index = int(trial.get("wp_index") or 9000)
+    wp_index = trial.get('wp_index') or 0
+    try:
+        wp_index_int = int(wp_index)
+    except (ValueError, TypeError):
+        wp_index_int = 0  # or another default/fallback value
     wp_labels = _format_wyckoff_labels_from_ids(forced_spg, forced_wp[3])
 
-    print(
+    logger.info(
         f"[Pair {pair_index}/{pair_total}] vol={float(pair.get('volume') or trial['cell'].size):.1f} Å³, "
-        f"spg={int(pair.get('spg') or forced_spg)}, dims={pair_dims}"
-    )
-    print(
-        f"  WP #{wp_index}: spg={forced_spg}, count={int(forced_wp[6])}, dof={int(forced_wp[5])}, "
-        f"n_wps={int(forced_wp[4])}, wyckoff={wp_labels}"
-    )
-
-    print(
+        f"spg={int(pair.get('spg') or forced_spg)}, dims={pair_dims}\n"
+        f"  WP #{wp_index_int}: spg={forced_spg}, count={int(forced_wp[6])}, dof={int(forced_wp[5])}, "
+        f"n_wps={int(forced_wp[4])}, wyckoff={wp_labels}\n"
         f"Resume trial {trial['label']}: spg={trial_state['spg']} dims={list(map(float, trial['cell'].dims))} "
         f"observed={trial['observed']}"
     )
-    message = _run_wyckoff_solver_stage(trial_state)
+    message = _run_wyckoff_solver_stage(trial_state, global_structure_log)
     wyckoff_result = trial_state.get("wyckoff_result") or {}
     status = f"{trial['label']}_success" if wyckoff_result.get("accepted") else "no_solution"
     outcome = _extract_outcome(trial["label"], trial_state, {"status": status, "message": message})
     outcome["summary"] = trial["summary"]
     return trial_state, outcome
 
-
-def _write_resume_report(
-    csv_path: str,
-    final_outcome: dict,
-    results_dir: str,
-) -> Path:
-    md_path = _resume_report_paths(csv_path, results_dir)
-    # Append new result to summary.csv
-    summary_path = Path(results_dir) / "summary.csv"
-    # Prepare row data from final_outcome
-    row = {
-        "csv_file_name": Path(csv_path).name,
-        "Runtime": final_outcome.get("runtime", ""),
-        "N_struc": final_outcome.get("structure_count", ""),
-        "Status": "Success" if final_outcome.get("accepted") else "Failure",
-        "E": final_outcome.get("selected_energy", ""),
-        "dE": final_outcome.get("eng_rel", ""),
-        "R2": final_outcome.get("r2", ""),
-        "Chi2": final_outcome.get("chi2", ""),
-        "SPG": final_outcome.get("spg", ""),
-    }
-    # Only add wyckoff/cell if available
-    if "wyckoff_labels" not in row or not row["Wyckoff"]:
-        row["Wyckoff"] = ""
-    if "cell_dims" not in row or not row["Cell"]:
-        row["Cell"] = ""
-    # Append to summary.csv
-    fieldnames = [
-        "csv_file_name","Runtime","N_struc","Status","E","dE","R2","Chi2","SPG","Wyckoff","Cell"
-    ]
-    try:
-        with open(summary_path, "a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            # Only write header if file is empty
-            if f.tell() == 0:
-                writer.writeheader()
-            writer.writerow(row)
-    except Exception as e:
-        print(f"[WARN] Could not append to summary.csv: {e}")
-    return md_path
-
 def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> list:
     failures = []
-    import csv
-    import os
     with open(summary_csv, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -674,7 +639,7 @@ def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> l
 
 
 def run_resume(csv_path, args):
-    import os
+
     # Build run state
     run_state = build_run_state_from_args(default_state, logger, args, csv_path)
     run_state["pxrd_csv"] = csv_path
@@ -748,12 +713,13 @@ def run_resume(csv_path, args):
             )
             logger.info(f"Energy–R² plot saved to {merged_plot}")
 
-        report_path = _write_resume_report(
-            csv_path,
-            winner_outcome,
-            args.output,
-        )
-        print(f"Saved resume report to {report_path}")
+
+        md_path = _resume_report_paths(csv_path, args.output)
+        # Append new result to summary.csv
+        summary_path = Path(args.output) / "summary.csv"
+        write_results_csv(summary_path, winner_state, winner_outcome.get("status") if isinstance(winner_outcome, dict) else "unknown")
+        # Prepare row data from final_outcome
+        print(f"Saved resume report to {md_path} and {summary_path}")
     finally:
         _detach_system_run_log(resume_handler)
 
@@ -844,4 +810,3 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"Resume failed for {csv_path}: {exc}")
             raise
-

@@ -43,7 +43,7 @@ def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
             success_message="Deterministic pipeline completed successfully!",
             failure_prefix="Deterministic pipeline finished without a solution",
         )
-        write_results_csv(csv_path, run_state, result)
+        write_results_csv(csv_path, run_state, result.get("status") if isinstance(result, dict) else "unknown")
         print("Exiting deterministic main thread")
 
 
