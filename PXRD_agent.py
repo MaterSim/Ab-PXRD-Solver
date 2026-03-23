@@ -70,19 +70,9 @@ from tools.solver import (
 from tools.utils import parse_formula, get_volume_from_density
 from tools.density import predict_density_ensemble
 
-# Configure logging with both file and console handlers
-file_handler = logging.FileHandler('PXRD_agent.log')
-console_handler = logging.StreamHandler()
-formatter = logging.Formatter("%(message)s")
-file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
 
-logging.root.addHandler(file_handler)
-logging.root.addHandler(console_handler)
-logging.root.setLevel(logging.INFO)
-
-logger = logging.getLogger("strands.multiagent")
-logger.setLevel(logging.ERROR)
+# Use the pxrd_agent logger from core.py for unified logging
+from pxrd_app.core import logger
 
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
@@ -1078,8 +1068,21 @@ def _run_pipeline_fallback(
         logger.info("Using deterministic pipeline execution.")
     _run_data_preprocessor_stage(state["pxrd_csv"], state)
 
+    # Buffer for progress messages before per-system log handler is attached
+    _progress_buffer = []
+    _system_log_attached = False
+
     def _emit_progress(message: str) -> None:
-        print(message)
+        if not _system_log_attached:
+            _progress_buffer.append(str(message))
+        logger.info(str(message))
+
+    def _flush_progress_buffer():
+        for msg in _progress_buffer:
+            logger.info(msg)
+        _progress_buffer.clear()
+
+    # ...existing code...
 
     def _format_elapsed(seconds: float) -> str:
         total_seconds = max(0.0, float(seconds))
@@ -1941,6 +1944,8 @@ def main(
     run_prompt = INPUT_PROMPT if input_prompt is None else input_prompt
     force_fallback, _ = _startup_runtime_mode()
     system_log_handler = _attach_system_run_log(run_state)
+    _system_log_attached = True
+    _flush_progress_buffer()
     result = None
 
     try:

@@ -1609,6 +1609,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     early_stop = False
     local_accepted_result = None
 
+    # Track emitted structure IDs to avoid duplicates
+    emitted_id_messages = set()
     for cell in trial_cells:
         # logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
         if forced_wp_solution is not None:
@@ -1700,6 +1702,11 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     cell_volume = getattr(cell, 'size', None)
                     volume_str = f" vol={cell_volume:.1f} Å³" if cell_volume is not None else ""
                     msg = f"ID{struc_count: 3d}: {xtal.get_xtal_string()}, {volume_str}"
+                    # Only emit this ID line if not already emitted (by message content)
+                    #if msg not in emitted_id_messages:
+                    #    print(msg)
+                    #    logger.info(msg)
+                    #    emitted_id_messages.add(msg)
                     refined_score = None
 
                     # Composite refinement trigger using two independent, system-agnostic criteria:
@@ -1717,10 +1724,10 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
                             if refined_score > best_refined_score:
                                 best_refined_score = refined_score
-                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
+                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
                             if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
                                     best_refined_energy_ok_score = refined_score
-                                    best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel)
+                                    best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
                             
                             _do_perturb = (
                                 (local_perturbations < max_local_perturbations or is_new_best_energy) and
@@ -1783,8 +1790,11 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     else:
                         wr, r2, chi2 = None, None, None
                         msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                    print(msg)
-                    logger.info(msg)
+                    # Only emit this ID line if not already emitted (by message content)
+                    if msg not in emitted_id_messages:
+                        print(msg)
+                        logger.info(msg)
+                        emitted_id_messages.add(msg)
                     log_entry = {
                         "eng": eng,
                         "eng_rel": eng_rel,
