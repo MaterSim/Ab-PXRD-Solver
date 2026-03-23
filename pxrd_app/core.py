@@ -565,7 +565,7 @@ def _run_cell_solver_stage(state: dict) -> dict:
     }
 
 
-def _run_wyckoff_solver_stage(state: dict) -> str:
+def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
     stage_start_time = time.perf_counter()
     spg = state.get("spg")
     formula = state.get("formula")
@@ -593,7 +593,6 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
     max_local_boosts = max(0, int(state.get("max_local_boosts", 1)))
     max_local_perturbations = max(0, int(state.get("max_local_perturbations", 2)))
     perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
-    max_structures_total = state.get("max_structures_total")
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     eng_min, sim_max = 1e10, 0.90
@@ -656,8 +655,7 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
 
     best_result = None
     best_score = -1e9
-    all_structure_log: list = []
-    struc_count = state.get("Struc_count")
+    struc_count = state.get("Struc_count") or 0
 
     #logger.info(f"Adaptive Wyckoff solve: {attempts} attempt(s), seed_base={seed_base}")
     for attempt_idx in range(attempts):
@@ -673,6 +671,13 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
             f"Boosts={max_local_boosts}, Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
             f"{struc_count} structures")
+
+        if struc_count != len(all_structure_log):
+            logger.error(
+                f"Error: Struc_count ({struc_count}) does not match length of all_structure_log "
+                f"({len(all_structure_log)}). This may indicate a mismatch in structure logging."
+            )
+            import sys; sys.exit(1)
 
         wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel, struc_count = search_solution(
             cells[:N1],
@@ -709,12 +714,11 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             max_eng_rel_early_stop=max_eng_rel_early_stop,
             min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
-            max_structures_total=max_structures_total,
+            #max_structures_total=max_structures_total,
         )
 
-        # Update struc_count with the number of new structures generated in this attempt
-        state["Struc_count"] = struc_count
-
+        print(f"{struc_count} new structure(s). Total structures: {len(all_structure_log)}.")
+        # Accumulate struc_count with the number of new structures generated in this attempt
         if wr is None: continue
 
         candidate = {
@@ -756,9 +760,9 @@ def _run_wyckoff_solver_stage(state: dict) -> str:
             logger.info(f"Early stop: excellent solution found at attempt {attempt_idx + 1}.")
             break
 
-        # Hard cap: exit immediately if max_structures_total is reached
-        if max_structures_total is not None and len(all_structure_log) >= max_structures_total:
-            logger.info(f"Structure cap reached ({len(all_structure_log)}/{max_structures_total}); exiting search loop.")
+        # Hard cap: exit immediately if min_structures_before_early_stop is reached
+        if len(all_structure_log) >= min_structures_before_early_stop:
+            logger.info(f"Structure cap reached ({len(all_structure_log)}/{min_structures_before_early_stop}); exiting search loop.")
             break
 
     state["structure_log"] = all_structure_log
@@ -1263,6 +1267,7 @@ def _run_pipeline_fallback(
 
             spg_cell_phase_end_time = time.perf_counter()
             structure_phase_start_time = spg_cell_phase_end_time
+            #all_structure_log: list = []
 
             # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
             # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
@@ -1327,13 +1332,13 @@ def _run_pipeline_fallback(
                         forced_wp_solution = sol[:8] if len(sol) >= 9 else sol
                         trial_state["forced_wp_solution"] = forced_wp_solution
 
-                        trial_message = _run_wyckoff_solver_stage(trial_state)
+                        trial_message = _run_wyckoff_solver_stage(trial_state, global_structure_log)
                         # After running, update the main state's Struc_count by accumulating
                         state["Struc_count"] = trial_state.get("Struc_count")
                         trial_result = trial_state.get("wyckoff_result") or {}
 
                         # Accumulate structure log across all trials for global plot
-                        global_structure_log.extend(trial_state.get("structure_log") or [])
+                        #global_structure_log.extend(trial_state.get("structure_log") or [])
 
                         trial_score = trial_result.get("score")
                         if trial_score is not None and trial_score > best_trial_score:
@@ -1490,7 +1495,7 @@ def _run_pipeline_fallback(
         }
     spg_cell_phase_end_time = time.perf_counter()
     structure_phase_start_time = spg_cell_phase_end_time
-    wyckoff_message = _run_wyckoff_solver_stage(state)
+    wyckoff_message = _run_wyckoff_solver_stage(state, global_structure_log)
     wyckoff_result = state.get("wyckoff_result") or {}
     accepted = wyckoff_result.get("accepted", False)
     final_status = status_label if accepted else "no_solution"

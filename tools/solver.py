@@ -1525,9 +1525,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     INST_FILE, logger, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5,
                     max_local_boosts=1, max_local_perturbations=2,
-                    perturb_displacement=0.06, structure_log=None,
+                    perturb_displacement=0.06, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
-                    forced_wp_solution=None, max_structures_total=None):
+                    forced_wp_solution=None):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1560,14 +1560,13 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     Returns:
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
-    #print(f"\n{'='*60}, struc_count={struc_count}, energy window for early stop: {max_eng_rel_early_stop}")
+    #print(f"\n{'='*60}, struc_count={struc_count}, structure_log={len(structure_log)}")
     eng_best = eng_min
     best_refined_result = None
     best_refined_score = -1e9
     best_refined_result_energy_ok = None
     best_refined_energy_ok_score = -1e9
     min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
-    _slog = structure_log if structure_log is not None else []
 
     if max_eng_rel_early_stop is None:
         max_eng_rel_for_termination = max(float(refine_eng_window), 0.30)
@@ -1581,12 +1580,15 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
         return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count)
     
-    def _return_best_available(local_candidate=None):
+    def _return_best_available(local_candidate, best_refined_result_energy_ok, struc_count=None):
         if local_candidate is not None:
             logger.info(
                 "Structure generation budget exhausted; returning best accepted candidate "
                 "from the current Wyckoff setting."
             )
+            if struc_count is not None:
+                # Replace the last item of local_candidate with struc_count
+                local_candidate = tuple(list(local_candidate[:-1]) + [struc_count])
             return _finalize_result(local_candidate)
 
         if best_refined_result_energy_ok is not None:
@@ -1594,6 +1596,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 "Structure generation budget exhausted; returning best refined fallback "
                 "candidate that satisfies the relative-energy criterion."
             )
+            if struc_count is not None:
+                best_refined_result_energy_ok = tuple(list(best_refined_result_energy_ok[:-1]) + [struc_count])
             return _finalize_result(best_refined_result_energy_ok)
 
         if best_refined_result is not None:
@@ -1702,11 +1706,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     cell_volume = getattr(cell, 'size', None)
                     volume_str = f" vol={cell_volume:.1f} Å³" if cell_volume is not None else ""
                     msg = f"ID{struc_count: 3d}: {xtal.get_xtal_string()}, {volume_str}"
-                    # Only emit this ID line if not already emitted (by message content)
-                    #if msg not in emitted_id_messages:
-                    #    print(msg)
-                    #    logger.info(msg)
-                    #    emitted_id_messages.add(msg)
+                    # Do not emit here; emission is handled after refinement/perturbation with duplicate suppression
                     refined_score = None
 
                     # Composite refinement trigger using two independent, system-agnostic criteria:
@@ -1746,7 +1746,10 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                     displacement = max(0.02, perturb_displacement * (0.67 if wr is not None else 1.0))
                                     perturbed_atoms = perturb_atoms(atoms, displacement=displacement)
                                     perturbed_atoms = relax_structure(perturbed_atoms, xm.dof)
-                                    if perturbed_atoms is None: continue
+                                    if perturbed_atoms is None:
+                                        continue
+
+                                    #struc_count += 1  # Increment for each perturbed structure
 
                                     p_eng = perturbed_atoms.get_potential_energy() / len(perturbed_atoms)
                                     p_stress = abs(perturbed_atoms.get_stress()[:3].mean())
@@ -1762,7 +1765,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                     next_eng_best = min(prev_eng_best, p_eng)
                                     p_eng_rel = max(0.0, p_eng - next_eng_best)
                                     p_is_new_best_energy = p_eng < prev_eng_best
-                                    if p_is_new_best_energy: eng_best = p_eng
+                                    if p_is_new_best_energy:
+                                        eng_best = p_eng
 
                                     p_xrd = XRD(perturbed_atoms, wavelength=wavelength, thetas=thetas,
                                                 res=resolution, SCALED_INTENSITY_TOL=SCALED_INTENSITY_TOL)
@@ -1780,21 +1784,24 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                                 eng, eng_rel, sim = p_eng, p_eng_rel, p_sim
                                                 stress, fmax = p_stress, p_fmax
                                                 is_new_best_energy = p_is_new_best_energy
-                            msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                            msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
-                            if is_new_best_energy: msg += ' +++++'
-
+                                    msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+                                    msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
+                                    if is_new_best_energy:
+                                        msg += ' +++++'
+                            else:
+                                msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+                                msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"    
                         else:
                             logger.info("  Refinement failed; continuing search without refined metrics.")
+                            msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
                             msg += " [refine-failed]"
                     else:
                         wr, r2, chi2 = None, None, None
                         msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                    # Only emit this ID line if not already emitted (by message content)
-                    if msg not in emitted_id_messages:
-                        print(msg)
-                        logger.info(msg)
-                        emitted_id_messages.add(msg)
+
+                    print(msg)
+                    logger.info(msg)
+                    emitted_id_messages.add(msg)
                     log_entry = {
                         "eng": eng,
                         "eng_rel": eng_rel,
@@ -1805,7 +1812,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         "refined": r2 is not None,
                         **log_metadata,
                     }
-                    _slog.append(log_entry)
+                    structure_log.append(log_entry)
 
                     if struc_count >= min_structures_before_early_stop:
                         if early_stop:
@@ -1830,8 +1837,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                 return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
 
             prev_limit = limit
-
-    return _return_best_available(local_accepted_result)
+        # Correct the structure count in the final accepted result if it exists, to reflect the total number of structures generated so far.
+    return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count)
 
 
 if __name__ == "__main__":

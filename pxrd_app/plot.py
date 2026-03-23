@@ -22,6 +22,9 @@ def plot_energy_vs_r2(
 
     unref = [(e, r) for e, r, m in zip(engs, r2s, mask) if not m]
     ref   = [(e, r) for e, r, m in zip(engs, r2s, mask) if m]
+    #print("+++++++++++++++++++++", len(structure_log))
+    #print("+++++++++++++++++++++", len(ref), ref)
+    #print("+++++++++++++++++++++", len(unref), unref)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     if unref:

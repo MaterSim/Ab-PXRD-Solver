@@ -39,7 +39,6 @@ DEFAULT_STATE = {
     "min_r2": 0.95,
     "max_chi2": 0.12,
     # Structure generation cap
-    "max_structures_total": 10,
     # Track total number of generated structures
     "Struc_count": 0,
     "INST_FILE": "tools/INST_XRY.PRM",
