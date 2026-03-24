@@ -1739,14 +1739,6 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     }
                     structure_log.append(log_entry)
 
-                    if struc_count >= min_structures_before_early_stop:
-                        if early_stop:
-                            logger.info(
-                                f"Reached ({min_structures_before_early_stop}) with early stop enabled; "
-                                f"terminating search."
-                            )
-                            return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
-                    
                     if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
                         energy_ok = eng_rel <= max_eng_rel_for_termination
                         if refined_score is not None and refined_score > local_accepted_score and energy_ok:
@@ -1758,8 +1750,11 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             logger.info(
                                 f"***Excellent fit (r2={r2:.3f}, chi2={chi2:.3f}) with energy (eng_rel={eng_rel:.3f} eV/atom); "
                             )
-                            if struc_count >= min_structures_before_early_stop:
-                                return _finalize_result((wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count))
+                    if struc_count >= min_structures_before_early_stop and early_stop:
+                        logger.info(
+                            f"Early stop triggered after {struc_count} structures; terminating search."
+                        )
+                        return _finalize_result(local_accepted_result)
 
             prev_limit = limit
         # Correct the structure count in the final accepted result if it exists, to reflect the total number of structures generated so far.

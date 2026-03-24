@@ -1287,7 +1287,7 @@ def _run_pipeline_fallback(
                         forced_wp_solution = sol[:8] if len(sol) >= 9 else sol
                         trial_state["forced_wp_solution"] = forced_wp_solution
 
-                        trial_message, _ = _run_wyckoff_solver(trial_state, global_structure_log)
+                        trial_message = _run_wyckoff_solver(trial_state, global_structure_log)
                         # After running, update the main state's Struc_count by accumulating
                         state["Struc_count"] = trial_state.get("Struc_count")
                         trial_result = trial_state.get("wyckoff_result") or {}
