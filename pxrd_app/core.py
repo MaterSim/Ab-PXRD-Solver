@@ -1287,7 +1287,7 @@ def _run_pipeline_fallback(
                         forced_wp_solution = sol[:8] if len(sol) >= 9 else sol
                         trial_state["forced_wp_solution"] = forced_wp_solution
 
-                        trial_message, _ = _run_wyckoff_solver(trial_state, global_structure_log)
+                        trial_message = _run_wyckoff_solver(trial_state, global_structure_log)
                         # After running, update the main state's Struc_count by accumulating
                         state["Struc_count"] = trial_state.get("Struc_count")
                         trial_result = trial_state.get("wyckoff_result") or {}
@@ -1361,7 +1361,7 @@ def _run_pipeline_fallback(
                                     "spg": state.get("spg"),
                                     "formula": state.get("formula"),
                                 }
-                            
+
                             if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and not energy_ok_for_global_early_exit:
                                 _emit_progress(
                                     f"Good refined fit found for spg={spg_val}, but skipping early stop "
