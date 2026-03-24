@@ -40,11 +40,12 @@ def plot_energy_vs_r2(
         )
         cbar = plt.colorbar(scatter, ax=ax, pad=0.02)
         cbar.set_label("R² value")
+        scatter.set_clim(0, 1)
 
     if engs:
         x_min = min(float(e) for e in engs)
         x_max = max(float(e) for e in engs)
-        ax.set_xlim(x_min - 0.02, x_max + 0.09)
+        ax.set_xlim(x_min - 0.03, x_max + 0.09)
         
 
     ax.set_xlabel("Energy per atom (eV)")

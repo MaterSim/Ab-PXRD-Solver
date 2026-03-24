@@ -1497,7 +1497,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     Returns:
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
-    #print(f"\n{'='*60}, struc_count={struc_count}, structure_log={len(structure_log)}")
+    # print(f"\n{'='*60}, struc_count={struc_count}, structure_log={len(structure_log)}")
     eng_best = eng_min
     best_refined_result = None
     best_refined_score = -1e9
@@ -1519,29 +1519,18 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     
     def _return_best_available(local_candidate, best_refined_result_energy_ok, struc_count=None):
         if local_candidate is not None:
-            logger.info(
-                "Structure generation budget exhausted; returning best accepted candidate "
-                "from the current Wyckoff setting."
-            )
             if struc_count is not None:
                 # Replace the last item of local_candidate with struc_count
                 local_candidate = tuple(list(local_candidate[:-1]) + [struc_count])
             return _finalize_result(local_candidate)
 
         if best_refined_result_energy_ok is not None:
-            logger.info(
-                "Structure generation budget exhausted; returning best refined fallback "
-                "candidate that satisfies the relative-energy criterion."
-            )
             if struc_count is not None:
                 best_refined_result_energy_ok = tuple(list(best_refined_result_energy_ok[:-1]) + [struc_count])
             return _finalize_result(best_refined_result_energy_ok)
 
         if best_refined_result is not None:
-            logger.info(
-                "Structure generation budget exhausted before any energy-qualified "
-                "accepted candidate was found; returning no solution."
-            )
+            logger.info("No accepted candidate was found")
             return (None, None, None, None, eng_best, None, None, struc_count)
 
         return (None, None, None, None, eng_best, None, None, struc_count)
@@ -1573,8 +1562,6 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         for limit in wp_limits:
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
-                wp_labels = [str(wp) for group in wp_ids for wp in group]
-                print(f"Trying cell {cell.dims} with SPG {spg_sol}, DOF={dof}, WP IDs={wp_labels}, count={count}")
                 xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, count=count, emit_summary=False)
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
@@ -1596,7 +1583,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 while trial_idx < (N4 + 1 + extra_trials):
                     trial_idx += 1
                     if N_false > max([4, N4 // 2]):
-                        logger.info("Too many invalid structures, skip to next WP set.")
+                        logger.info("Too many invalid structures, skip....")
                         break
                     xtal = xm.generate_structure()
                     if not xtal.valid:
@@ -1738,7 +1725,6 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         wr, r2, chi2 = None, None, None
                         msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
 
-                    print(msg)
                     logger.info(msg)
                     emitted_id_messages.add(msg)
                     log_entry = {

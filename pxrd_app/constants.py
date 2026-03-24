@@ -65,7 +65,7 @@ DEFAULT_STATE = {
     "max_local_boosts": _env_int("PXRD_LOCAL_BOOSTS", 1, min_value=0),
     "max_local_perturbations": _env_int("PXRD_LOCAL_PERTURBS", 2, min_value=0),
     "perturb_displacement": float(os.getenv("PXRD_PERTURB_DISPLACEMENT", "0.06")),
-    "max_eng_rel_early_stop": 0.20,
+    "max_eng_rel_early_stop": 0.05,
     "max_eng_rel": None,
     "min_structures_before_early_stop": 10,
 }

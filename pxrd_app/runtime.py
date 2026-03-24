@@ -193,7 +193,6 @@ def emit_timing_summary(logger, run_state: dict | None) -> str | None:
     if timing_line is None:
         return None
     logger.info(timing_line)
-    print(timing_line)
     return timing_line
 
 

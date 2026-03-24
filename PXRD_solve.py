@@ -24,7 +24,6 @@ def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
         print("Starting deterministic PXRD pipeline.")
         result = _run_pipeline_fallback(
             run_state,
-            announce_bug_switch=False,
             status_label="deterministic_success",
         )
         return result

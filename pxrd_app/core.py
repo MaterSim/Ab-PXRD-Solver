@@ -309,7 +309,7 @@ def _get_cell_solver_kwargs(state: dict) -> dict:
         "max_guess": max(100, int(state.get("cell_solver_max_guess", 50000))),
     }
 
-def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
+def _run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     formula_from_filename, spg_from_filename = infer_formula_spg(pxrd_csv)
     state["spg_from_filename"] = int(spg_from_filename) if spg_from_filename is not None else None
     formula_override = state.get("formula")
@@ -365,45 +365,24 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
     peak_positions = x1[peaks]
 
     if infer_spg:
-        try:
-            infer_result = infer_spacegroups_from_backend(
-                x1=np.array(x1, dtype=float),
-                y1=np.array(y1, dtype=float),
-                peak_positions=np.array(peak_positions, dtype=float),
-                formula=formula,
-                spg_infer_backend=spg_infer_backend,
-                spg_top_k=spg_top_k,
-                min_abc=min_abc,
-                max_cell_volume=max_cell_volume,
-            )
-            predictions = infer_result.get("predictions") or []
-            if infer_result.get("source"):
-                state["spg_prediction_source"] = infer_result["source"]
-            if infer_result.get("smart_cell_raw_solutions_by_spg"):
-                state["smart_cell_raw_solutions_by_spg"] = infer_result["smart_cell_raw_solutions_by_spg"]
-            if infer_result.get("smart_cell_ranked_spg_cells"):
-                state["smart_cell_ranked_spg_cells"] = infer_result["smart_cell_ranked_spg_cells"]
-
-            if predictions:
-                spg = int(predictions[0][0])
-                state["spg_predictions"] = predictions
-                top_lines = [
-                    f"{idx + 1}. spg={int(pred_spg)} prob={float(prob):.2%}"
-                    for idx, (pred_spg, prob) in enumerate(predictions[:spg_top_k])
-                ]
-                top_text = "\n".join(top_lines)
-                source = state.get("spg_prediction_source", "unknown")
-                if show_spg_predictions:
-                    logger.info(f"Top-{spg_top_k} inferred space groups from PXRD ({source}):\n{top_text}")
-                    print(f"Top-{spg_top_k} inferred space groups from PXRD ({source}):\n{top_text}")
-                logger.info(f"Selected inferred space group: spg={spg}")
-        except Exception as exc:
-            logger.warning(f"Space-group inference failed; using filename/default space group. Reason: {exc}")
-
-    if spg <= 0:
-        raise ValueError(
-            "Cannot infer space group from file name. Use --infer-spg or rename file as PXRD_<formula>_<spg>.csv."
+        infer_result = infer_spacegroups_from_backend(
+            x1=np.array(x1, dtype=float),
+            y1=np.array(y1, dtype=float),
+            peak_positions=np.array(peak_positions, dtype=float),
+            formula=formula,
+            spg_infer_backend=spg_infer_backend,
+            spg_top_k=spg_top_k,
+            min_abc=min_abc,
+            max_cell_volume=max_cell_volume,
         )
+        predictions = infer_result.get("predictions") or []
+        if infer_result.get("source"):
+            state["spg_prediction_source"] = infer_result["source"]
+        if infer_result.get("smart_cell_raw_solutions_by_spg"):
+            state["smart_cell_raw_solutions_by_spg"] = infer_result["smart_cell_raw_solutions_by_spg"]
+        if infer_result.get("smart_cell_ranked_spg_cells"):
+            state["smart_cell_ranked_spg_cells"] = infer_result["smart_cell_ranked_spg_cells"]
+        if predictions: state["spg_predictions"] = predictions
 
     min_volume = float(get_volume_from_density(composition, max(density_max, 1e-6)))
 
@@ -431,7 +410,6 @@ def _run_data_preprocessor_stage(pxrd_csv: str, state: dict) -> dict:
 @lru_cache(maxsize=256)
 def _get_group(spg: int) -> Group:
     return Group(int(spg))
-
 
 def _format_wyckoff_labels_from_ids(spg: int, wp_ids) -> str:
     try:
@@ -565,8 +543,7 @@ def _run_cell_solver_stage(state: dict) -> dict:
     }
 
 
-def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
-    stage_start_time = time.perf_counter()
+def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counter=None) -> str:
     spg = state.get("spg")
     formula = state.get("formula")
     cells = state.get("cells")
@@ -584,8 +561,7 @@ def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
     y1 = np.array(state.get("y1"))
     peaks = np.array(state.get("peaks"))
     forced_wp_solution = state.get("forced_wp_solution")
-    if "forced_wp_solution" in state:
-        state.pop("forced_wp_solution", None)
+    if "forced_wp_solution" in state: state.pop("forced_wp_solution", None)
     min_r2 = state.get("min_r2")
     max_chi2 = state.get("max_chi2")
     max_force = state.get("max_force")
@@ -672,12 +648,12 @@ def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
             f"Boosts={max_local_boosts}, Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
             f"{struc_count} structures")
 
-        if struc_count != len(all_structure_log):
-            logger.error(
-                f"Error: Struc_count ({struc_count}) does not match length of all_structure_log "
-                f"({len(all_structure_log)}). This may indicate a mismatch in structure logging."
-            )
-            import sys; sys.exit(1)
+        #if struc_count != len(all_structure_log):
+        #    logger.error(
+        #        f"Error: Struc_count ({struc_count}) does not match length of all_structure_log "
+        #        f"({len(all_structure_log)}). This may indicate a mismatch in structure logging."
+        #    )
+        #    import sys; sys.exit(1)
 
         wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel, struc_count = search_solution(
             cells[:N1],
@@ -696,7 +672,7 @@ def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
             N1,
             N2,
             N3,
-            struc_count,
+            struc_count if structure_id_counter is None else structure_id_counter,
             max_force,
             max_stress,
             wavelength,
@@ -714,7 +690,6 @@ def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
             max_eng_rel_early_stop=max_eng_rel_early_stop,
             min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
-            #max_structures_total=max_structures_total,
         )
 
         print(f"{struc_count} new structure(s). Total structures: {len(all_structure_log)}.")
@@ -823,18 +798,14 @@ def _run_wyckoff_solver_stage(state: dict, all_structure_log: list) -> str:
 
 def _run_pipeline_fallback(
     state: dict,
-    announce_bug_switch: bool = True,
     status_label: str = "fallback_success",
 ) -> dict:
     pipeline_start_time = time.perf_counter()
     spg_cell_phase_end_time: float | None = None
     structure_phase_start_time: float | None = None
 
-    if announce_bug_switch:
-        logger.info("Detected Strands Gemini streaming bug; switching to deterministic fallback pipeline.")
-    else:
-        logger.info("Using deterministic pipeline execution.")
-    _run_data_preprocessor_stage(state["pxrd_csv"], state)
+    logger.info("Using deterministic pipeline execution.")
+    _run_data_preprocessor(state["pxrd_csv"], state)
 
     def _emit_progress(message: str) -> None:
         # Use the logger to handle both console and file output
@@ -1273,21 +1244,11 @@ def _run_pipeline_fallback(
             # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
             # only for that SPG to avoid redundant work across identical cell dims.
             for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
-                try:
-                    consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg)
-                except Exception as exc:
-                    _emit_progress(f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: Wyckoff enumeration failed ({exc}). Skipping.")
-                    continue
+                consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg)
+                if not consolidated_wp: continue
 
-                if not consolidated_wp:
-                    _emit_progress(f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: no Wyckoff candidates found. Skipping.")
-                    continue
-
-                top_preview = [
-                    f"spg={s[0]} count={s[6]} dof={s[5]}"
-                    for s in consolidated_wp[:3]
-                ]
-                _emit_progress(
+                top_preview = [f"spg={s[0]} count={s[6]} dof={s[5]}" for s in consolidated_wp[:3]]
+                logger.info(
                     f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: {len(consolidated_wp)} WP candidates. Top: {' | '.join(top_preview)}"
                 )
 
@@ -1304,23 +1265,17 @@ def _run_pipeline_fallback(
                         spg_val, _comp, _lat, wp_ids, num_wps, dof, count, Z, orig_spg = sol
                         wp_attempted += 1
 
-                        try:
-                            passed, _metrics, reject_reason = _validate_reused_cell_for_spg(
-                                cell, spg_val, peak_positions_np
-                            )
-                            if not passed:
-                                _emit_progress(
-                                    f"\nPair {rank_idx} rejected for spg={spg_val}: {reject_reason}"
-                                )
-                                continue
-                        except Exception as exc:
+                        passed, _metrics, reject_reason = _validate_reused_cell_for_spg(
+                            cell, spg_val, peak_positions_np
+                        )
+                        if not passed:
                             _emit_progress(
-                                f"\nPair {rank_idx} precheck error for spg={spg_val}: {exc}"
+                                f"\nPair {rank_idx} rejected for spg={spg_val}: {reject_reason}"
                             )
                             continue
 
                         wp_labels_text = _format_wyckoff_labels_from_ids(spg_val, wp_ids)
-                        _emit_progress(
+                        logger.info(
                             f"WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
                             f"n_wps={num_wps}, wyckoff={wp_labels_text}"
                         )
@@ -1332,13 +1287,10 @@ def _run_pipeline_fallback(
                         forced_wp_solution = sol[:8] if len(sol) >= 9 else sol
                         trial_state["forced_wp_solution"] = forced_wp_solution
 
-                        trial_message = _run_wyckoff_solver_stage(trial_state, global_structure_log)
+                        trial_message, _ = _run_wyckoff_solver(trial_state, global_structure_log)
                         # After running, update the main state's Struc_count by accumulating
                         state["Struc_count"] = trial_state.get("Struc_count")
                         trial_result = trial_state.get("wyckoff_result") or {}
-
-                        # Accumulate structure log across all trials for global plot
-                        #global_structure_log.extend(trial_state.get("structure_log") or [])
 
                         trial_score = trial_result.get("score")
                         if trial_score is not None and trial_score > best_trial_score:
@@ -1379,7 +1331,7 @@ def _run_pipeline_fallback(
                             )
                             enough_global_structures = len(global_structure_log) >= max(0, int(state.get("min_structures_before_early_stop", 10)))
                             if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and energy_ok_for_global_early_exit:
-                                _emit_progress(
+                                logger.info(
                                     f"Good solution found early: spg={spg_val}, "
                                     f"R2={trial_result.get('r2', 0):.4f}, "
                                     f"Chi2={trial_result.get('chi2', 0):.4f}, "
@@ -1387,39 +1339,35 @@ def _run_pipeline_fallback(
                                     f"Stopping search after pair {rank_idx}/{len(all_seed_cells)} "
                                     f"and {wp_attempted} WP candidate(s)."
                                 )
-                                if global_structure_log:
-                                    timing_breakdown = _current_timing_breakdown_seconds()
-                                    state["timing_breakdown_seconds"] = timing_breakdown
-                                    formula_str = state.get("formula", "unknown")
-                                    plot_energy_vs_r2(
-                                        global_structure_log,
-                                        formula_str,
-                                        "all",
-                                        f"{state.get('results_dir', 'Results')}/EnergyR2_{formula_str}.png",
-                                        status="Success",
-                                        elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
-                                        timing_breakdown_seconds=timing_breakdown,
-                                    )
+
+                                timing_breakdown = _current_timing_breakdown_seconds()
+                                state["timing_breakdown_seconds"] = timing_breakdown
+                                formula_str = state.get("formula", "unknown")
+                                plot_energy_vs_r2(
+                                    global_structure_log,
+                                    formula_str,
+                                    "all",
+                                    f"{state.get('results_dir', 'Results')}/EnergyR2_{formula_str}.png",
+                                    status="Success",
+                                    elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
+                                    timing_breakdown_seconds=timing_breakdown,
+                                )
                                 state.update(trial_state)
                                 _emit_timing_breakdown()
+
                                 return {
                                     "status": status_label,
                                     "message": trial_message,
                                     "spg": state.get("spg"),
                                     "formula": state.get("formula"),
                                 }
+                            
                             if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and not energy_ok_for_global_early_exit:
-                                if global_eng_rel is not None:
-                                    _emit_progress(
-                                        f"Good refined fit found for spg={spg_val}, but skipping early stop "
-                                        f"because dE_global={global_eng_rel:.4f} exceeds "
-                                        f"{max_eng_rel_early_stop:.4f} eV/atom."
-                                    )
-                                else:
-                                    _emit_progress(
-                                        f"Good refined fit found for spg={spg_val}, but skipping early stop "
-                                        f"because global energy comparison is unavailable."
-                                    )
+                                _emit_progress(
+                                    f"Good refined fit found for spg={spg_val}, but skipping early stop "
+                                    f"because dE_global={global_eng_rel:.4f} exceeds "
+                                    f"{max_eng_rel_early_stop:.4f} eV/atom."
+                                )
 
                             n_structures = len(global_structure_log)
                             _emit_progress(
@@ -1430,9 +1378,7 @@ def _run_pipeline_fallback(
                     prev_limit = limit
 
                 if cell_accepted:
-                    _emit_progress(
-                        f"Pair {rank_idx}: accepted solution found; moving to next ranked pair."
-                    )
+                    _emit_progress(f"Pair {rank_idx}: accepted solution found; moving to next pair.")
 
             # End of all-pairs loop: emit global plot covering every structure tried
             if global_structure_log:
@@ -1460,16 +1406,13 @@ def _run_pipeline_fallback(
                     best_trial_result,
                     prefix="Best accepted inferred-SG solution",
                 )
-                _emit_progress(
-                    f"Completed inferred SG sweep; returning best accepted result from spg={best_trial_state.get('spg')}."
-                )
+                _emit_progress(f"Return best result in spg={best_trial_state.get('spg')}.")
             else:
-                _emit_progress(
-                    f"No inferred space group met acceptance thresholds; returning best fallback result from spg={best_trial_state.get('spg')}."
-                )
+                _emit_progress(f"No acceptance; return best result in spg={best_trial_state.get('spg')}.")
             _emit_progress(f"Best inferred-SG score observed: {best_trial_score:.4f}")
             state.update(best_trial_state)
             accepted_inferred = (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)
+
             if spg_cell_phase_end_time is None:
                 spg_cell_phase_end_time = time.perf_counter()
             if accepted_inferred and structure_phase_start_time is None:
