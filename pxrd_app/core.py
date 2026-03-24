@@ -1361,7 +1361,7 @@ def _run_pipeline_fallback(
                                     "spg": state.get("spg"),
                                     "formula": state.get("formula"),
                                 }
-                            
+
                             if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and not energy_ok_for_global_early_exit:
                                 _emit_progress(
                                     f"Good refined fit found for spg={spg_val}, but skipping early stop "
