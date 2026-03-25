@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 
 from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect_input_csv_files, run_csv_batch
@@ -59,6 +60,8 @@ def main() -> None:
         print(str(exc))
         sys.exit(1)
     try:
+        os.makedirs(args.output + "/cifs", exist_ok=True)
+        os.makedirs(args.output + "/logs", exist_ok=True)
         run_csv_batch(csv_files, args, run_deterministic)
     except RuntimeError as exc:
         print(str(exc))

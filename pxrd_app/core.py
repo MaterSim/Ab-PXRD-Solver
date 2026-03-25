@@ -200,8 +200,9 @@ class _SystemRunLogFilter(logging.Filter):
 def _attach_system_run_log(state: dict) -> logging.Handler | None:
     try:
         results_dir = state.get("results_dir", "Results")
-        os.makedirs(results_dir, exist_ok=True)
-        log_path = _get_system_run_log_path(state)
+        logs_dir = os.path.join(results_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        log_path = os.path.join(logs_dir, os.path.basename(_get_system_run_log_path(state)))
         handler = logging.FileHandler(log_path, mode="a")
         handler.setFormatter(logging.Formatter("%(message)s"))
         # Removed filter so all messages are logged
@@ -578,7 +579,10 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
     max_dof = max(1, int(state.get("max_dof", 10)))
 
     results_dir = state.get("results_dir", "Results")
-    os.makedirs(results_dir, exist_ok=True)
+    cifs_dir = os.path.join(results_dir, "cifs")
+    logs_dir = os.path.join(results_dir, "logs")
+    os.makedirs(cifs_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
     tmp_root = Path("tmp")
     tmp_root.mkdir(parents=True, exist_ok=True)
     run_token = f"{_safe_name_token(Path(str(pxrd_csv or '')).stem)}_{os.getpid()}_{uuid4().hex[:8]}"
@@ -586,10 +590,10 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
 
     title = f'{formula} PXRD Prediction: Space Group {spg}'
-    match_cif = f'{results_dir}/Match_{formula}_{spg}.cif'
+    match_cif = os.path.join(cifs_dir, f'Match_{formula}_{spg}.cif')
     stale_result_cifs = [
-        *Path(results_dir).glob(f"Match_{formula}_{spg}_attempt*.cif"),
-        *Path(results_dir).glob(f"Match_{formula}_{spg}_attempt*_refined.cif"),
+        *Path(cifs_dir).glob(f"Match_{formula}_{spg}_attempt*.cif"),
+        *Path(cifs_dir).glob(f"Match_{formula}_{spg}_attempt*_refined.cif"),
     ]
     for stale_path in stale_result_cifs:
         try:

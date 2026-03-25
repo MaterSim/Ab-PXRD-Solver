@@ -600,8 +600,8 @@ def run_resume(csv_path, args):
     # Try to find the original log in the output dir, supporting both .txt and .log extensions
     log_candidates = []
     for ext in (".txt", ".log"):
-        log_candidates.append(os.path.join(args.output, f"RunLog_{system_stem}{ext}"))
-        log_candidates.append(os.path.join(os.path.dirname(csv_path), f"RunLog_{system_stem}{ext}"))
+        log_candidates.append(os.path.join(args.output, f"logs/RunLog_{system_stem}{ext}"))
+        log_candidates.append(os.path.join(os.path.dirname(csv_path), f"logs/RunLog_{system_stem}{ext}"))
     source_log = None
     for log_path in log_candidates:
         if os.path.isfile(log_path):
@@ -811,6 +811,8 @@ if __name__ == "__main__":
 
     #print(args.success_max_eng_rel); sys.exit(0)
     # Use run_csv_batch for parallel processing if multiple files
+    os.makedirs(args.output + "/cifs", exist_ok=True)
+    os.makedirs(args.output + "/logs", exist_ok=True)
     if len(csv_paths) > 1 and args.workers > 1:
         run_csv_batch([Path(p) for p in csv_paths], args, run_resume)
     else:
