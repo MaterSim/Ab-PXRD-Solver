@@ -656,12 +656,12 @@ def run_resume(csv_path, args):
                 _restore_artifacts(winner_snapshot)
 
             # Enforce early termination as soon as a good outcome is found
-            if _is_good_sampling_outcome(trial_outcome, args) and len(structure_log) >= min_structures:
-                logger.info(
-                    f"Accepted low-dE result found in {trial_outcome.get('label')}; "
-                    "stopping resume search early."
-                )
+            if _is_good_sampling_outcome(trial_outcome, args):
+                logger.info(f"Accepted low-dE result found in {trial_outcome.get('label')}")
                 good_outcome = True
+
+            if good_outcome and len(structure_log) >= min_structures:
+                logger.info(f"stopping resume search early.")
                 break
         if good_outcome:
             break
@@ -809,6 +809,7 @@ if __name__ == "__main__":
                 print(str(exc))
                 sys.exit(1)
 
+    #print(args.success_max_eng_rel); sys.exit(0)
     # Use run_csv_batch for parallel processing if multiple files
     if len(csv_paths) > 1 and args.workers > 1:
         run_csv_batch([Path(p) for p in csv_paths], args, run_resume)
