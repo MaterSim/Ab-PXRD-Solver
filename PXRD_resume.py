@@ -608,6 +608,8 @@ def run_resume(csv_path, args):
         print(f"[ERROR] No RunLog found for {csv_path} (tried: {log_candidates})")
         return
     run_state["source_run_log"] = source_log
+    # Ensure log handler and banner are initialized for resume runs
+    _build_resume_log_handler(run_state)
     parsed_log = _parse_run_log(Path(source_log))
     if not parsed_log.get("pairs"):
         print(f"[ERROR] No Phase 2 candidates found in run log: {source_log}")

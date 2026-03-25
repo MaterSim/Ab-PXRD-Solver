@@ -21,15 +21,21 @@ CRYSTAL_SYSTEM_PRIORITY = {
 
 
 def infer_formula_spg(path: str) -> tuple[str | None, int | None]:
-    tokens = Path(path).stem.split("_")
+    stem = Path(path).stem
+    # Try underscore first
+    tokens = stem.split("_")
     formula_guess, spg_guess = None, None
-    if len(tokens) >= 2:
-        try:
-            spg_guess = int(tokens[-1])
-            formula_guess = "_".join(tokens[1:-1]) if len(tokens) > 2 else None
-        except ValueError:
-            pass
-    return formula_guess, spg_guess
+    if len(tokens) >= 2 and tokens[-1].isdigit():
+        spg_guess = int(tokens[-1])
+        formula_guess = "_".join(tokens[1:-1]) if len(tokens) > 2 else tokens[0] if len(tokens) == 2 else None
+        return formula_guess, spg_guess
+    # Try hyphen as separator
+    tokens = stem.split("-")
+    if len(tokens) >= 2 and tokens[-1].isdigit():
+        spg_guess = int(tokens[-1])
+        formula_guess = "-".join(tokens[:-1]) if len(tokens) > 2 else tokens[0] if len(tokens) == 2 else None
+        return formula_guess, spg_guess
+    return None, None
 
 
 def spg_to_crystal_system(spg: int) -> str | None:
