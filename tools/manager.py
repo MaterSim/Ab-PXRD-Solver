@@ -679,6 +679,7 @@ class WPManager:
 
         # Pair IDs with their multiplicities and indices for unique tracking
         wp_info = list(zip(ids, nums, range(len(ids))))
+        #print(f"WP info (ID, multiplicity, index): {comp}, {ids}, {nums} -> {wp_info}")
 
         # --- Helper function to find all subsets that sum to a target ---
         def find_subsets(target, available_wps, start_index=0, current_subset=[]):
@@ -739,6 +740,8 @@ class WPManager:
         # The backtracking algorithm can produce solutions that are identical in content
         # but were arrived at through different paths (e.g., choosing identical
         # input WPs in a different order). We remove these duplicates here.
+        #print(f"Found {len(solutions)} raw solutions before deduplication.")
+        #print(solutions)
         unique_solutions = []
         seen = set()
         for sol in solutions:
@@ -751,7 +754,7 @@ class WPManager:
 
         return unique_solutions
 
-    def __init__(self, spg, cell, composition, max_wp=8, max_Z=24, max_dof=10,
+    def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10,
                  ref_den=None):
         """
         WP Manager is used to infer likely Wyckoff positions from the given space group,
@@ -863,6 +866,7 @@ class WPManager:
             comp = [n * Z for n in self.comp]
             wp_lists = []
             for _, row in df_z.iterrows():
+                #print(f"Processing row: {row['spg']} {row['wps']} {row['count']}")
                 ids = [int(x) for x in row['wps'].split('-')]
                 count = row['count']
                 nums = [self.group[id].multiplicity for id in ids]
@@ -955,10 +959,15 @@ class XtalManager:
 
 
 if __name__ == "__main__":
-    data = [([9, 3], [2, 2, 2, 2], [3, 3, 3, 3], 1),
-            ([4, 4, 4, 2, 4], [10, 10, 11, 12, 13], [4, 4, 4, 4, 2], 4),
-           ]
-    for d in data:
-        comp, ids, nums, n = d
-        sols = WPManager.find_wp_assignments(comp, ids, nums)
-        print('input: ', d, '\n', sols)
+    #data = [([9, 3], [2, 2, 2, 2], [3, 3, 3, 3], 1),
+    #        ([4, 4, 4, 2, 4], [10, 10, 11, 12, 13], [4, 4, 4, 4, 2], 4),
+    #       ]
+    #for d in data:
+    #    comp, ids, nums, n = d
+    #    sols = WPManager.find_wp_assignments(comp, ids, nums)
+    #    print('input: ', d, '\n', sols)
+    wp = WPManager(164, [6.065, 17.283], {'Al': 13, 'Ba': 7}, max_wp=10, ref_den=(3.24, 4.44))
+    sols = wp.get_wyckoff_positions()
+    for sol in sols:
+        wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
+        print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}")

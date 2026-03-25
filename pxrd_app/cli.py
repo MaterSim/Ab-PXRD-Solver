@@ -24,6 +24,24 @@ COMMON_SYMMETRY_CHOICES = [
 def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
+        "--max-wp",
+        type=int,
+        default=9,
+        help="Maximum number of Wyckoff positions to consider (default: 9).",
+    )
+    parser.add_argument(
+        "--max-dof",
+        type=int,
+        default=10,
+        help="Maximum degrees of freedom for Wyckoff position combinations (default: 10).",
+    )
+    parser.add_argument(
+        "--max-z",
+        type=int,
+        default=24,
+        help="Maximum Z value to consider for volume estimation (default: 24).",
+    )
+    parser.add_argument(
         "--input",
         default="Examples/PXRD_PrYMg2_123.csv",
         help=(
@@ -232,6 +250,9 @@ def build_run_state(
     max_eng_rel: float | None = None,
     max_cell_volume: float | None = None,
     results_dir: str | None = None,
+    max_wp: int | None = None,
+    max_dof: int | None = None,
+    max_Z: int | None = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None:
@@ -278,6 +299,14 @@ def build_run_state(
             logger.warning(f"Ignoring non-positive max_cell_volume={max_cell_volume}; expected > 0.")
     if results_dir is not None:
         run_state["results_dir"] = str(results_dir)
+
+    if max_wp is not None:
+        run_state["max_wp"] = int(max_wp)
+    if max_dof is not None:
+        run_state["max_dof"] = int(max_dof)
+    if max_Z is not None:
+        run_state["max_Z"] = int(max_Z)
+    
     return run_state
 
 
@@ -301,4 +330,7 @@ def build_run_state_from_args(default_state: dict, logger, args: argparse.Namesp
         max_eng_rel=args.max_eng_rel,
         max_cell_volume=args.max_cell_volume,
         results_dir=args.output,
+        max_wp=getattr(args, "max_wp", None),
+        max_dof=getattr(args, "max_dof", None),
+        max_Z=getattr(args, "max_z", None),
     )

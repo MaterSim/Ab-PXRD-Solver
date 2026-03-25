@@ -982,7 +982,8 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             ('cubic-I', 14, 0, [197, 199, 204, 206, 211, 214, 217, 220, 229, 230]),
             ('cubic-P', 13, 0, [195, 198, 200, 201, 205, 207, 208, 212, 213, 215, 218, 221, 222, 223, 224]),
             ('hexagonal-P', 11, 0, [168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
-                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194]),
+                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187,
+                                    188, 189, 190, 191, 192, 193, 194]),
             ('hexagonal-R', 12, 0, [146, 148, 155, 160, 161, 166, 167]),
             ('trigonal-P', 11, 0, [143, 144, 145, 147, 149, 150, 151, 152, 153, 154, 156, 157, 158, 159,
                                     162, 163, 164, 165]),
@@ -1261,7 +1262,7 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
     return True, unmatched
 
 
-def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
+def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None):
     """
     Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
 
@@ -1273,6 +1274,9 @@ def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
         cell_dims: Cell dimensions (e.g., [a, b, c, alpha, beta, gamma])
         spg_list: List of space group integers to enumerate
         composition: Dictionary of element -> count
+        max_wp: Maximum number of Wyckoff positions to consider
+        max_dof: Maximum degrees of freedom to consider
+        max_Z: Maximum atomic number to consider
         ref_den: (density_min, density_max) tuple for density filtering
 
     Returns:
@@ -1283,7 +1287,7 @@ def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
     all_candidates = []
 
     for spg in spg_list:
-        wp_manager = WPManager(spg, cell_dims, composition, max_dof=12, ref_den=ref_den)
+        wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z, max_dof=max_dof, ref_den=ref_den)
         local_sols = wp_manager.get_wyckoff_positions()#; print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}')
 
         # Tag each solution with which SPG it came from
@@ -1455,7 +1459,7 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
 def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
                     match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
-                    INST_FILE, logger, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
+                    INST_FILE, logger, max_wp, max_Z, max_dof, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5,
                     max_local_boosts=1, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=[],
@@ -1489,6 +1493,9 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         min_r2: Minimum R² value for a good fit.
         max_chi2: Maximum chi² value for a good fit.
         logger: Logger for recording results.
+        max_wp: Maximum number of Wyckoff positions to consider.
+        max_Z: Maximum atomic number to consider.
+        max_dof: Maximum degrees of freedom to consider.
 
     Returns:
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
@@ -1543,7 +1550,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
             normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
             ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= N3 else []
         else:
-            wp_manager = WPManager(spg, cell.dims, composition, ref_den=ref_den)
+            wp_manager = WPManager(spg, cell.dims, composition, max_wp, max_Z, max_dof, ref_den=ref_den)
             sols = wp_manager.get_wyckoff_positions()
             ranked_sols = [sol for sol in sols if sol[5] <= N3]
         if len(ranked_sols) == 0:

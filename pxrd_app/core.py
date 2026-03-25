@@ -571,6 +571,9 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     eng_min, sim_max = 1e10, 0.90
+    max_wp = max(1, int(state.get("max_wp", 10)))
+    max_Z = max(1, int(state.get("max_Z", 24)))
+    max_dof = max(1, int(state.get("max_dof", 10)))
 
     results_dir = state.get("results_dir", "Results")
     os.makedirs(results_dir, exist_ok=True)
@@ -680,6 +683,9 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
             SCALED_INTENSITY_TOL,
             INST_FILE,
             logger,
+            max_wp,
+            max_Z,
+            max_dof,
             min_r2,
             max_chi2,
             max_local_boosts=max_local_boosts,
@@ -959,7 +965,7 @@ def _run_pipeline_fallback(
     def _pair_key(cell_obj, spg_value: int) -> tuple:
         return (_canonical_cell_signature(cell_obj), int(spg_value))
 
-    def _get_wp_candidates_for_pair(cell_obj, spg_value: int) -> list:
+    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof) -> list:
         key = _pair_key(cell_obj, spg_value)
         if key in wp_candidate_cache:
             return wp_candidate_cache[key]
@@ -968,6 +974,7 @@ def _run_pipeline_fallback(
                 cell_obj.dims,
                 [spg_value],
                 composition,
+                max_wp, max_Z, max_dof,
                 ref_den=(density_min, density_max),
             )
         except Exception:
@@ -975,12 +982,12 @@ def _run_pipeline_fallback(
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_trial_cost(cell_obj, spg_value: int) -> tuple[int, int]:
+    def _estimate_pair_trial_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int]:
         key = _pair_key(cell_obj, spg_value)
         if key in wp_cost_cache:
             return wp_cost_cache[key]
 
-        candidates = _get_wp_candidates_for_pair(cell_obj, spg_value)
+        candidates = _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof)
         candidate_count = len(candidates)
         top_candidates = candidates[:20]
 
@@ -998,6 +1005,10 @@ def _run_pipeline_fallback(
         return out
 
     predicted_spgs = []
+    max_wp = max(1, int(state.get("max_wp", 10)))
+    max_Z = max(1, int(state.get("max_Z", 24)))
+    max_dof = max(1, int(state.get("max_dof", 10)))
+
     for pred_spg, _prob in state.get("spg_predictions", [])[: int(state.get("spg_top_k", 5))]:
         spg_int = int(pred_spg)
         if spg_int not in predicted_spgs:
@@ -1095,7 +1106,7 @@ def _run_pipeline_fallback(
             for sig, members in grouped_seed_cells.items():
                 enriched_members = []
                 for _vol, _cell, _spg in members:
-                    cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg)
+                    cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg, max_wp, max_Z, max_dof)
                     if cand_count == 0:
                         print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
                         skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
@@ -1248,7 +1259,7 @@ def _run_pipeline_fallback(
             # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
             # only for that SPG to avoid redundant work across identical cell dims.
             for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
-                consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg)
+                consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg, max_wp, max_Z, max_dof)
                 if not consolidated_wp: continue
 
                 top_preview = [f"spg={s[0]} count={s[6]} dof={s[5]}" for s in consolidated_wp[:3]]

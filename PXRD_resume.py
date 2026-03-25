@@ -459,7 +459,11 @@ def _build_resume_trials(parsed_log: dict, state: dict, args: argparse.Namespace
 
     for pair in parsed_log.get("pairs", [])[: max(1, int(args.pair_limit))]:
         cell = _make_cell_from_pair(pair)
-        candidates = enumerate_wyckoff_multi_spg(cell.dims, [int(pair["spg"])], composition, ref_den=ref_den)
+        candidates = enumerate_wyckoff_multi_spg(cell.dims, [int(pair["spg"])], composition,
+                                                 max_wp = state.get("max_wp", 10),
+                                                 max_Z = state.get("max_Z", 24),
+                                                 max_dof = state.get("max_dof", 10),
+                                                 ref_den=ref_den)
         by_signature = {
             _candidate_label_signature(int(pair["spg"]), candidate): candidate
             for candidate in candidates
@@ -639,7 +643,7 @@ def run_resume(csv_path, args):
             structure_log.extend(copy.deepcopy(trial_state.get("structure_log") or []))
             followup_trials.append(trial_outcome)
             combined_plot_log.extend(copy.deepcopy(trial_state.get("structure_log") or []))
-            print(f"=============Debug struc_log {len(structure_log)} {len(combined_plot_log)}")
+            #print(f"=============Debug struc_log {len(structure_log)} {len(combined_plot_log)}")
             if _is_better_outcome(trial_outcome, winner_outcome):
                 winner_state = trial_state
                 winner_outcome = trial_outcome
