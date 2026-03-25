@@ -588,7 +588,6 @@ def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> l
 def run_resume(csv_path, args):
     structure_log = []
     # Build run state
-    id_counter = 0  # Ensure this is defined for all trials in this run
     run_state = build_run_state_from_args(default_state, logger, args, csv_path)
     run_state["pxrd_csv"] = csv_path
     min_structures = max(0, int(run_state.get("min_structures_before_early_stop", 10)))
@@ -718,6 +717,7 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace, s
     return trial_state, outcome
 
 if __name__ == "__main__":
+    from pxrd_app.cli import run_csv_batch, collect_input_csv_files
     parser = build_common_parser("Resume PXRD search from a failed run log")
     parser.add_argument(
         "--summary",
@@ -796,5 +796,9 @@ if __name__ == "__main__":
             print(str(exc))
             sys.exit(1)
 
-    for csv_path in csv_paths:
-        run_resume(csv_path, args)
+    # Use run_csv_batch for parallel processing if multiple files
+    if len(csv_paths) > 1 and args.workers > 1:
+        run_csv_batch([Path(p) for p in csv_paths], args, run_resume)
+    else:
+        for csv_path in csv_paths:
+            run_resume(csv_path, args)
