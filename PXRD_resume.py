@@ -729,7 +729,7 @@ if __name__ == "__main__":
         help="Optional path to Results/summary.csv. When set, all failed systems are resumed.",
     )
     parser.add_argument(
-        "--examples-dir",
+        "--input-dir",
         default="Examples",
         help="Directory used to resolve csv_file_name entries from --summary.",
     )
@@ -789,16 +789,25 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.summary:
-        csv_paths = _resolve_failure_csvs_from_summary(args.summary, args.examples_dir)
+        csv_paths = _resolve_failure_csvs_from_summary(args.summary, args.input_dir)
         if not csv_paths:
             print(f"No failed systems found in summary CSV: {args.summary}")
             sys.exit(1)
     else:
-        try:
-            csv_paths = [str(path) for path in collect_input_csv_files(args.input)]
-        except FileNotFoundError as exc:
-            print(str(exc))
-            sys.exit(1)
+        summary_file = os.path.join(args.output, 'summary.csv')
+        if os.path.isfile(summary_file):
+            print(f"Found summary.csv in output directory; resuming failed systems from that summary.")
+            args.summary = summary_file
+            csv_paths = _resolve_failure_csvs_from_summary(summary_file, args.input_dir)
+            if not csv_paths:
+                print(f"No failed systems found in existing summary CSV: {summary_file}")
+                sys.exit(1)
+        else:
+            try:
+                csv_paths = [str(path) for path in collect_input_csv_files(args.input)]
+            except FileNotFoundError as exc:
+                print(str(exc))
+                sys.exit(1)
 
     # Use run_csv_batch for parallel processing if multiple files
     if len(csv_paths) > 1 and args.workers > 1:

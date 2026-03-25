@@ -253,6 +253,7 @@ def build_run_state(
     max_wp: int | None = None,
     max_dof: int | None = None,
     max_Z: int | None = None,
+    max_sim: float | None = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None:
@@ -306,7 +307,9 @@ def build_run_state(
         run_state["max_dof"] = int(max_dof)
     if max_Z is not None:
         run_state["max_Z"] = int(max_Z)
-    
+    if max_sim is not None:
+        run_state["max_sim"] = float(max_sim)
+
     return run_state
 
 
@@ -333,4 +336,5 @@ def build_run_state_from_args(default_state: dict, logger, args: argparse.Namesp
         max_wp=getattr(args, "max_wp", None),
         max_dof=getattr(args, "max_dof", None),
         max_Z=getattr(args, "max_z", None),
-    )
+        max_sim=getattr(args, "max_sim", None),
+        )

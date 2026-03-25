@@ -1501,6 +1501,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
     # print(f"\n{'='*60}, struc_count={struc_count}, structure_log={len(structure_log)}")
+    # Special case for single-element systems: be more permissive to allow more candidates to be refined and potentially find a good match.
+    if len(composition.keys()) == 1: sim_max = min(sim_max, 0.5)  # be more permissive for single-element systems where sim is less reliable
     eng_best = eng_min
     best_refined_result = None
     best_refined_score = -1e9

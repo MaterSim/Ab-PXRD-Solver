@@ -403,6 +403,7 @@ def _run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
         "wavelength": wavelength,
     }
     state.update(result)
+
     return result
 
 
@@ -570,7 +571,8 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
     perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
-    eng_min, sim_max = 1e10, 0.90
+    sim_max = state.get("sim_max", 0.90)
+    eng_min = 1e10
     max_wp = max(1, int(state.get("max_wp", 10)))
     max_Z = max(1, int(state.get("max_Z", 24)))
     max_dof = max(1, int(state.get("max_dof", 10)))
@@ -1453,7 +1455,7 @@ def _run_pipeline_fallback(
         }
     spg_cell_phase_end_time = time.perf_counter()
     structure_phase_start_time = spg_cell_phase_end_time
-    wyckoff_message = _run_wyckoff_solver_stage(state, global_structure_log)
+    wyckoff_message = _run_wyckoff_solver(state, global_structure_log)
     wyckoff_result = state.get("wyckoff_result") or {}
     accepted = wyckoff_result.get("accepted", False)
     final_status = status_label if accepted else "no_solution"

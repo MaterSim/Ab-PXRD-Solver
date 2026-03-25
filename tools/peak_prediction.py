@@ -1,3 +1,4 @@
+from math import nan
 import sys
 from pathlib import Path
 from functools import lru_cache
@@ -85,6 +86,10 @@ def predict_spacegroup(xrd: Sequence[float], formula: str,
     model = load_model(chkpt, mapping_json, device=device)
 
     predictions = predict_from_array(model, xrd, formula, top_k=top_k, use_normalization = use_normalization)
+    if all(np.isnan(prob) for _, prob in predictions):
+        print("All predictions are NaN.")
+        # handle the error or exit
+        predictions = [(spg, 1.0/top_k) for spg in range(230-top_k, 231)]  # set all probabilities to 0
     return predictions
 
 def _predict_peaks(xrd: np.ndarray) -> np.ndarray:

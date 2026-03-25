@@ -38,6 +38,7 @@ DEFAULT_STATE = {
     "wavelength": 1.54184,
     "min_r2": 0.95,
     "max_chi2": 0.12,
+    "max_sim": 0.9,
     # Structure generation cap
     # Track total number of generated structures
     "Struc_count": 0,
@@ -48,6 +49,10 @@ DEFAULT_STATE = {
     "max_force": 0.5,
     "max_stress": 0.3,
     "max_cells": 10,
+    "max_wp": 10,
+    "max_dof": 3,
+    "max_Z": 24,
+    "max_dof": 10,
     "max_cell_volume": None,
     "cell_solver_max_mismatch": 12,
     "cell_solver_hkl_max": (2, 5, 6),
