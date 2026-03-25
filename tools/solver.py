@@ -981,20 +981,20 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             ('cubic-F', 15, 0, [196, 202, 203, 209, 210, 216, 219, 225, 226, 227, 228]),
             ('cubic-I', 14, 0, [197, 199, 204, 206, 211, 214, 217, 220, 229, 230]),
             ('cubic-P', 13, 0, [195, 198, 200, 201, 205, 207, 208, 212, 213, 215, 218, 221, 222, 223, 224]),
+            ('hexagonal-P', 11, 0, [168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
+                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194]),
             ('hexagonal-R', 12, 0, [146, 148, 155, 160, 161, 166, 167]),
+            ('trigonal-P', 11, 0, [143, 144, 145, 147, 149, 150, 151, 152, 153, 154, 156, 157, 158, 159,
+                                    162, 163, 164, 165]),
             ('tetragonal-I', 10, 0, [79, 80, 82, 87, 88, 97, 98, 107, 108, 109, 110,
                                      119, 120, 121, 122, 139, 140, 141, 142]),
             ('orthorhombic-F', 8, 2, [22, 42, 43, 69, 70]),
             ('orthorhombic-I', 7, 2, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
             ('orthorhombic-C', 6, 2, [20, 21, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
             ('orthorhombic-A', 5, 2, [38, 39, 40, 41]),
-            ('hexagonal-P', 11, 0, [168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
-                                    178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194]),
             ('tetragonal-P', 9, 0, [75, 76, 77, 78, 81, 83, 84, 85, 86, 89, 90, 91, 92, 93, 94, 95, 96, 99,
                             100, 101, 102, 103, 104, 105, 106, 111, 112, 113, 114, 115, 116, 117, 118,
                             123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138]),
-            ('trigonal-P', 11, 0, [143, 144, 145, 147, 149, 150, 151, 152, 153, 154, 156, 157, 158, 159,
-                                    162, 163, 164, 165]),
             ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 33, 34, 47, 48, 49,
                                       50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]),
             ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
@@ -1453,7 +1453,7 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
     }
 
 def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
-                    match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count, 
+                    match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5,
@@ -1512,7 +1512,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         wr, r2, chi2, xtal, _eng_best_at_sel, selected_eng, _selected_eng_rel, count = result
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
         return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count)
-    
+
     def _return_best_available(local_candidate, best_refined_result_energy_ok, struc_count=None):
         if local_candidate is not None:
             if struc_count is not None:
@@ -1650,7 +1650,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                             if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
                                     best_refined_energy_ok_score = refined_score
                                     best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
-                            
+
                             _do_perturb = (
                                 (local_perturbations < max_local_perturbations or is_new_best_energy) and
                                 should_perturb(sim, eng_rel, wr, r2, chi2,
@@ -1712,7 +1712,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                         msg += ' +++++'
                             else:
                                 msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                                msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"    
+                                msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}"
                         else:
                             logger.info("  Refinement failed; continuing search without refined metrics.")
                             msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
