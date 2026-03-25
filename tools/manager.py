@@ -803,6 +803,9 @@ class WPManager:
         self.Zs = (int(np.ceil(volume/vol[1])), int(np.floor(volume/vol[0])))
         if self.Zs[1] > max_Z:
             self.Zs = (self.Zs[0], max_Z)
+        if self.Zs[0] - self.Zs[1] == 1:
+            Z = int(np.round(volume/((vol[0]+vol[1])/2)))
+            self.Zs = (Z, Z)
         # print(f"Estimated Z range: {self.Zs}, Vol: {volume:.2f}, Vol bounds: [{vol[0]:.2f}, {vol[1]:.2f}]")
 
     def get_wyckoff_positions_general(self):

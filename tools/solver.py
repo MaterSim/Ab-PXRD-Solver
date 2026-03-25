@@ -1283,19 +1283,15 @@ def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, ref_den=None):
     all_candidates = []
 
     for spg in spg_list:
-        try:
-            wp_manager = WPManager(spg, cell_dims, composition, max_dof=10, ref_den=ref_den)
-            local_sols = wp_manager.get_wyckoff_positions()
+        wp_manager = WPManager(spg, cell_dims, composition, max_dof=12, ref_den=ref_den)
+        local_sols = wp_manager.get_wyckoff_positions()#; print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}')
 
-            # Tag each solution with which SPG it came from
-            for sol in local_sols:
-                # sol = (spg, comp, lattice, wp_ids, num_wps, dof, count, Z)
-                # Add original SPG as 9th element for reference
-                tagged_sol = sol + (spg,)
-                all_candidates.append(tagged_sol)
-        except Exception as e:
-            # Skip SPGs that fail enumeration
-            continue
+        # Tag each solution with which SPG it came from
+        for sol in local_sols:
+            # sol = (spg, comp, lattice, wp_ids, num_wps, dof, count, Z)
+            # Add original SPG as 9th element for reference
+            tagged_sol = sol + (spg,)
+            all_candidates.append(tagged_sol)
 
     if not all_candidates:
         return []

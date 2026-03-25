@@ -966,7 +966,7 @@ def _run_pipeline_fallback(
         try:
             candidates = enumerate_wyckoff_multi_spg(
                 cell_obj.dims,
-                [int(spg_value)],
+                [spg_value],
                 composition,
                 ref_den=(density_min, density_max),
             )
@@ -996,6 +996,7 @@ def _run_pipeline_fallback(
         out = (candidate_count, est_trials)
         wp_cost_cache[key] = out
         return out
+
     predicted_spgs = []
     for pred_spg, _prob in state.get("spg_predictions", [])[: int(state.get("spg_top_k", 5))]:
         spg_int = int(pred_spg)
@@ -1096,6 +1097,7 @@ def _run_pipeline_fallback(
                 for _vol, _cell, _spg in members:
                     cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg)
                     if cand_count == 0:
+                        print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
                         skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
                         continue
                     enriched_members.append(
@@ -1107,7 +1109,6 @@ def _run_pipeline_fallback(
                             "est_trials": int(est_trials),
                         }
                     )
-
                 if not enriched_members:
                     continue
 
@@ -1159,12 +1160,16 @@ def _run_pipeline_fallback(
                     _chi2_bucket(g["best_chi2"]),
                 )
             )
-
+            if len(planned_groups) == 0:
+                _emit_progress("No viable (cell, SPG) pairs found after cost estimation; cannot proceed to structure generation.")
+                return state
+            print(f"Planned {len(planned_groups)} cell family/families across {len(predicted_spgs)} seed SPG candidates.")
             planned_pairs = [
                 member
                 for group in planned_groups
                 for member in group["members"]
             ]
+
             min_pair_trials = min(int(member["est_trials"]) for member in planned_pairs)
             min_pair_volume = min(float(member["vol"]) for member in planned_pairs)
             for member in planned_pairs:
