@@ -4,7 +4,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 from pathlib import Path
 
-SPG_INFER_BACKENDS = {"model", "smart-cell"}
+SPG_INFER_BACKENDS = {"smart-cell", "model"}
 
 
 COMMON_SPG_TOP_K_CHOICES = [3, 5, 10, 20, 25, 30, 50, 100]
@@ -87,7 +87,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         "--spg-backend",
         type=str,
         choices=sorted(SPG_INFER_BACKENDS),
-        default="model",
+        default="smart-cell",
         help=(
             "Backend for --infer-spg: 'model' uses pretrained SG classifier, "
             "'smart-cell' uses SmartCellSolver to rank likely SGs by high->low symmetry and indexing evidence."
