@@ -731,7 +731,7 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
             f"score={score:.4f}, accepted={candidate['accepted']}{selected_energy_text}"
         )
 
-        if score > state['best_score']:
+        if score > state.get('best_score', -1e9):
             state['best_score'] = score
             state['best_result'] = candidate
 
