@@ -56,7 +56,7 @@ DEFAULT_STATE = {
     "max_abc": 35.0,
     "min_abc": 2.0,
     "max_cell_volume": None,
-    "cell_solver_max_mismatch": 14,
+    "cell_solver_max_mismatch": 14, # should be scaled with the number of peaks later
     "cell_solver_hkl_max": (2, 5, 6),
     "cell_solver_max_square": 28,
     "cell_solver_total_square": 40,
