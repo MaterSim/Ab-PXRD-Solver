@@ -299,7 +299,7 @@ def _get_cell_solver_kwargs(state: dict) -> dict:
         theta_tols = [0.1, 0.15, 0.5]
 
     return {
-        "max_mismatch": max(0, int(state.get("cell_solver_max_mismatch", 12))),
+        "max_mismatch": state["cell_solver_max_mismatch"],
         "hkl_max": hkl_max,
         "max_square": max(1, int(state.get("cell_solver_max_square", 28))),
         "total_square": max(1, int(state.get("cell_solver_total_square", 40))),
@@ -637,8 +637,6 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
             return False
         return bool(r2 >= min_r2 and chi2 <= max_chi2)
 
-    best_result = None
-    best_score = -1e9
     struc_count = state.get("Struc_count") or 0
 
     #logger.info(f"Adaptive Wyckoff solve: {attempts} attempt(s), seed_base={seed_base}")
@@ -653,7 +651,7 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
         attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
         logger.info(
             f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, schedule=(N1={N1}, N2={N2}, N3={N3}), "
-            f"Boosts={max_local_boosts}, Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
+            f"Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
             f"{struc_count} structures")
 
         #if struc_count != len(all_structure_log):
@@ -733,33 +731,32 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
             f"score={score:.4f}, accepted={candidate['accepted']}{selected_energy_text}"
         )
 
-        if score > best_score:
-            best_score = score
-            best_result = candidate
-
+        if score > state['best_score']:
+            state['best_score'] = score
+            state['best_result'] = candidate
 
         # Early stop: excellent solution found
-        if candidate["accepted"] and len(all_structure_log) >= min_structures_before_early_stop and (
-            candidate["r2"] >= max(min_r2 + 0.02, 0.97)
-            or candidate["chi2"] <= min(max_chi2 * 0.7, 0.08)
+        if state['best_result']["accepted"] and len(all_structure_log) >= min_structures_before_early_stop and (
+            state['best_result']["r2"] >= max(min_r2 + 0.02, 0.97)
+            or state['best_result']["chi2"] <= min(max_chi2 * 0.7, 0.08)
         ):
             logger.info(f"Early stop: excellent solution found at attempt {attempt_idx + 1}.")
             break
 
         # Hard cap: exit immediately if min_structures_before_early_stop is reached
-        if len(all_structure_log) >= min_structures_before_early_stop:
-            logger.info(f"Structure cap reached ({len(all_structure_log)}/{min_structures_before_early_stop}); exiting search loop.")
-            break
+        #if len(all_structure_log) >= min_structures_before_early_stop:
+        #    logger.info(f"Structure cap reached ({len(all_structure_log)}/{min_structures_before_early_stop}); exiting search loop.")
+        #    break
 
     state["structure_log"] = all_structure_log
     state["Struc_count"] = struc_count
 
-    if best_result is None:
+    if state['best_result'] is None: #and len(all_structure_log) >= min_structures_before_early_stop:
         logger.info("No satisfactory solution found across all attempts.")
         state["wyckoff_result"] = {
             "spg": spg,
             "accepted": False,
-                "Struc_count": struc_count,
+            "Struc_count": struc_count,
             "wr": None,
             "r2": None,
             "chi2": None,
@@ -774,37 +771,34 @@ def _run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_count
         text += f"Adaptive attempts: {attempts}, seed_base: {seed_base}\n"
         text += f"Best similarity: {sim_max:.3f}, Minimum energy per atom: {eng_min:.3f} eV\n"
         text += "No satisfactory solution found.\n"
-        return text
+        return text, state
 
-    best_result["xtal"].to_file(match_cif)
-
-    wr = best_result["wr"]
-    r2 = best_result["r2"]
-    chi2 = best_result["chi2"]
+    state['best_result']["xtal"].to_file(match_cif)
+    wr = state['best_result']["wr"]
+    r2 = state['best_result']["r2"]
+    chi2 = state['best_result']["chi2"]
     logger.info(f"\nFinal refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}")
-    if os.path.exists(best_result["png"]):
-        logger.info(f"Best refinement plot saved to {best_result['png']}")
+    if os.path.exists(state['best_result']["png"]):
+        logger.info(f"Best refinement plot saved to {state['best_result']['png']}")
     logger.info(f"Best structure saved to {match_cif}")
-    logger.info(
-        f"Selected attempt {best_result['attempt']} (seed={best_result['seed']}, score={best_score:.4f})"
-    )
+    #logger.info(f"Attempt {state['best_result']['attempt']}, score={state['best_score']:.4f}")
     #logger.info(best_result["xtal"])
-    best_result["spg"] = spg
-    best_result["score"] = best_score
-    state["wyckoff_result"] = best_result
-    best_result["Struc_count"] = struc_count
+    state['best_result']["spg"] = spg
+    state['best_result']["score"] = state['best_score']
+    state['best_result']["Struc_count"] = struc_count
+    state["wyckoff_result"] = state['best_result']
 
     text = f"Wyckoff solving completed for formula {formula} in space group {spg}.\n"
     text += f"Adaptive attempts: {attempts}, seed_base: {seed_base}\n"
-    text += f"Best similarity: {sim_max:.3f}, Minimum energy per atom: {best_result['eng_best']:.3f} eV\n"
+    text += f"Best similarity: {sim_max:.3f}, Minimum energy per atom: {state['best_result']['eng_best']:.3f} eV\n"
     text += f"Final Rietveld refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}\n"
-    text += f"Selected attempt: {best_result['attempt']} (seed={best_result['seed']})\n"
-    if not best_result["accepted"]:
-        text += "Best refined candidate did not meet the acceptance thresholds, but was kept as a fallback result.\n"
-    if os.path.exists(best_result["png"]):
-        text += f"Best refinement plot saved to {best_result['png']}\n"
+    text += f"Selected attempt: {state['best_result']['attempt']} \n"
+    if not state['best_result']["accepted"]:
+        text += "Best candidate did not meet the acceptance thresholds, but was kept as a fallback result.\n"
+    if os.path.exists(state['best_result']["png"]):
+        text += f"Best refinement plot saved to {state['best_result']['png']}\n"
     text += f"Best structure saved to {match_cif}\n"
-    return text
+    return text, state
 
 
 def _run_pipeline_fallback(
@@ -893,6 +887,9 @@ def _run_pipeline_fallback(
         _emit_progress(f"CIF={cif_text}, PNG={png_text}")
 
     def _validate_reused_cell_for_spg(cell_obj, spg_value: int, peak_positions: np.ndarray):
+        """
+        QZ: This should be moved to solver....
+        """
         try:
             cell_solver_kwargs = _get_cell_solver_kwargs(state)
             solver = CellSolver(
@@ -921,7 +918,7 @@ def _run_pipeline_fallback(
             return False, None, f"precheck exception ({exc})"
 
     infer_spg = bool(state.get("infer_spg_from_pxrd", False))
-    stop_on_first_accepted_inferred_spg = bool(state.get("stop_on_first_accepted_inferred_spg", True))
+    stop_on_first_inferred_spg = bool(state.get("stop_on_first_inferred_spg", True))
     peak_positions_np = np.array(state.get("peak_positions") or [], dtype=float)
     composition = state.get("composition", {})
     density_min = state.get("density_min", 0.0)
@@ -1114,7 +1111,7 @@ def _run_pipeline_fallback(
                 for _vol, _cell, _spg in members:
                     cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg, max_wp, max_Z, max_dof)
                     if cand_count == 0:
-                        print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
+                        #print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
                         skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
                         continue
                     enriched_members.append(
@@ -1277,6 +1274,9 @@ def _run_pipeline_fallback(
                 prev_limit = 0
                 wp_attempted = 0
                 cell_accepted = False
+                trial_state = copy.deepcopy(state)
+                trial_state["best_score"] = -1e9
+                trial_state["best_result"] = None
 
                 for limit in wp_limits:
                     if wp_attempted >= len(consolidated_wp):
@@ -1301,14 +1301,13 @@ def _run_pipeline_fallback(
                             f"n_wps={num_wps}, wyckoff={wp_labels_text}"
                         )
 
-                        trial_state = copy.deepcopy(state)
                         trial_state["spg"] = spg_val
                         trial_state["cells"] = copy.deepcopy([cell])
                         trial_state["suppress_local_energy_plot"] = True
-                        forced_wp_solution = sol[:8] if len(sol) >= 9 else sol
-                        trial_state["forced_wp_solution"] = forced_wp_solution
+                        trial_state["forced_wp_solution"] = sol[:8] if len(sol) >= 9 else sol
 
-                        trial_message = _run_wyckoff_solver(trial_state, global_structure_log)
+                        trial_message, trial_state = _run_wyckoff_solver(trial_state, global_structure_log)
+
                         # After running, update the main state's Struc_count by accumulating
                         state["Struc_count"] = trial_state.get("Struc_count")
                         trial_result = trial_state.get("wyckoff_result") or {}
@@ -1350,8 +1349,8 @@ def _run_pipeline_fallback(
                             energy_ok_for_global_early_exit = (
                                 global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop
                             )
-                            enough_global_structures = len(global_structure_log) >= max(0, int(state.get("min_structures_before_early_stop", 10)))
-                            if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and energy_ok_for_global_early_exit:
+                            enough_global_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
+                            if stop_on_first_inferred_spg and strict_early_exit and enough_global_structures and energy_ok_for_global_early_exit:
                                 logger.info(
                                     f"Good solution found early: spg={spg_val}, "
                                     f"R2={trial_result.get('r2', 0):.4f}, "
@@ -1383,7 +1382,7 @@ def _run_pipeline_fallback(
                                     "formula": state.get("formula"),
                                 }
 
-                            if stop_on_first_accepted_inferred_spg and strict_early_exit and enough_global_structures and not energy_ok_for_global_early_exit:
+                            if stop_on_first_inferred_spg and strict_early_exit and enough_global_structures and not energy_ok_for_global_early_exit:
                                 _emit_progress(
                                     f"Good refined fit found for spg={spg_val}, but skipping early stop "
                                     f"because dE_global={global_eng_rel:.4f} exceeds "
@@ -1406,13 +1405,13 @@ def _run_pipeline_fallback(
                 timing_breakdown = _current_timing_breakdown_seconds()
                 state["timing_breakdown_seconds"] = timing_breakdown
                 formula_str = state.get("formula", "unknown")
-                global_plot_status = "Success" if (best_trial_state and (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)) else "Failure"
+                status = "Success" if (best_trial_state and (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)) else "Failure"
                 plot_energy_vs_r2(
                     global_structure_log,
                     formula_str,
                     "all",
                     f"{state.get('results_dir', 'Results')}/EnergyR2_{formula_str}.png",
-                    status=global_plot_status,
+                    status=status,
                     elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
                     timing_breakdown_seconds=timing_breakdown,
                 )
@@ -1459,7 +1458,7 @@ def _run_pipeline_fallback(
         }
     spg_cell_phase_end_time = time.perf_counter()
     structure_phase_start_time = spg_cell_phase_end_time
-    wyckoff_message = _run_wyckoff_solver(state, global_structure_log)
+    wyckoff_message, _ = _run_wyckoff_solver(state, global_structure_log)
     wyckoff_result = state.get("wyckoff_result") or {}
     accepted = wyckoff_result.get("accepted", False)
     final_status = status_label if accepted else "no_solution"

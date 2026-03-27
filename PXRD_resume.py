@@ -713,7 +713,7 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace, s
     trial_state["max_eng_rel_early_stop"] = float(args.success_max_eng_rel)
     trial_state["forced_wp_solution"] = trial["candidate"]
     trial_state["suppress_local_energy_plot"] = True
-    message = _run_wyckoff_solver(trial_state, [], len(structure_log))
+    message, trial_state = _run_wyckoff_solver(trial_state, [], len(structure_log))
     wyckoff_result = trial_state.get("wyckoff_result") or {}
     status = f"{trial['label']}_success" if wyckoff_result.get("accepted") else "no_solution"
     outcome = _extract_outcome(trial["label"], trial_state, {"status": status, "message": message})

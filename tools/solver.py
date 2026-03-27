@@ -989,13 +989,13 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                                     162, 163, 164, 165]),
             ('tetragonal-I', 10, 0, [79, 80, 82, 87, 88, 97, 98, 107, 108, 109, 110,
                                      119, 120, 121, 122, 139, 140, 141, 142]),
-            ('orthorhombic-F', 8, 2, [22, 42, 43, 69, 70]),
-            ('orthorhombic-I', 7, 2, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
-            ('orthorhombic-C', 6, 2, [20, 21, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
-            ('orthorhombic-A', 5, 2, [38, 39, 40, 41]),
             ('tetragonal-P', 9, 0, [75, 76, 77, 78, 81, 83, 84, 85, 86, 89, 90, 91, 92, 93, 94, 95, 96, 99,
                             100, 101, 102, 103, 104, 105, 106, 111, 112, 113, 114, 115, 116, 117, 118,
                             123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138]),
+            ('orthorhombic-F', 8, 0, [22, 42, 43, 69, 70]),
+            ('orthorhombic-I', 7, 0, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
+            ('orthorhombic-C', 6, 0, [21, 20, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
+            ('orthorhombic-A', 5, 0, [38, 39, 40, 41]),
             ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 33, 34, 47, 48, 49,
                                       50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]),
             ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
@@ -1004,12 +1004,15 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
         max_volume_cap = None if max_volume is None else float(max_volume)
         min_mismatch = max_mismatch + 1
         solutions = []
-        for (bra_type, bra_index, ideal_mismatch, spgs) in bra_list:
+        for _id, (bra_type, bra_index, ideal_mismatch, spgs) in enumerate(bra_list):
             print(f"Trying {bra_type} ...")
             solver_hkl_max = hkl_max
             solver_max_square = max_square
             solver_total_square = total_square
             solver_max_guess = 50000
+            if bra_index in [5, 6, 7, 8]: # orthorhombic
+                for id in range(_id+1, len(bra_list)-2):
+                    spgs += bra_list[id][-1]
 
             # Runtime guardrails for low-symmetry branches where hkl-guess
             # combinatorics can explode (e.g., monoclinic-C > 1e6 raw guesses).

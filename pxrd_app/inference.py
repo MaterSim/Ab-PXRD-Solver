@@ -5,7 +5,7 @@ import numpy as np
 from tools.peak_prediction import predict_peaks, predict_spacegroup
 from tools.solver import SmartCellSolver
 from tools.XRD import Profile
-
+from pxrd_app.constants import DEFAULT_STATE
 
 SPG_INFER_BACKENDS = {"model", "smart-cell"}
 
@@ -18,6 +18,7 @@ CRYSTAL_SYSTEM_PRIORITY = {
     "monoclinic": 2,
     "triclinic": 1,
 }
+
 
 
 def infer_formula_spg(path: str) -> tuple[str | None, int | None]:
@@ -189,13 +190,13 @@ def infer_spacegroups_from_backend(
         smart_solutions = SmartCellSolver(
             np.array(peak_positions, dtype=float),
             hkl_max=(2, 5, 6),
-            max_mismatch=12,
-            max_chi2=0.2,
-            max_square=28,
-            total_square=40,
+            max_mismatch=DEFAULT_STATE["cell_solver_max_mismatch"],
+            max_chi2=DEFAULT_STATE["cell_solver_max_chi2"],
+            max_square=DEFAULT_STATE["cell_solver_max_square"],
+            total_square=DEFAULT_STATE["cell_solver_total_square"],
             theta_tols=[0.1, 0.15, 0.5],
-            min_abc=min_abc,
-            max_abc=35.0,
+            min_abc=DEFAULT_STATE["min_abc"],
+            max_abc=DEFAULT_STATE["max_abc"],
             min_volume=20.0,
             max_volume=max_cell_volume,
             verbose=False,
