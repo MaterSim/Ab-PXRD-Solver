@@ -42,29 +42,25 @@ def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     return token or fallback
 
 def attach_run_log(state: dict) -> logging.Handler | None:
-    try:
-        results_dir = state.get("results_dir", "Results")
-        logs_dir = os.path.join(results_dir, "logs")
-        os.makedirs(logs_dir, exist_ok=True)
-        log_path = os.path.join(logs_dir, os.path.basename(_get_system_run_log_path(state)))
-        handler = logging.FileHandler(log_path, mode="a")
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        # Removed filter so all messages are logged
-        # Attach to pxrd_agent logger instead of root
-        logger.addHandler(handler)
-        state["system_run_log"] = log_path
-        run_banner = (
-            f"\n{'=' * 80}\n"
-            f"Run started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Input: {state.get('pxrd_csv')}\n"
-            f"{'=' * 80}\n"
-            f"Per-system run log: {log_path}\n"
-        )
-        logger.info(run_banner)
-        return handler
-    except Exception as exc:
-        logger.warning(f"Warning: failed to create per-system run log ({exc}).")
-        return None
+    results_dir = state.get("results_dir", "Results")
+    logs_dir = os.path.join(results_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    log_path = os.path.join(logs_dir, os.path.basename(_get_system_run_log_path(state)))
+    handler = logging.FileHandler(log_path, mode="a")
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    # Removed filter so all messages are logged
+    # Attach to pxrd_agent logger instead of root
+    logger.addHandler(handler)
+    state["system_run_log"] = log_path
+    run_banner = (
+        f"\n{'=' * 80}\n"
+        f"Run started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Input: {state.get('pxrd_csv')}\n"
+        f"{'=' * 80}\n"
+        f"Per-system run log: {log_path}\n"
+    )
+    logger.info(run_banner)
+    return handler
 
 def detach_run_log(handler: logging.Handler | None) -> None:
     if handler is None:
@@ -105,23 +101,21 @@ class StreamToLogger:
 def _get_cell_solver_kwargs(state: dict) -> dict:
     hkl_max_raw = state.get("cell_solver_hkl_max", (2, 5, 6))
     theta_tols_raw = state.get("cell_solver_theta_tols", [0.1, 0.15, 0.5])
-
     hkl_max = tuple(int(x) for x in hkl_max_raw)
     theta_tols = [float(x) for x in theta_tols_raw]
     return {
         "max_mismatch": state["cell_solver_max_mismatch"],
         "hkl_max": hkl_max,
-        "max_square": max(1, int(state.get("cell_solver_max_square", 28))),
-        "total_square": max(1, int(state.get("cell_solver_total_square", 40))),
+        "max_square": state.get("cell_solver_max_square", 28),
+        "total_square": state.get("cell_solver_total_square", 40),
         "theta_tols": theta_tols,
-        "min_abc": max(0.1, float(state.get("min_abc", 2.0))),
-        "max_chi2": max(1e-6, float(state.get("cell_solver_max_chi2", 0.5))),
-        "max_guess": max(100, int(state.get("cell_solver_max_guess", 50000))),
+        "min_abc": state.get("min_abc", 2.0),
+        "max_chi2": state.get("cell_solver_max_chi2", 0.5),
+        "max_guess": state.get("cell_solver_max_guess", 50000),
     }
 
 def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     formula_from_filename, spg_from_filename = infer_formula_spg(pxrd_csv)
-    state["spg_from_filename"] = int(spg_from_filename) if spg_from_filename is not None else None
     formula_override = state.get("formula")
     formula = formula_override if formula_override else formula_from_filename
     if not formula:
@@ -137,7 +131,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     min_abc = state["min_abc"]
     wavelength = state["wavelength"]
     density = predict_density_ensemble(formula, sigma=2.5)
-    density_min, density_max = float(density['min']), float(density['max'])
+    density_min, density_max = density['min'], density['max']
 
     df = pd.read_csv(pxrd_csv, comment='#')
     x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values
@@ -148,7 +142,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     peak_positions = x1[peaks]
 
     if infer_spg:
-        infer_result = infer_spg_from_backend(
+        result = infer_spg_from_backend(
             x1=np.array(x1, dtype=float),
             y1=np.array(y1, dtype=float),
             peak_positions=np.array(peak_positions, dtype=float),
@@ -157,20 +151,20 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
             spg_top_k=spg_top_k,
             max_cell_volume=max_cell_volume,
         )
-        predictions = infer_result.get("predictions") or []
-        if infer_result.get("source"):
-            state["spg_prediction_source"] = infer_result["source"]
-        if infer_result.get("smart_cell_raw_solutions_by_spg"):
-            state["smart_cell_raw_solutions_by_spg"] = infer_result["smart_cell_raw_solutions_by_spg"]
-        if infer_result.get("smart_cell_ranked_spg_cells"):
-            state["smart_cell_ranked_spg_cells"] = infer_result["smart_cell_ranked_spg_cells"]
-        if predictions: state["spg_predictions"] = predictions
+        predictions = result.get("predictions") or []
+        state["spg_predictions"] = [spg for spg, _prob in predictions]
+        if result.get("source"):
+            state["spg_prediction_source"] = result["source"]
+        if result.get("smart_cell_raw_solutions_by_spg"):
+            state["smart_cell_raw_solutions_by_spg"] = result["smart_cell_raw_solutions_by_spg"]
+        if result.get("smart_cell_ranked_spg_cells"):
+            state["smart_cell_ranked_spg_cells"] = result["smart_cell_ranked_spg_cells"]
 
     min_volume = float(get_volume_from_density(composition, max(density_max, 1e-6)))
 
     result = {
         "infer_spg_from_pxrd": infer_spg,
-        "spg": int(spg),
+        "spg": spg,
         "formula": formula,
         "x1": x1.tolist(),
         "y1": y1.tolist(),
@@ -211,99 +205,103 @@ def run_cell_solver(state: dict) -> dict:
                 removed += 1
         return kept, removed
 
-    smart_raw_by_spg = state.get("smart_cell_raw_solutions_by_spg") or {}
-    smart_backend_active = bool(
-        state.get("infer_spg_from_pxrd", False)
-        and str(state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell"
-    )
-    if smart_backend_active and int(spg) in smart_raw_by_spg:
-        raw_solutions = smart_raw_by_spg.get(int(spg), [])
-        if raw_solutions:
-            cells = CellManager.consolidate(raw_solutions, max_solutions=max_cells, merge_tol=0.05)
-            cells, removed_by_volume = _filter_cells_by_max_volume(cells)
-            state["cells"] = cells
-            if not cells:
+    if state['infer_spg_from_pxrd']:
+        smart_raw_by_spg = state["smart_cell_raw_solutions_by_spg"]
+        if spg in smart_raw_by_spg:
+            raw_solutions = smart_raw_by_spg[spg]
+            if raw_solutions:
+                cells = CellManager.consolidate(raw_solutions, max_solutions=max_cells, merge_tol=0.05)
+                cells, removed_by_volume = _filter_cells_by_max_volume(cells)
+                state["cells"] = cells
+                if not cells:
+                    text = (
+                        f"Cell solving found no valid unit cells for formula {formula} in space group {spg} "
+                        f" ({float(max_cell_volume):.2f} Å^3).\n"
+                    )
+                    return {
+                        "status": "no_cells",
+                        "message": text,
+                        "cells": [],
+                    }
                 text = (
-                    f"Cell solving found no valid unit cells for formula {formula} in space group {spg} "
-                    f"after applying max volume filter"
-                    f" ({float(max_cell_volume):.2f} Å^3).\n"
+                    f"Cell solving completed for formula {formula} in space group {spg} "
+                    f"using SmartCellSolver cache.\n"
                 )
+                if removed_by_volume > 0:
+                    text += (
+                        f"Filtered out {removed_by_volume} cell solution(s) with volume > "
+                        f"{float(max_cell_volume):.2f} Å^3.\n"
+                    )
+                #print(spg)
+                #for key in smart_raw_by_spg.keys(): print(key, smart_raw_by_spg[key][0][0])
+                for cell in cells: print("AAAAA", spg, cell.dims, cell.missing)
+                #import sys; sys.exit()
+
                 return {
-                    "status": "no_cells",
+                    "status": "success",
                     "message": text,
-                    "cells": [],
+                    "cells": [{"dimensions": cell.dims, "missing_peaks": cell.missing} for cell in cells],
                 }
-            text = (
-                f"Cell solving completed for formula {formula} in space group {spg} "
-                f"using SmartCellSolver cache.\n"
-            )
-            if removed_by_volume > 0:
-                text += (
-                    f"Filtered out {removed_by_volume} cell solution(s) with volume > "
-                    f"{float(max_cell_volume):.2f} Å^3.\n"
-                )
+        else:
+            raise ValueError(f"SmartCellSolver cannot find SPG {spg}. Exiting.")
+            
+    else:
+        peak_positions_np = np.array(peak_positions)
+        solver = CellSolver(
+            spg,
+            peak_positions_np,
+            max_mismatch=cell_solver_kwargs["max_mismatch"],
+            hkl_max=cell_solver_kwargs["hkl_max"],
+            max_square=cell_solver_kwargs["max_square"],
+            total_square=cell_solver_kwargs["total_square"],
+            theta_tols=cell_solver_kwargs["theta_tols"],
+            min_abc=cell_solver_kwargs["min_abc"],
+            max_chi2=cell_solver_kwargs["max_chi2"],
+            max_guess=cell_solver_kwargs["max_guess"],
+            verbose=False,
+        )
+        solutions = solver.solve()
+        sols = [
+            (spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
+            for sol in solutions
+        ]
+
+        if not sols:
+            state["cells"] = []
+            text = f"Cell solving found no valid unit cells for formula {formula} in space group {spg}.\n"
             return {
-                "status": "success",
+                "status": "no_cells",
                 "message": text,
-                "cells": [{"dimensions": cell.dims, "missing_peaks": cell.missing} for cell in cells],
+                "cells": [],
             }
 
-    peak_positions_np = np.array(peak_positions)
-    solver = CellSolver(
-        spg,
-        peak_positions_np,
-        max_mismatch=cell_solver_kwargs["max_mismatch"],
-        hkl_max=cell_solver_kwargs["hkl_max"],
-        max_square=cell_solver_kwargs["max_square"],
-        total_square=cell_solver_kwargs["total_square"],
-        theta_tols=cell_solver_kwargs["theta_tols"],
-        min_abc=cell_solver_kwargs["min_abc"],
-        max_chi2=cell_solver_kwargs["max_chi2"],
-        max_guess=cell_solver_kwargs["max_guess"],
-        verbose=False,
-    )
-    solutions = solver.solve()
-    sols = [
-        (spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
-        for sol in solutions
-    ]
+        cells = CellManager.consolidate(sols, max_solutions=max_cells, merge_tol=0.05)
+        cells, removed_by_volume = _filter_cells_by_max_volume(cells)
 
-    if not sols:
-        state["cells"] = []
-        text = f"Cell solving found no valid unit cells for formula {formula} in space group {spg}.\n"
+        if not cells:
+            state["cells"] = []
+            text = (
+                f"Cell solving found no valid unit cells for formula {formula} in space group {spg} "
+                f"after applying max volume filter ({float(max_cell_volume):.2f} Å^3).\n"
+            )
+            return {
+                "status": "no_cells",
+                "message": text,
+                "cells": [],
+            }
+
+        state["cells"] = cells
+        text = f"Cell solving completed for formula {formula} in space group {spg}.\n"
+        if removed_by_volume > 0:
+            text += (
+                f"Filtered out {removed_by_volume} cell solution(s) with volume > "
+                f"{float(max_cell_volume):.2f} Å^3.\n"
+            )
         return {
-            "status": "no_cells",
+            "status": "success",
             "message": text,
-            "cells": [],
+            "cells": [{"dimensions": cell.dims, "missing_peaks": cell.missing} for cell in cells],
         }
-
-    cells = CellManager.consolidate(sols, max_solutions=max_cells, merge_tol=0.05)
-    cells, removed_by_volume = _filter_cells_by_max_volume(cells)
-
-    if not cells:
-        state["cells"] = []
-        text = (
-            f"Cell solving found no valid unit cells for formula {formula} in space group {spg} "
-            f"after applying max volume filter ({float(max_cell_volume):.2f} Å^3).\n"
-        )
-        return {
-            "status": "no_cells",
-            "message": text,
-            "cells": [],
-        }
-
-    state["cells"] = cells
-    text = f"Cell solving completed for formula {formula} in space group {spg}.\n"
-    if removed_by_volume > 0:
-        text += (
-            f"Filtered out {removed_by_volume} cell solution(s) with volume > "
-            f"{float(max_cell_volume):.2f} Å^3.\n"
-        )
-    return {
-        "status": "success",
-        "message": text,
-        "cells": [{"dimensions": cell.dims, "missing_peaks": cell.missing} for cell in cells],
-    }
 
 
 def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counter=None) -> str:
@@ -547,12 +545,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
 
 
 def run_pipeline(state: dict) -> dict:
-    pipeline_start_time = time.perf_counter()
-    spg_cell_end_time: float | None = None
-    structure_start_time: float | None = None
-
-    logger.info("Using deterministic pipeline execution.")
-    run_data_preprocessor(state["pxrd_csv"], state)
 
     def _format_elapsed(seconds: float) -> str:
         total_seconds = max(0.0, float(seconds))
@@ -648,13 +640,20 @@ def run_pipeline(state: dict) -> dict:
         }
         return True, metrics, None
 
+    pipeline_start_time = time.perf_counter()
+    spg_cell_end_time: float | None = None
+    structure_start_time: float | None = None
+
+    logger.info("Using deterministic pipeline execution.")
+    run_data_preprocessor(state["pxrd_csv"], state)
+
     infer_spg = state["infer_spg_from_pxrd"]
     peak_positions_np = np.array(state.get("peak_positions") or [], dtype=float)
     composition = state["composition"]
     density_min, density_max = state["density_min"], state["density_max"]
     spg_prediction_rank = {
         int(pred_spg): idx
-        for idx, (pred_spg, _prob) in enumerate(state.get("spg_predictions", []), start=1)
+        for idx, pred_spg in enumerate(state["spg_predictions"], start=1)
     }
 
     def _prediction_rank(spg_value: int) -> int:
@@ -707,7 +706,7 @@ def run_pipeline(state: dict) -> dict:
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_trial_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int]:
+    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int]:
         key = (canonical_cell(cell_obj), spg_value)
         if key in wp_cost_cache: return wp_cost_cache[key]
 
@@ -741,8 +740,7 @@ def run_pipeline(state: dict) -> dict:
             target_system = spg_to_crystal_system(int(filename_spg)) if filename_spg is not None else None
         elif lattice_filter in VALID_LATTICE_SYMMETRIES:
             target_system = lattice_filter
-        else:
-            logger.info(f"Unknown lattice symmetry filter '{lattice_filter}'.")
+
         if predicted_spgs and target_system is not None:
             filtered_spgs = [sg for sg in predicted_spgs if spg_to_crystal_system(sg) == target_system]
             logger.info(
@@ -750,354 +748,356 @@ def run_pipeline(state: dict) -> dict:
                 f"Kept {len(filtered_spgs)}/{len(predicted_spgs)} inferred SG candidates."
             )
             predicted_spgs = filtered_spgs
+            if len(predicted_spgs) == 0:
+                logger.info(f"No SPG candidates after applying lattice symmetry filter '{target_system}'.")
+                return state
     else:
         predicted_spgs = [state["spg"]]
         logger.info(f"No SPG inference. Using provided SPG: {predicted_spgs[0]}")
 
-    if predicted_spgs:
-        best_trial_state = None
-        best_trial_message = None
-        best_trial_score = -1e9
+    best_trial_state = None
+    best_trial_message = None
+    best_trial_score = -1e9
 
-        # key = (seed_spg, dims_sig) — same dims under different SPGs kept separately
-        attempted_cell_keys: set = set()
-        any_seed_had_cells = False
-        global_structure_log: list = []
+    # key = (seed_spg, dims_sig) — same dims under different SPGs kept separately
+    any_seed_had_cells = False
+    attempted_cell_keys: set = set()
+    global_structure_log: list = []
 
-        # ── Phase 1: collect all (cell, spg) pairs from every seed SPG ──────────
-        all_seed_cells: list = []  # (volume, cell, seed_spg)
-        for seed_rank, seed_spg in enumerate(predicted_spgs, start=1):
-            seed_state = copy.deepcopy(state)
-            seed_state["spg"] = seed_spg
-            run_cell_solver(seed_state)
-            seed_cells = seed_state.get("cells") or []
+    # ── Phase 1: collect all (cell, spg) pairs from every seed SPG ──────────
+    all_seed_cells: list = []  # (volume, cell, seed_spg)
+    for seed_rank, seed_spg in enumerate(predicted_spgs, start=1):
+        seed_state = copy.deepcopy(state)
+        seed_state["spg"] = seed_spg
+        run_cell_solver(seed_state)
+        seed_cells = seed_state.get("cells") or []
 
-            if not seed_cells:
-                logger.info(f"Phase 1 — rank {seed_rank:2d}/{len(predicted_spgs)}: spg={seed_spg} | No candidate cells found.")
+        if not seed_cells:
+            logger.info(f"Phase 1 — rank {seed_rank:2d}/{len(predicted_spgs)}: spg={seed_spg} | No candidate cells found.")
+            continue
+
+        # Show volume range of cells found for this SPG
+        volumes = [float(getattr(cell, "size", 0.0)) for cell in seed_cells]
+        vol_min, vol_max = min(volumes), max(volumes)
+        vol_info = (
+            f"vol={vol_min:.1f}–{vol_max:.1f} Å³"
+            if vol_min != vol_max
+            else f"vol={vol_min:.1f} Å³"
+        )
+        logger.info(
+            f"Phase 1 — rank {seed_rank:2d}/{len(predicted_spgs)}: spg={seed_spg} | Found {len(seed_cells)} cell(s): {vol_info}"
+        )
+
+        any_seed_had_cells = True
+        for cell in seed_cells:
+            dims = tuple(round(float(x), 3) for x in np.array(cell.dims).tolist())
+            key = (seed_spg, (len(dims), dims))
+            if key in attempted_cell_keys:
                 continue
+            attempted_cell_keys.add(key)
+            all_seed_cells.append((float(getattr(cell, "size", 0.0)), cell, seed_spg))
 
-            # Show volume range of cells found for this SPG
-            volumes = [float(getattr(cell, "size", 0.0)) for cell in seed_cells]
-            vol_min, vol_max = min(volumes), max(volumes)
-            vol_info = (
-                f"vol={vol_min:.1f}–{vol_max:.1f} Å³"
-                if vol_min != vol_max
-                else f"vol={vol_min:.1f} Å³"
-            )
-            logger.info(
-                f"Phase 1 — rank {seed_rank:2d}/{len(predicted_spgs)}: spg={seed_spg} | Found {len(seed_cells)} cell(s): {vol_info}"
-            )
+    if all_seed_cells:
+        # ── Phase 2: plan ALL (cell, spg) pairs with explicit cost estimates ─
+        # 1. Group permutation-equivalent / near-identical cells into families.
+        # 2. For each (cell, spg), estimate cost by Wyckoff candidate count and
+        #    estimated number of generated trials.
+        # 3. Globally rank every pair by a balanced score that combines
+        #    relative estimated trials and relative cell volume.
+        grouped_seed_cells: dict[tuple, list[tuple[float, object, int]]] = {}
+        for item in all_seed_cells:
+            _vol, _cell, _spg = item
+            sig = canonical_cell(_cell)
+            grouped_seed_cells.setdefault(sig, []).append(item)
 
-            any_seed_had_cells = True
-            for cell in seed_cells:
-                dims = tuple(round(float(x), 3) for x in np.array(cell.dims).tolist())
-                key = (seed_spg, (len(dims), dims))
-                if key in attempted_cell_keys:
+        planned_groups = []
+        skipped_pairs = []
+        for sig, members in grouped_seed_cells.items():
+            enriched_members = []
+            for _vol, _cell, _spg in members:
+                cand_count, est_trials = _estimate_pair_cost(_cell, _spg, max_wp, max_Z, max_dof)
+                if cand_count == 0:
+                    #print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
+                    skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
                     continue
-                attempted_cell_keys.add(key)
-                all_seed_cells.append((float(getattr(cell, "size", 0.0)), cell, seed_spg))
-
-        if all_seed_cells:
-            # ── Phase 2: plan ALL (cell, spg) pairs with explicit cost estimates ─
-            # 1. Group permutation-equivalent / near-identical cells into families.
-            # 2. For each (cell, spg), estimate cost by Wyckoff candidate count and
-            #    estimated number of generated trials.
-            # 3. Globally rank every pair by a balanced score that combines
-            #    relative estimated trials and relative cell volume.
-            grouped_seed_cells: dict[tuple, list[tuple[float, object, int]]] = {}
-            for item in all_seed_cells:
-                _vol, _cell, _spg = item
-                sig = canonical_cell(_cell)
-                grouped_seed_cells.setdefault(sig, []).append(item)
-
-            planned_groups = []
-            skipped_pairs = []
-            for sig, members in grouped_seed_cells.items():
-                enriched_members = []
-                for _vol, _cell, _spg in members:
-                    cand_count, est_trials = _estimate_pair_trial_cost(_cell, _spg, max_wp, max_Z, max_dof)
-                    if cand_count == 0:
-                        #print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
-                        skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
-                        continue
-                    enriched_members.append(
-                        {
-                            "vol": float(_vol),
-                            "cell": _cell,
-                            "spg": int(_spg),
-                            "cand_count": int(cand_count),
-                            "est_trials": int(est_trials),
-                        }
-                    )
-                if not enriched_members: continue
-
-                enriched_members.sort(
-                    key=lambda m: (
-                        m["est_trials"],
-                        round(m["vol"], 1),
-                        m["cand_count"],
-                        _prediction_rank(m["spg"]),
-                        getattr(m["cell"], "missing", 999),
-                        _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
-                        getattr(m["cell"], "chi2", 1e9),
-                        -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
-                        -int(m["spg"]),
-                    )
-                )
-                best_symmetry = max(
-                    CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0)
-                    for m in enriched_members
-                )
-                best_missing = min(getattr(m["cell"], "missing", 999) for m in enriched_members)
-                best_chi2 = min(float(getattr(m["cell"], "chi2", 1e9)) for m in enriched_members)
-                best_pred_rank = min(_prediction_rank(m["spg"]) for m in enriched_members)
-                min_group_volume = min(float(m["vol"]) for m in enriched_members)
-                min_group_trials = min(int(m["est_trials"]) for m in enriched_members)
-                min_group_candidates = min(int(m["cand_count"]) for m in enriched_members)
-                planned_groups.append(
+                enriched_members.append(
                     {
-                        "signature": sig,
-                        "members": enriched_members,
-                        "best_symmetry": best_symmetry,
-                        "best_missing": best_missing,
-                        "best_chi2": best_chi2,
-                        "best_pred_rank": best_pred_rank,
-                        "min_volume": min_group_volume,
-                        "min_trials": min_group_trials,
-                        "min_candidates": min_group_candidates,
+                        "vol": float(_vol),
+                        "cell": _cell,
+                        "spg": int(_spg),
+                        "cand_count": int(cand_count),
+                        "est_trials": int(est_trials),
                     }
                 )
+            if not enriched_members: continue
 
-            planned_groups.sort(
-                key=lambda g: (
-                    g["min_trials"],
-                    round(g["min_volume"], 1),
-                    g["min_candidates"],
-                    -g["best_symmetry"],
-                    g["best_pred_rank"],
-                    g["best_missing"],
-                    _chi2_bucket(g["best_chi2"]),
-                )
-            )
-            if len(planned_groups) == 0:
-                logger.info("No viable (cell, SPG) pairs found; cannot proceed to structure generation.")
-                return state
-            logger.info(f"Planned {len(planned_groups)} cells across {len(predicted_spgs)} seed SPG candidates.")
-            planned_pairs = [
-                member
-                for group in planned_groups
-                for member in group["members"]
-            ]
-
-            min_pair_trials = min(int(member["est_trials"]) for member in planned_pairs)
-            min_pair_volume = min(float(member["vol"]) for member in planned_pairs)
-            for member in planned_pairs:
-                member["balance_score"] = _balanced_pair_priority(
-                    member["est_trials"],
-                    member["vol"],
-                    min_pair_trials,
-                    min_pair_volume,
-                )
-            planned_pairs.sort(
+            enriched_members.sort(
                 key=lambda m: (
-                    m["balance_score"],
                     m["est_trials"],
                     round(m["vol"], 1),
                     m["cand_count"],
-                    -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
                     _prediction_rank(m["spg"]),
                     getattr(m["cell"], "missing", 999),
                     _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
                     getattr(m["cell"], "chi2", 1e9),
+                    -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
                     -int(m["spg"]),
                 )
             )
-
-            all_seed_cells = [
-                (member["vol"], member["cell"], member["spg"])
-                for member in planned_pairs
-            ]
-
-            volumes = [float(item[0]) for item in all_seed_cells]
-            vol_lo = min(volumes)
-            vol_hi = max(volumes)
-            logger.info(
-                f"Phase 2: planned {len(all_seed_cells)} (cell, SPG) pair(s) across "
-                f"{len(planned_groups)} cell family/families. Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
+            best_symmetry = max(
+                CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0)
+                for m in enriched_members
             )
-            logger.info(
-                "Phase 2 strategy: globally rank every (cell, SPG) pair by a balanced "
-                "score combining relative estimated trials and relative volume "
-                "(trial_weight=0.65, volume_weight=0.35), then break ties by "
-                "(fewer estimated trials, smaller volume, fewer candidates), "
-                "then (symmetry, SG prediction rank, missing, chi2)."
+            best_missing = min(getattr(m["cell"], "missing", 999) for m in enriched_members)
+            best_chi2 = min(float(getattr(m["cell"], "chi2", 1e9)) for m in enriched_members)
+            best_pred_rank = min(_prediction_rank(m["spg"]) for m in enriched_members)
+            min_group_volume = min(float(m["vol"]) for m in enriched_members)
+            min_group_trials = min(int(m["est_trials"]) for m in enriched_members)
+            min_group_candidates = min(int(m["cand_count"]) for m in enriched_members)
+            planned_groups.append(
+                {
+                    "signature": sig,
+                    "members": enriched_members,
+                    "best_symmetry": best_symmetry,
+                    "best_missing": best_missing,
+                    "best_chi2": best_chi2,
+                    "best_pred_rank": best_pred_rank,
+                    "min_volume": min_group_volume,
+                    "min_trials": min_group_trials,
+                    "min_candidates": min_group_candidates,
+                }
             )
 
-            # ── Phase 2 summary table ────────────────────────────────────────────
-            logger.info(
-                f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} {'EstTrials':<10} {'BalScore':<9} Dims"
+        planned_groups.sort(
+            key=lambda g: (
+                g["min_trials"],
+                round(g["min_volume"], 1),
+                g["min_candidates"],
+                -g["best_symmetry"],
+                g["best_pred_rank"],
+                g["best_missing"],
+                _chi2_bucket(g["best_chi2"]),
             )
-            logger.info("-" * 104)
-            for _ri, _pair in enumerate(planned_pairs, start=1):
-                _vol = _pair["vol"]
-                _cell = _pair["cell"]
-                _spg = _pair["spg"]
-                _est_trials = _pair["est_trials"]
-                _balance_score = float(_pair.get("balance_score", float("nan")))
-                _dims_str = "  ".join(f"{float(x):8.3f}" for x in _cell.dims)
-                logger.info(
-                    f"{_ri:<5} {_spg:<5} {_vol:<11.1f} "
-                    f"{getattr(_cell, 'chi2', float('nan')):<8.4f} "
-                    f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_balance_score:<9.3f} {_dims_str}"
-                )
-            logger.info("")
+        )
+        if len(planned_groups) == 0:
+            logger.info("No viable (cell, SPG) pairs found; cannot proceed to structure generation.")
+            return state
+        logger.info(f"Planned {len(planned_groups)} cells across {len(predicted_spgs)} seed SPG candidates.")
+        planned_pairs = [
+            member
+            for group in planned_groups
+            for member in group["members"]
+        ]
 
-            # ─ Summary of skipped pairs ─
-            if skipped_pairs:
-                logger.info(
-                    f"Skipped {len(skipped_pairs)} individual (cell, SPG) pair(s) due to zero valid Wyckoff "
-                    f"position(s) in the given Z range.")
+        min_pair_trials = min(int(member["est_trials"]) for member in planned_pairs)
+        min_pair_volume = min(float(member["vol"]) for member in planned_pairs)
+        for member in planned_pairs:
+            member["balance_score"] = _balanced_pair_priority(
+                member["est_trials"],
+                member["vol"],
+                min_pair_trials,
+                min_pair_volume,
+            )
+        planned_pairs.sort(
+            key=lambda m: (
+                m["balance_score"],
+                m["est_trials"],
+                round(m["vol"], 1),
+                m["cand_count"],
+                -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
+                _prediction_rank(m["spg"]),
+                getattr(m["cell"], "missing", 999),
+                _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
+                getattr(m["cell"], "chi2", 1e9),
+                -int(m["spg"]),
+            )
+        )
 
-            spg_cell_end_time = time.perf_counter()
-            structure_start_time = spg_cell_end_time
+        all_seed_cells = [
+            (member["vol"], member["cell"], member["spg"])
+            for member in planned_pairs
+        ]
 
-            # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
-            # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
-            # only for that SPG to avoid redundant work across identical cell dims.
-            terminate_pair = False
-            
-            for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
-                consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg, max_wp, max_Z, max_dof)
-                if not consolidated_wp: continue
+        volumes = [float(item[0]) for item in all_seed_cells]
+        vol_lo = min(volumes)
+        vol_hi = max(volumes)
+        logger.info(
+            f"Phase 2: planned {len(all_seed_cells)} (cell, SPG) pair(s) across "
+            f"{len(planned_groups)} cell family/families. Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
+        )
+        logger.info(
+            "Phase 2 strategy: globally rank every (cell, SPG) pair by a balanced "
+            "score combining relative estimated trials and relative volume "
+            "(trial_weight=0.65, volume_weight=0.35), then break ties by "
+            "(fewer estimated trials, smaller volume, fewer candidates), "
+            "then (symmetry, SG prediction rank, missing, chi2)."
+        )
 
-                top_preview = [f"spg={s[0]} count={s[6]} dof={s[5]}" for s in consolidated_wp[:3]]
-                logger.info(
-                    f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: {len(consolidated_wp)} WP candidates. Top: {' | '.join(top_preview)}"
-                )
+        # ── Phase 2 summary table ────────────────────────────────────────────
+        logger.info(
+            f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} {'EstTrials':<10} {'BalScore':<9} Dims"
+        )
+        logger.info("-" * 104)
+        for _ri, _pair in enumerate(planned_pairs, start=1):
+            _vol = _pair["vol"]
+            _cell = _pair["cell"]
+            _spg = _pair["spg"]
+            _est_trials = _pair["est_trials"]
+            _balance_score = float(_pair.get("balance_score", float("nan")))
+            _dims_str = "  ".join(f"{float(x):8.3f}" for x in _cell.dims)
+            logger.info(
+                f"{_ri:<5} {_spg:<5} {_vol:<11.1f} "
+                f"{getattr(_cell, 'chi2', float('nan')):<8.4f} "
+                f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_balance_score:<9.3f} {_dims_str}"
+            )
+        logger.info("")
 
-                wp_limits = get_adaptive_wp_limits(len(consolidated_wp), 20)
-                prev_limit = 0
-                wp_attempted = 0
-                trial_state = copy.deepcopy(state)
-                trial_state["best_score"] = -1e9
-                trial_state["best_result"] = None
+        # ─ Summary of skipped pairs ─
+        if skipped_pairs:
+            logger.info(
+                f"Skipped {len(skipped_pairs)} individual (cell, SPG) pair(s) due to zero valid Wyckoff "
+                f"position(s) in the given Z range.")
 
-                for limit in wp_limits:
-                    if wp_attempted >= len(consolidated_wp): break
+        spg_cell_end_time = time.perf_counter()
+        structure_start_time = spg_cell_end_time
 
-                    for sol in consolidated_wp[prev_limit:limit]:
-                        spg_val, _comp, _lat, wp_ids, num_wps, dof, count, Z, orig_spg = sol
-                        wp_attempted += 1
+        # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
+        # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
+        # only for that SPG to avoid redundant work across identical cell dims.
+        terminate_pair = False
+        
+        for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
+            consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg, max_wp, max_Z, max_dof)
+            if not consolidated_wp: continue
 
-                        passed, _metrics, reject_reason = _validate_reused_cell_for_spg(
-                            cell, spg_val, peak_positions_np
+            top_preview = [f"spg={s[0]} count={s[6]} dof={s[5]}" for s in consolidated_wp[:3]]
+            logger.info(
+                f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: {len(consolidated_wp)} WP candidates. Top: {' | '.join(top_preview)}"
+            )
+
+            wp_limits = get_adaptive_wp_limits(len(consolidated_wp), 20)
+            prev_limit = 0
+            wp_attempted = 0
+            trial_state = copy.deepcopy(state)
+            trial_state["best_score"] = -1e9
+            trial_state["best_result"] = None
+
+            for limit in wp_limits:
+                if wp_attempted >= len(consolidated_wp): break
+
+                for sol in consolidated_wp[prev_limit:limit]:
+                    spg_val, _comp, _lat, wp_ids, num_wps, dof, count, Z, orig_spg = sol
+                    wp_attempted += 1
+
+                    passed, _metrics, reject_reason = _validate_reused_cell_for_spg(
+                        cell, spg_val, peak_positions_np
+                    )
+                    if not passed:
+                        logger.info(f"\nPair {rank_idx} rejected for spg={spg_val}: {reject_reason}")
+                        continue
+
+                    wp_labels_text = format_wyckoff_labels(spg_val, wp_ids)
+                    logger.info(
+                        f"WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
+                        f"n_wps={num_wps}, wyckoff={wp_labels_text}"
+                    )
+
+                    trial_state["spg"] = spg_val
+                    trial_state["cells"] = copy.deepcopy([cell])
+                    trial_state['wp_labels'] = wp_labels_text
+                    trial_state["forced_wp_solution"] = sol[:8] if len(sol) >= 9 else sol
+
+                    trial_message, trial_state = run_wyckoff_solver(trial_state, global_structure_log)
+
+                    # After running, update the main state's Struc_count by accumulating
+                    state["Struc_count"] = trial_state.get("Struc_count")
+                    trial_result = trial_state.get("wyckoff_result") or {}
+
+                    trial_score = trial_result.get("score")
+                    if trial_score is not None and trial_score > best_trial_score:
+                        best_trial_score = trial_score
+                        best_trial_state = trial_state
+                        best_trial_message = trial_message
+
+                    if trial_result.get("accepted"):
+                        _emit_accepted_solution(spg_val, trial_result)
+                        # For inferred-SPG early exit, require stricter criteria: R² > 0.93 AND χ² < 0.18
+                        r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
+                        strict_early_exit = (
+                            r2_val is not None and chi2_val is not None and
+                            r2_val >= 0.93 and chi2_val < 0.18
                         )
-                        if not passed:
-                            logger.info(f"\nPair {rank_idx} rejected for spg={spg_val}: {reject_reason}")
-                            continue
-
-                        wp_labels_text = format_wyckoff_labels(spg_val, wp_ids)
-                        logger.info(
-                            f"WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
-                            f"n_wps={num_wps}, wyckoff={wp_labels_text}"
-                        )
-
-                        trial_state["spg"] = spg_val
-                        trial_state["cells"] = copy.deepcopy([cell])
-                        trial_state['wp_labels'] = wp_labels_text
-                        trial_state["forced_wp_solution"] = sol[:8] if len(sol) >= 9 else sol
-
-                        trial_message, trial_state = run_wyckoff_solver(trial_state, global_structure_log)
-
-                        # After running, update the main state's Struc_count by accumulating
-                        state["Struc_count"] = trial_state.get("Struc_count")
-                        trial_result = trial_state.get("wyckoff_result") or {}
-
-                        trial_score = trial_result.get("score")
-                        if trial_score is not None and trial_score > best_trial_score:
-                            best_trial_score = trial_score
-                            best_trial_state = trial_state
-                            best_trial_message = trial_message
-
-                        if trial_result.get("accepted"):
-                            _emit_accepted_solution(spg_val, trial_result)
-                            # For inferred-SPG early exit, require stricter criteria: R² > 0.93 AND χ² < 0.18
-                            r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
-                            strict_early_exit = (
-                                r2_val is not None and chi2_val is not None and
-                                r2_val >= 0.93 and chi2_val < 0.18
-                            )
-                            candidate_energy = trial_result.get("selected_energy")
-                            global_energy_values = [
-                                float(entry.get("eng"))
-                                for entry in global_structure_log
-                                if entry.get("eng") is not None
-                            ]
-                            global_best_energy = min(global_energy_values) if global_energy_values else None
-                            global_eng_rel = None
-                            if candidate_energy is not None and global_best_energy is not None:
-                                global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
-                            max_eng_rel_early_stop = max(0.0, float(state.get("max_eng_rel_early_stop") or state.get("max_eng_rel") or 0.20))
-                            energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop)
-                            enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
-                            if strict_early_exit:
-                                if not energy_ok:
+                        candidate_energy = trial_result.get("selected_energy")
+                        global_energy_values = [
+                            float(entry.get("eng"))
+                            for entry in global_structure_log
+                            if entry.get("eng") is not None
+                        ]
+                        global_best_energy = min(global_energy_values) if global_energy_values else None
+                        global_eng_rel = None
+                        if candidate_energy is not None and global_best_energy is not None:
+                            global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
+                        max_eng_rel_early_stop = max(0.0, float(state.get("max_eng_rel_early_stop") or state.get("max_eng_rel") or 0.20))
+                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop)
+                        enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
+                        if strict_early_exit:
+                            if not energy_ok:
+                                logger.info(
+                                    f"Good fit found for spg={spg_val}, but skipping early stop "
+                                    f"because dE_global={global_eng_rel:.4f} exceeds "
+                                    f"{max_eng_rel_early_stop:.4f} eV/atom."
+                                )
+                            else:
+                                if not enough_structures:
                                     logger.info(
                                         f"Good fit found for spg={spg_val}, but skipping early stop "
-                                        f"because dE_global={global_eng_rel:.4f} exceeds "
-                                        f"{max_eng_rel_early_stop:.4f} eV/atom."
+                                        f"because only {len(global_structure_log)} structures have been explored "
                                     )
                                 else:
-                                    if not enough_structures:
-                                        logger.info(
-                                            f"Good fit found for spg={spg_val}, but skipping early stop "
-                                            f"because only {len(global_structure_log)} structures have been explored "
-                                        )
-                                    else:
-                                        logger.info(
-                                            f"Good fit found early: spg={spg_val}, "
-                                            f"R2={trial_result.get('r2', 0):.4f}, "
-                                            f"Chi2={trial_result.get('chi2', 0):.4f}, "
-                                            f"dE_global={global_eng_rel:.4f}. "
-                                        f"Stopping search after pair {rank_idx}/{len(all_seed_cells)} "
-                                        f"and {wp_attempted} WP candidate(s).")
-                                        terminate_pair = True
-                                        break
-                    if terminate_pair: break
-                    prev_limit = limit
+                                    logger.info(
+                                        f"Good fit found early: spg={spg_val}, "
+                                        f"R2={trial_result.get('r2', 0):.4f}, "
+                                        f"Chi2={trial_result.get('chi2', 0):.4f}, "
+                                        f"dE_global={global_eng_rel:.4f}. "
+                                    f"Stopping search after pair {rank_idx}/{len(all_seed_cells)} "
+                                    f"and {wp_attempted} WP candidate(s).")
+                                    terminate_pair = True
+                                    break
                 if terminate_pair: break
+                prev_limit = limit
+            if terminate_pair: break
 
-        timing_breakdown = _timing_breakdown_seconds()
-        if not any_seed_had_cells:
-            logger.info("No inferred SG candidate produced valid cells.")
-            state["msg"] = "No valid cells are found."
-            return state
-        elif best_trial_state is not None:
-            best_trial_result = best_trial_state["best_result"] or {}
-            best_trial_spg = best_trial_state["spg"]
-            status = "Success" if best_trial_result.get("accepted") else "Failure"
+    timing_breakdown = _timing_breakdown_seconds()
+    if not any_seed_had_cells:
+        logger.info("No inferred SG candidate produced valid cells.")
+        state["msg"] = "No valid cells are found."
+        return state
+    elif best_trial_state is not None:
+        best_trial_result = best_trial_state["best_result"] or {}
+        best_trial_spg = best_trial_state["spg"]
+        status = "Success" if best_trial_result.get("accepted") else "Failure"
 
-            # End of all-pairs loop: emit global plot covering every structure tried
-            state["timing_breakdown_seconds"] = timing_breakdown
-            formula_str = state.get("formula", "unknown")
-            results_dir = state.get("results_dir", "Results")
-            output_png = f"{results_dir}/EnergyR2_{formula_str}.png"
-            plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
+        # End of all-pairs loop: emit global plot covering every structure tried
+        state["timing_breakdown_seconds"] = timing_breakdown
+        formula_str = state.get("formula", "unknown")
+        results_dir = state.get("results_dir", "Results")
+        output_png = f"{results_dir}/EnergyR2_{formula_str}.png"
+        plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 
-            if status == "Success":
-                _emit_accepted_solution(best_trial_spg, best_trial_result, 
-                                        prefix="Best accepted solution")
-                logger.info(f"Return best result in spg={best_trial_spg}.")
-            else:
-                logger.info(f"No acceptance; return best result in spg={best_trial_spg}")
-            logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
-            state.update(best_trial_state)
-            state["status"] = status
-            state["msg"] = best_trial_message 
-            return state
+        if status == "Success":
+            _emit_accepted_solution(best_trial_spg, best_trial_result, 
+                                    prefix="Best accepted solution")
+            logger.info(f"Return best result in spg={best_trial_spg}.")
+        else:
+            logger.info(f"No acceptance; return best result in spg={best_trial_spg}")
+        logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
+        state.update(best_trial_state)
+        state["status"] = status
+        state["msg"] = best_trial_message 
+        return state
 
-        wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
-        state["msg"] = wyckoff_message
+    wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
+    state["msg"] = wyckoff_message
     return state
 
 def _get_system_run_log_path(state: dict) -> str:

@@ -542,7 +542,7 @@ def _previous_baseline_outcome(parsed_log: dict, state: dict) -> dict:
         "log_path": state.get("source_run_log"),
     }
 
-def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> list:
+def _resolve_failure_csvs(summary_csv: str, examples_dir: str) -> list:
     failures = []
     with open(summary_csv, newline="") as f:
         reader = csv.DictReader(f)
@@ -706,7 +706,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.summary:
-        csv_paths = _resolve_failure_csvs_from_summary(args.summary, args.input_dir)
+        csv_paths = _resolve_failure_csvs(args.summary, args.input_dir)
         if not csv_paths:
             print(f"No failed systems found in summary CSV: {args.summary}")
             sys.exit(1)
@@ -715,7 +715,7 @@ if __name__ == "__main__":
         if os.path.isfile(summary_file):
             print(f"Found summary.csv in output directory; resuming failed systems from that summary.")
             args.summary = summary_file
-            csv_paths = _resolve_failure_csvs_from_summary(summary_file, args.input_dir)
+            csv_paths = _resolve_failure_csvs(summary_file, args.input_dir)
             if not csv_paths:
                 print(f"No failed systems found in existing summary CSV: {summary_file}")
                 sys.exit(1)
