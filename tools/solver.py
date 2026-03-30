@@ -1265,7 +1265,8 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
     return True, unmatched
 
 
-def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None):
+def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None,
+                       verbose=False):
     """
     Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
 
@@ -1281,6 +1282,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
         max_dof: Maximum degrees of freedom to consider
         max_Z: Maximum atomic number to consider
         ref_den: (density_min, density_max) tuple for density filtering
+        verbose: Whether to print detailed information during enumeration
 
     Returns:
         List of consolidated Wyckoff candidates sorted by global priority:
@@ -1291,7 +1293,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
 
     for spg in spg_list:
         wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z, max_dof=max_dof, ref_den=ref_den)
-        local_sols = wp_manager.get_wyckoff_positions()#; print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}')
+        local_sols = wp_manager.get_wyckoff_positions(verbose)#; print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}')
 
         # Tag each solution with which SPG it came from
         for sol in local_sols:

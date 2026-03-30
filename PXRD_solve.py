@@ -2,34 +2,23 @@ import argparse
 import os
 import sys
 from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv_files, run_csv_batch
-from pxrd_app.runtime import print_result_summary, write_results_csv
+from pxrd_app.runtime import emit_timing_summary, write_results_csv
 from pxrd_app.constants import DEFAULT_STATE as default_state
 from pxrd_app.core import attach_run_log, detach_run_log, run_pipeline, logger
 
 def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
     run_state = build_run_state(default_state, logger, args, csv_path)
     system_log_handler = attach_run_log(run_state)
-    result = None
 
     try:
         print("Starting deterministic PXRD pipeline.")
-        return run_pipeline(run_state, status_label="deterministic_success")
+        run_state = run_pipeline(run_state)
     except KeyboardInterrupt:
         print("Process interrupted by user")
-        return None
     finally:
-        system_log_path = run_state.get("system_run_log")
-        if system_log_path:
-            print(f"Saved consolidated run log to {system_log_path}")
         detach_run_log(system_log_handler)
-        print_result_summary(
-            logger,
-            run_state,
-            result,
-            success_message="Deterministic pipeline completed successfully!",
-            failure_prefix="Deterministic pipeline finished without a solution",
-        )
-        write_results_csv(csv_path, run_state, result.get("status") if isinstance(result, dict) else "unknown")
+        emit_timing_summary(logger, run_state)
+        write_results_csv(csv_path, run_state)
         print("Exiting deterministic main thread")
 
 def _parse_args() -> argparse.Namespace:

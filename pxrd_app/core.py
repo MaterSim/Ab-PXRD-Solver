@@ -127,14 +127,15 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     if not formula:
         raise ValueError("Cannot infer formula. Provide --formula or use PXRD_<formula>_<spg>.csv")
 
-    infer_spg = bool(state.get("infer_spg_from_pxrd", False))
-    spg_top_k = int(state.get("spg_top_k", 25))
-    max_cell_volume = state.get("max_cell_volume")
-    spg_infer_backend = str(state.get("spg_infer_backend", "model") or "model").strip().lower()
+    infer_spg = state["infer_spg_from_pxrd"]
+    spg_top_k = state["spg_top_k"]
+    max_cell_volume = state["max_cell_volume"]
+    spg_infer_backend = state["spg_infer_backend"].strip().lower()
+
     spg = int(spg_from_filename) if spg_from_filename is not None else 0
     composition = parse_formula(formula)
-    min_abc = state.get("min_abc", 2.0)
-    wavelength = state.get("wavelength", 1.5406)
+    min_abc = state["min_abc"]
+    wavelength = state["wavelength"]
     density = predict_density_ensemble(formula, sigma=2.5)
     density_min, density_max = float(density['min']), float(density['max'])
 
@@ -168,6 +169,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     min_volume = float(get_volume_from_density(composition, max(density_max, 1e-6)))
 
     result = {
+        "infer_spg_from_pxrd": infer_spg,
         "spg": int(spg),
         "formula": formula,
         "x1": x1.tolist(),
@@ -544,13 +546,10 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     return text, state
 
 
-def run_pipeline(
-    state: dict,
-    status_label: str = "fallback_success",
-) -> dict:
+def run_pipeline(state: dict) -> dict:
     pipeline_start_time = time.perf_counter()
-    spg_cell_phase_end_time: float | None = None
-    structure_phase_start_time: float | None = None
+    spg_cell_end_time: float | None = None
+    structure_start_time: float | None = None
 
     logger.info("Using deterministic pipeline execution.")
     run_data_preprocessor(state["pxrd_csv"], state)
@@ -565,35 +564,31 @@ def run_pipeline(
             return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
         return f"{total_minutes}m {seconds_remain:04.1f}s"
 
-    def _current_timing_breakdown_seconds() -> dict:
-        nonlocal spg_cell_phase_end_time, structure_phase_start_time
+    def _timing_breakdown_seconds() -> dict:
+        nonlocal spg_cell_end_time, structure_start_time
         now = time.perf_counter()
-        if spg_cell_phase_end_time is None:
+        if spg_cell_end_time is None:
             spg_cell_seconds = now - pipeline_start_time
             structure_seconds = 0.0
         else:
-            spg_cell_seconds = max(0.0, spg_cell_phase_end_time - pipeline_start_time)
-            if structure_phase_start_time is None:
-                structure_seconds = max(0.0, now - spg_cell_phase_end_time)
+            spg_cell_seconds = spg_cell_end_time - pipeline_start_time
+            if structure_start_time is None:
+                structure_seconds = now - spg_cell_end_time
             else:
-                structure_seconds = max(0.0, now - structure_phase_start_time)
-
+                structure_seconds = now - structure_start_time
         total_seconds = spg_cell_seconds + structure_seconds
+        logger.info("Timing breakdown:")
+        logger.info(f"  1) SPG + cell inference: {_format_elapsed(spg_cell_seconds)}")
+        logger.info(f"  2) Structure inference: {_format_elapsed(structure_seconds)}")
+        logger.info(f"  Total: {_format_elapsed(total_seconds)}")
+
         return {
             "spg_and_cell": float(spg_cell_seconds),
             "structure_inference": float(structure_seconds),
             "total": float(total_seconds),
         }
 
-    def _emit_timing_breakdown() -> None:
-        breakdown = _current_timing_breakdown_seconds()
-        state["timing_breakdown_seconds"] = breakdown
-        logger.info("Timing breakdown:")
-        logger.info(f"  1) SPG + cell inference: {_format_elapsed(breakdown['spg_and_cell'])}")
-        logger.info(f"  2) Structure inference: {_format_elapsed(breakdown['structure_inference'])}")
-        logger.info(f"  Total: {_format_elapsed(breakdown['total'])}")
-
-    def _emit_accepted_solution_details(spg_value: int, result: dict, prefix: str = "Accepted solution") -> None:
+    def _emit_accepted_solution(spg_value: int, result: dict, prefix: str = "Accepted solution") -> None:
         wr = result.get("wr")
         r2 = result.get("r2")
         chi2 = result.get("chi2")
@@ -653,11 +648,10 @@ def run_pipeline(
         }
         return True, metrics, None
 
-    infer_spg = bool(state.get("infer_spg_from_pxrd", False))
+    infer_spg = state["infer_spg_from_pxrd"]
     peak_positions_np = np.array(state.get("peak_positions") or [], dtype=float)
-    composition = state.get("composition", {})
-    density_min = state.get("density_min", 0.0)
-    density_max = state.get("density_max", 0.0)
+    composition = state["composition"]
+    density_min, density_max = state["density_min"], state["density_max"]
     spg_prediction_rank = {
         int(pred_spg): idx
         for idx, (pred_spg, _prob) in enumerate(state.get("spg_predictions", []), start=1)
@@ -687,7 +681,7 @@ def run_pipeline(
         volume_ratio = safe_volume / ref_volume
         return float((trial_ratio ** trial_weight) * (volume_ratio ** volume_weight))
 
-    def _canonical_cell_signature(cell_obj) -> tuple:
+    def canonical_cell(cell_obj) -> tuple:
         dims = np.array(getattr(cell_obj, "dims", []), dtype=float)
         if len(dims) == 0:
             return (0, ())
@@ -700,30 +694,22 @@ def run_pipeline(
     wp_candidate_cache: dict[tuple, list] = {}
     wp_cost_cache: dict[tuple, tuple[int, int]] = {}
 
-    def _pair_key(cell_obj, spg_value: int) -> tuple:
-        return (_canonical_cell_signature(cell_obj), int(spg_value))
-
     def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof) -> list:
-        key = _pair_key(cell_obj, spg_value)
-        if key in wp_candidate_cache:
-            return wp_candidate_cache[key]
-        try:
-            candidates = enumerate_wyckoff(
-                cell_obj.dims,
-                [spg_value],
-                composition,
-                max_wp, max_Z, max_dof,
-                ref_den=(density_min, density_max),
-            )
-        except Exception:
-            candidates = []
+        key = (canonical_cell(cell_obj), spg_value)
+        if key in wp_candidate_cache: return wp_candidate_cache[key]
+        candidates = enumerate_wyckoff(
+            cell_obj.dims,
+            [spg_value],
+            composition,
+            max_wp, max_Z, max_dof,
+            ref_den=(density_min, density_max),
+        )
         wp_candidate_cache[key] = candidates
         return candidates
 
     def _estimate_pair_trial_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int]:
-        key = _pair_key(cell_obj, spg_value)
-        if key in wp_cost_cache:
-            return wp_cost_cache[key]
+        key = (canonical_cell(cell_obj), spg_value)
+        if key in wp_cost_cache: return wp_cost_cache[key]
 
         candidates = _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof)
         candidate_count = len(candidates)
@@ -742,44 +728,33 @@ def run_pipeline(
         wp_cost_cache[key] = out
         return out
 
-    predicted_spgs = []
     max_wp = max(1, int(state.get("max_wp", 10)))
     max_Z = max(1, int(state.get("max_Z", 24)))
     max_dof = max(1, int(state.get("max_dof", 10)))
 
-    for pred_spg, _prob in state.get("spg_predictions", [])[: int(state.get("spg_top_k", 5))]:
-        spg_int = int(pred_spg)
-        if spg_int not in predicted_spgs:
-            predicted_spgs.append(spg_int)
-
-    lattice_filter = str(state.get("lattice_symmetry", "auto") or "auto").strip().lower()
-    if lattice_filter == "auto":
-        filename_spg = state.get("spg_from_filename")
-        target_system = spg_to_crystal_system(int(filename_spg)) if filename_spg is not None else None
-    elif lattice_filter == "any":
+    if infer_spg:
+        predicted_spgs = state["spg_predictions"][:state["spg_top_k"]]
+        lattice_filter = str(state.get("lattice_symmetry", "auto") or "auto").strip().lower()
         target_system = None
-    elif lattice_filter in VALID_LATTICE_SYMMETRIES:
-        target_system = lattice_filter
-    else:
-        logger.info(f"Unknown lattice symmetry filter '{lattice_filter}'.")
-        target_system = None
-
-    if predicted_spgs and target_system is not None:
-        filtered_spgs = [sg for sg in predicted_spgs if spg_to_crystal_system(sg) == target_system]
-        if filtered_spgs:
+        if lattice_filter == "auto":
+            filename_spg = state.get("spg_from_filename")
+            target_system = spg_to_crystal_system(int(filename_spg)) if filename_spg is not None else None
+        elif lattice_filter in VALID_LATTICE_SYMMETRIES:
+            target_system = lattice_filter
+        else:
+            logger.info(f"Unknown lattice symmetry filter '{lattice_filter}'.")
+        if predicted_spgs and target_system is not None:
+            filtered_spgs = [sg for sg in predicted_spgs if spg_to_crystal_system(sg) == target_system]
             logger.info(
                 f"Applying lattice symmetry filter: {target_system}. "
                 f"Kept {len(filtered_spgs)}/{len(predicted_spgs)} inferred SG candidates."
             )
             predicted_spgs = filtered_spgs
-        else:
-            logger.info(
-                f"Lattice symmetry filter '{target_system}' removed all inferred SG candidates; "
-                f"falling back to unfiltered candidate list."
-            )
+    else:
+        predicted_spgs = [state["spg"]]
+        logger.info(f"No SPG inference. Using provided SPG: {predicted_spgs[0]}")
 
-    if infer_spg and predicted_spgs:
-        inferred_sweep_start_time = time.perf_counter()
+    if predicted_spgs:
         best_trial_state = None
         best_trial_message = None
         best_trial_score = -1e9
@@ -832,7 +807,7 @@ def run_pipeline(
             grouped_seed_cells: dict[tuple, list[tuple[float, object, int]]] = {}
             for item in all_seed_cells:
                 _vol, _cell, _spg = item
-                sig = _canonical_cell_signature(_cell)
+                sig = canonical_cell(_cell)
                 grouped_seed_cells.setdefault(sig, []).append(item)
 
             planned_groups = []
@@ -981,11 +956,10 @@ def run_pipeline(
             if skipped_pairs:
                 logger.info(
                     f"Skipped {len(skipped_pairs)} individual (cell, SPG) pair(s) due to zero valid Wyckoff "
-                    f"position(s) in the given Z range."
-                )
+                    f"position(s) in the given Z range.")
 
-            spg_cell_phase_end_time = time.perf_counter()
-            structure_phase_start_time = spg_cell_phase_end_time
+            spg_cell_end_time = time.perf_counter()
+            structure_start_time = spg_cell_end_time
 
             # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
             # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
@@ -1046,7 +1020,7 @@ def run_pipeline(
                             best_trial_message = trial_message
 
                         if trial_result.get("accepted"):
-                            _emit_accepted_solution_details(spg_val, trial_result)
+                            _emit_accepted_solution(spg_val, trial_result)
                             # For inferred-SPG early exit, require stricter criteria: R² > 0.93 AND χ² < 0.18
                             r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
                             strict_early_exit = (
@@ -1086,82 +1060,45 @@ def run_pipeline(
                                             f"Chi2={trial_result.get('chi2', 0):.4f}, "
                                             f"dE_global={global_eng_rel:.4f}. "
                                         f"Stopping search after pair {rank_idx}/{len(all_seed_cells)} "
-                                        f"and {wp_attempted} WP candidate(s)."
-                                        )
-                                        state.update(trial_state)
+                                        f"and {wp_attempted} WP candidate(s).")
                                         terminate_pair = True
                                         break
-                    
                     if terminate_pair: break
                     prev_limit = limit
-            
                 if terminate_pair: break
 
+        timing_breakdown = _timing_breakdown_seconds()
         if not any_seed_had_cells:
             logger.info("No inferred SG candidate produced valid cells.")
+            state["msg"] = "No valid cells are found."
+            return state
         elif best_trial_state is not None:
+            best_trial_result = best_trial_state["best_result"] or {}
+            best_trial_spg = best_trial_state["spg"]
+            status = "Success" if best_trial_result.get("accepted") else "Failure"
+
             # End of all-pairs loop: emit global plot covering every structure tried
-            timing_breakdown = _current_timing_breakdown_seconds()
             state["timing_breakdown_seconds"] = timing_breakdown
-            status = "Success" if (best_trial_state and (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)) else "Failure"
             formula_str = state.get("formula", "unknown")
             results_dir = state.get("results_dir", "Results")
-            plot_energy_vs_r2(
-                global_structure_log,
-                best_trial_state,
-                f"{results_dir}/EnergyR2_{formula_str}.png",
-                status=status,
-                elapsed_seconds=time.perf_counter() - inferred_sweep_start_time,
-                timing_breakdown_seconds=timing_breakdown,
-            )
+            output_png = f"{results_dir}/EnergyR2_{formula_str}.png"
+            plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 
-            best_trial_result = best_trial_state.get("wyckoff_result") or {}
-            if best_trial_result.get("accepted"):
-                _emit_accepted_solution_details(best_trial_state["spg"], best_trial_result, 
-                                                prefix="Best accepted inferred-SG solution")
-                logger.info(f"Return best result in spg={best_trial_state.get('spg')}.")
+            if status == "Success":
+                _emit_accepted_solution(best_trial_spg, best_trial_result, 
+                                        prefix="Best accepted solution")
+                logger.info(f"Return best result in spg={best_trial_spg}.")
             else:
-                logger.info(f"No acceptance; return best result in spg={best_trial_state.get('spg')}.")
+                logger.info(f"No acceptance; return best result in spg={best_trial_spg}")
             logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
             state.update(best_trial_state)
-            accepted_inferred = (best_trial_state.get("wyckoff_result") or {}).get("accepted", False)
+            state["status"] = status
+            state["msg"] = best_trial_message 
+            return state
 
-            if spg_cell_phase_end_time is None:
-                spg_cell_phase_end_time = time.perf_counter()
-            if accepted_inferred and structure_phase_start_time is None:
-                structure_phase_start_time = spg_cell_phase_end_time
-            _emit_timing_breakdown()
-            return {
-                "status": status_label if accepted_inferred else "no_solution",
-                "message": best_trial_message,
-                "spg": state.get("spg"),
-                "formula": state.get("formula"),
-            }
-
-    cell_result = run_cell_solver(state)
-    if not state.get("cells"):
-        logger.info("No valid unit cells found. Pipeline did not find a solution.")
-        spg_cell_phase_end_time = time.perf_counter()
-        _emit_timing_breakdown()
-        return {
-            "status": "no_cells",
-            "message": cell_result.get("message", ""),
-            "spg": state.get("spg"),
-            "formula": state.get("formula"),
-        }
-    spg_cell_phase_end_time = time.perf_counter()
-    structure_phase_start_time = spg_cell_phase_end_time
-    wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
-    wyckoff_result = state.get("wyckoff_result") or {}
-    accepted = wyckoff_result.get("accepted", False)
-    final_status = status_label if accepted else "no_solution"
-    _emit_timing_breakdown()
-    return {
-        "status": final_status,
-        "message": wyckoff_message,
-        "spg": state.get("spg"),
-        "formula": state.get("formula"),
-    }
+        wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
+        state["msg"] = wyckoff_message
+    return state
 
 def _get_system_run_log_path(state: dict) -> str:
     pxrd_csv = str(state.get("pxrd_csv") or "")

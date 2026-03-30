@@ -852,7 +852,7 @@ class WPManager:
         #    # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
-    def get_wyckoff_positions(self):
+    def get_wyckoff_positions(self, verbose=True):
         """
         Infer possible Wyckoff position combinations based on the composition and Z range.
         """
@@ -901,7 +901,7 @@ class WPManager:
                         sols.append((self.spg, comp, self.lattice, sol, n_wps, sum(dof), count, Z))
                         #print("Added:", self.spg, tmp_lists[0], [self.group[w].get_label() for wp in sol for w in wp])
             kept_this_z = len(sols) - sols_before_z
-            if kept_this_z > 0:
+            if kept_this_z > 0 and verbose:
                 print(f"Z={Z}: Kept {kept_this_z} Wyckoff position combinations.")
 
         # Sort the solutions by count and DOF

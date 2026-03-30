@@ -270,16 +270,15 @@ def _build_state(
         if backend in SPG_INFER_BACKENDS:
             run_state["spg_infer_backend"] = backend
         else:
-            logger.warning(f"Unsupported spg infer backend '{spg_infer_backend}', using model backend.")
             run_state["spg_infer_backend"] = "model"
     if lattice_symmetry is not None:
         run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
     elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
         run_state["lattice_symmetry"] = "any"
     if max_local_perturbations is not None:
-        run_state["max_local_perturbations"] = max(0, int(max_local_perturbations))
+        run_state["max_local_perturbations"] = max_local_perturbations
     if perturb_displacement is not None:
-        run_state["perturb_displacement"] = max(0.0, float(perturb_displacement))
+        run_state["perturb_displacement"] = perturb_displacement
     if max_eng_rel is not None:
         run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
         run_state["max_eng_rel_early_stop"] = max(0.0, float(max_eng_rel))
@@ -300,6 +299,7 @@ def _build_state(
         run_state["max_Z"] = int(max_Z)
     if max_sim is not None:
         run_state["max_sim"] = float(max_sim)
+    run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
 
     return run_state
 

@@ -60,26 +60,6 @@ def _compact_cell_from_para(para) -> str | None:
     return _format_cell_components([a, b, c, alpha, beta, gamma], decimals=4)
 
 
-def _extract_xtal_cell(xtal) -> str | None:
-    """Return a compact cell-parameter string from a pyxtal object."""
-    if xtal is None:
-        return None
-    try:
-        para = xtal.lattice.get_para()
-        compact = _compact_cell_from_para(para)
-        if compact is not None:
-            return compact
-    except Exception:
-        pass
-    try:
-        encoded = xtal.lattice.encode()
-        if isinstance(encoded, str):
-            return encoded
-    except Exception:
-        pass
-    return None
-
-
 def _extract_xtal_wyckoff(xtal) -> str | None:
     """Return Wyckoff labels as a compact string, e.g. '[6f], [1a]'."""
     if xtal is None:
@@ -116,13 +96,11 @@ def _extract_xtal_wyckoff(xtal) -> str | None:
         return None
 
 
-def write_results_csv(input_csv: str, run_state: dict | None, status: str | None) -> None:
+def write_results_csv(input_csv: str, run_state: dict | None) -> None:
     """Append one summary row to <results_dir>/summary.csv."""
-    run_state = run_state or {}
-
     # --- Status ---
-    is_failure = status in FAILURE_STATUSES or status == "unknown"
-    status_label = "Failure" if is_failure else "Success"
+    status_label = run_state.get("status")
+    print(f"Run status (status_label): {status_label}")
 
     # --- Runtime ---
     timing = run_state.get("timing_breakdown_seconds") or {}
@@ -137,7 +115,7 @@ def write_results_csv(input_csv: str, run_state: dict | None, status: str | None
 
     # --- Best-structure metrics (only on success) ---
     E = dE = R2 = Chi2 = SPG = Wyckoff = Cell = ""
-    if not is_failure:
+    if status_label == "Success":
         wr = run_state.get("wyckoff_result") or {}
         xtal = wr.get("xtal")
         E = _format_scalar(wr.get("selected_energy"), 6)
@@ -146,7 +124,7 @@ def write_results_csv(input_csv: str, run_state: dict | None, status: str | None
         Chi2 = _format_scalar(wr.get("chi2"), 6)
         SPG = str(run_state.get("spg") or wr.get("spg") or "")
         Wyckoff = _extract_xtal_wyckoff(xtal) or ""
-        Cell = _extract_xtal_cell(xtal) or ""
+        Cell = xtal.lattice.encode()
 
     csv_file_name = os.path.basename(input_csv)
 
@@ -155,8 +133,7 @@ def write_results_csv(input_csv: str, run_state: dict | None, status: str | None
     write_header = not results_csv.exists() or results_csv.stat().st_size == 0
     with open(results_csv, "a+", newline="") as fh:
         writer = csv.writer(fh)
-        if write_header:
-            writer.writerow(CSV_COLUMNS)
+        if write_header: writer.writerow(CSV_COLUMNS)
         writer.writerow([
             csv_file_name, runtime_str, n_struc,
             status_label, E, dE, R2, Chi2, SPG, Wyckoff, Cell,
@@ -174,7 +151,8 @@ def format_seconds(seconds: float) -> str:
     return f"{total_minutes}m {seconds_remain:04.1f}s"
 
 
-def build_timing_summary_line(run_state: dict | None) -> str | None:
+def emit_timing_summary(logger, run_state: dict | None) -> str | None:
+    """Log and return a timing summary line for the run_state."""
     timing_breakdown = run_state.get("timing_breakdown_seconds") if isinstance(run_state, dict) else None
     if not isinstance(timing_breakdown, dict):
         return None
@@ -182,36 +160,9 @@ def build_timing_summary_line(run_state: dict | None) -> str | None:
     spg_cell_s = float(timing_breakdown.get("spg_and_cell", 0.0))
     structure_s = float(timing_breakdown.get("structure_inference", 0.0))
     total_s = float(timing_breakdown.get("total", spg_cell_s + structure_s))
-    return (
+    timing_line = (
         f"Timing summary: SPG+Cell={format_seconds(spg_cell_s)} | "
         f"Structure={format_seconds(structure_s)} | Total={format_seconds(total_s)}"
     )
-
-
-def emit_timing_summary(logger, run_state: dict | None) -> str | None:
-    timing_line = build_timing_summary_line(run_state)
-    if timing_line is None:
-        return None
     logger.info(timing_line)
     return timing_line
-
-
-def print_result_summary(
-    logger,
-    run_state: dict | None,
-    result: dict | None,
-    *,
-    success_message: str,
-    failure_prefix: str,
-) -> None:
-    result_status = result.get("status", "") if isinstance(result, dict) else ""
-    emit_timing_summary(logger, run_state)
-
-    if result_status in FAILURE_STATUSES:
-        reason = {
-            "no_cells": "no valid unit cells found",
-            "no_solution": "no accepted structure found",
-        }.get(result_status, result_status)
-        print(f"{failure_prefix} ({reason}).")
-    else:
-        print(success_message)

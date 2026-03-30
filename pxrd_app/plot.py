@@ -7,19 +7,17 @@ def plot_energy_vs_r2(
     structure_log: list,
     best_state: dict,
     output_png: str,
-    status: str = "Failure",
-    elapsed_seconds: float | None = None,
-    timing_breakdown_seconds: dict | None = None,
+    timing_breakdown_seconds: dict,
 ) -> None:
     """
     Scatter plot of energy-per-atom vs R² for every relaxed structure explored.
     Structures that were never refined receive R²=0.
     """
-    formula = structure_log[0].get("formula", "Unknown Formula") if structure_log else "Unknown Formula"
+    formula = best_state.get("formula", "Unknown Formula")
+    status = best_state['best_result'].get("status")
     engs = [e["eng"] for e in structure_log]
     r2s  = [e["r2"]  for e in structure_log]
     mask = [e.get("refined", False) for e in structure_log]
-
     unref = [(e, r) for e, r, m in zip(engs, r2s, mask) if not m]
     ref   = [(e, r) for e, r, m in zip(engs, r2s, mask) if m]
 
@@ -48,52 +46,30 @@ def plot_energy_vs_r2(
     ax1.set_xlabel("Energy per atom (eV)")
     ax1.set_ylabel("R² score  (0 = not refined)")
     ax1.set_ylim(-0.1, 1.1)
-    if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
-        total_seconds = max(0.0, float(timing_breakdown_seconds.get("total", 0.0)))
-    elif elapsed_seconds is not None:
-        total_seconds = max(0.0, float(elapsed_seconds))
-        total_minutes = int(total_seconds // 60)
-        seconds_remain = total_seconds - (60 * total_minutes)
+
+    def _fmt_breakdown(seconds: float) -> str:
+        if seconds is None or seconds <= 0: return "N/A"
+        total_minutes = int(seconds // 60)
+        seconds_remain = seconds - (60 * total_minutes)
         if total_minutes >= 60:
             hours = total_minutes // 60
             minutes = total_minutes % 60
-            time_text = f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-        else:
-            time_text = f"{total_minutes}m {seconds_remain:04.1f}s"
-    else:
-        time_text = "n/a"
-    if timing_breakdown_seconds and "total" in timing_breakdown_seconds:
-        total_minutes = int(total_seconds // 60)
-        seconds_remain = total_seconds - (60 * total_minutes)
-        if total_minutes >= 60:
-            hours = total_minutes // 60
-            minutes = total_minutes % 60
-            time_text = f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-        else:
-            time_text = f"{total_minutes}m {seconds_remain:04.1f}s"
-    breakdown_text = None
-    if timing_breakdown_seconds:
-        spg_cell_seconds = max(0.0, float(timing_breakdown_seconds.get("spg_and_cell", 0.0)))
-        structure_seconds = max(0.0, float(timing_breakdown_seconds.get("structure_inference", 0.0)))
+            return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
+        return f"{total_minutes}m {seconds_remain:04.1f}s"
 
-        def _fmt_breakdown(seconds: float) -> str:
-            total_minutes = int(seconds // 60)
-            seconds_remain = seconds - (60 * total_minutes)
-            if total_minutes >= 60:
-                hours = total_minutes // 60
-                minutes = total_minutes % 60
-                return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-            return f"{total_minutes}m {seconds_remain:04.1f}s"
+    total_seconds = timing_breakdown_seconds.get("total")
+    spg_cell_seconds = timing_breakdown_seconds.get("spg_and_cell")
+    structure_seconds = timing_breakdown_seconds.get("structure_inference")
 
-        breakdown_text = (
-            f"SPG+Cell: {_fmt_breakdown(spg_cell_seconds)} | "
-            f"Structure: {_fmt_breakdown(structure_seconds)}"
-        )
-    ax1.set_title(
-        f"{formula} — Energy vs R²  ({len(structure_log)} structures)  "
-        f"[{status}]  [Time: {time_text}]"
-        + (f"\n[{breakdown_text}]" if breakdown_text else "")
+    time_text = _fmt_breakdown(total_seconds)
+    breakdown_text = (
+        f"SPG+Cell: {_fmt_breakdown(spg_cell_seconds)} | "
+        f"Structure: {_fmt_breakdown(structure_seconds)}"
     )
+    ax1.set_title(
+        f"{formula} ({len(structure_log)} structures)  "
+        f"[{status}]  [Time: {time_text}]"
+        + (f"\n[{breakdown_text}]"))
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 

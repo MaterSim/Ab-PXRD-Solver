@@ -15,18 +15,17 @@ from pxrd_app.runtime import write_results_csv
 from pxrd_app.plot import plot_energy_vs_r2
 from pxrd_app.core import run_data_preprocessor, run_wyckoff_solver, logger
 from tools.manager import CellManager
-from tools.solver import enumerate_wyckoff, score_wp_candidate
 from tools.utils import format_wyckoff_labels
 
 def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
     wyckoff_result = state.get("wyckoff_result") or {}
     structure_log = state.get("structure_log") or []
     refined_entries = [entry for entry in structure_log if entry.get("refined")]
-    best_refined_r2 = max((float(entry.get("r2"), -1.0) for entry in refined_entries), default=None)
-    best_refined_chi2 = min((float(entry.get("chi2"), 1e9) for entry in refined_entries), default=None)
-    min_energy = min((float(entry.get("eng"), 1e9) for entry in structure_log), default=None)
-    selected_energy = float(wyckoff_result.get("selected_energy", 0.0))
-    eng_rel = float(wyckoff_result.get("eng_rel", 0.0))
+    best_refined_r2 = max((entry.get("r2", -1.0) for entry in refined_entries), default=None)
+    best_refined_chi2 = min((entry.get("chi2", 1e9) for entry in refined_entries), default=None)
+    min_energy = min((entry.get("eng", 1e9) for entry in structure_log), default=None)
+    selected_energy = wyckoff_result.get("selected_energy", 0.0)
+    eng_rel = wyckoff_result.get("eng_rel", 0.0)
     if eng_rel is None and selected_energy is not None and min_energy is not None:
         eng_rel = max(0.0, selected_energy - min_energy)
 
@@ -133,15 +132,10 @@ def _parse_trial_line(line: str) -> dict | None:
     if volume_match is not None:
         volume = float(volume_match.group("volume"))
 
-    # Extract perturb, boost, skip_eng_rel if present
+    # Extract perturb, skip_eng_rel if present
     perturb = None
     perturb_match = re.search(r"\[perturb:(?P<idx>\d+)\]", stripped_line)
     if perturb_match is not None: perturb = int(perturb_match.group("idx"))
-
-    boost = None
-    boost_match = re.search(r"\[boost:\+(?P<count>\d+)\]", stripped_line)
-    if boost_match is not None:
-        boost = int(boost_match.group("count"))
 
     skip_eng_rel = None
     skip_match = re.search(r"\[skip:\s*eng_rel=(?P<eng_rel>-?\d+(?:\.\d+)?)\]", stripped_line)
@@ -179,7 +173,6 @@ def _parse_trial_line(line: str) -> dict | None:
         "refined": wr is not None and r2 is not None and chi2 is not None,
         "skip_eng_rel": skip_eng_rel,
         "perturb": perturb,
-        "boost": boost,
         "new_best_energy": "+++++" in stripped_line,
     }
 
@@ -289,6 +282,31 @@ def _parse_run_log(log_path: Path) -> dict:
         else:
             entry["eng_rel"] = max(0.0, float(entry["eng"]) - float(min_energy))
 
+    # Group by (spg, cell dims, wyckoff_labels)
+    grouped = {}
+    for entry in previous_structure_log:
+        spg = entry["spg"]
+        cell = tuple(round(float(x), 5) for x in entry.get("dims", entry.get("cell_dims", entry.get("dimensions", []))))
+        wyckoff = tuple(tuple(str(item) for item in group) for group in entry.get("wp_labels", []))
+        key = (spg, cell, wyckoff)
+        score = float((1.5 * entry.get("r2", 0)) - (0.4 * entry.get("wr", 0)) - (0.2 * entry.get("chi2", 1e9)))
+        if key not in grouped:
+            grouped[key] = {"entry": entry.copy(), "attempts": 1, "score": score}
+        else:
+            grouped[key]["attempts"] += 1
+            # Update best solution if new one is better
+            if score > grouped[key]["score"]:
+                grouped[key]["entry"] = entry.copy()
+                grouped[key]["score"] = score
+    print(f"Parsed {len(previous_structure_log)} previous structures, grouped into {len(grouped)} unique (spg, cell, wyckoff) signatures.")
+    #import sys; sys.exit(0)
+    # Add attempts to each entry
+    deduped_structure_log = []
+    for group in grouped.values():
+        e = group["entry"]
+        e["attempts"] = group["attempts"]
+        deduped_structure_log.append(e)
+
     for pair in pair_rows:
         for wp in pair.get("wp_candidates", []):
             trials = wp.get("trial_entries", [])
@@ -300,10 +318,10 @@ def _parse_run_log(log_path: Path) -> dict:
             wp["best_wr"] = min((float(trial.get("wr", float("inf"))) for trial in refined_trials), default=float("inf"))
             wp["best_r2"] = max((float(trial.get("r2", -1.0)) for trial in refined_trials), default=-1.0)
             wp["best_chi2"] = min((float(trial.get("chi2", float("inf"))) for trial in refined_trials), default=float("inf"))
-            #print(f"Parsed WP candidate: SPG {wp['spg']}, count {wp['count']}, dof {wp['dof']}, wyckoff {wp['wyckoff_labels']}")
     best_previous = None
     best_previous_score = None
-    for entry in previous_structure_log:
+    for group in grouped.values():
+        entry = group["entry"]
         wr = float(entry.get("wr", float("inf")))
         r2 = float(entry.get("r2", -1.0))
         chi2 = float(entry.get("chi2", float("inf")))
@@ -320,11 +338,10 @@ def _parse_run_log(log_path: Path) -> dict:
                 "eng_rel": float(entry.get("eng_rel", 0.0)),
                 "spg": entry["spg"],
             }
-    #import sys; sys.exit(0)
 
     return {
         "pairs": pair_rows,
-        "previous_structure_log": previous_structure_log,
+        "previous_structure_log": deduped_structure_log,
         "previous_best": best_previous,
     }
 
@@ -392,7 +409,6 @@ def _resume_rank_key(trial: dict) -> tuple:
     best_sim = float(observed.get("best_sim", -1.0))
     pair_rank = int(pair.get("rank", 10**6))
     bal_score = float(pair.get("bal_score", float("inf")))
-    candidate_score = score_wp_candidate(trial["candidate"], max_dof=int(trial["candidate"][5]))
     return (
         1 if refined_count > 0 else 0,
         best_r2,
@@ -401,7 +417,6 @@ def _resume_rank_key(trial: dict) -> tuple:
         best_sim,
         -pair_rank,
         -bal_score if bal_score != float("inf") else -1e9,
-        candidate_score,
     )
 
 def _resume_attempt_schedule(attempt_idx: int) -> tuple[int, int, int]:
@@ -414,40 +429,12 @@ def _resume_attempt_schedule(attempt_idx: int) -> tuple[int, int, int]:
         return schedules[attempt_idx]
     return schedules[-1]
 
-def _estimate_structures_for_candidate(candidate, attempts: int, max_local_boosts: int) -> dict:
-    dof = int(candidate[5])
-    base_trials_per_attempt: list[int] = []
-    max_trials_per_attempt: list[int] = []
-
-    for attempt_idx in range(max(1, int(attempts))):
-        _n1, _n2, n3 = _resume_attempt_schedule(attempt_idx)
-        if dof > int(n3):
-            base_trials_per_attempt.append(0)
-            max_trials_per_attempt.append(0)
-            continue
-
-        n4 = (dof * 3) if dof != 1 else 4
-        base_trials = n4 + 1
-        added_trials = max(2, min(6, (n4 // 2) if n4 > 1 else 2))
-        max_trials = base_trials + (max(0, int(max_local_boosts)) * added_trials)
-        base_trials_per_attempt.append(base_trials)
-        max_trials_per_attempt.append(max_trials)
-
-    return {
-        "dof": dof,
-        "base_per_attempt": base_trials_per_attempt,
-        "max_per_attempt": max_trials_per_attempt,
-        "base_total": sum(base_trials_per_attempt),
-        "max_total": sum(max_trials_per_attempt),
-    }
-
 def _emit_resume_strategy(ranked_trials: list[dict], args: argparse.Namespace) -> None:
     print("Resume strategy: rank the queue by prior evidence from the log in this order:")
     print("refined count -> best R2 -> best chi2 -> best energy -> best similarity -> original Phase 2 priority")
     print(
         f"Resume strategy: {len(ranked_trials)} queued SPG/CELL/Wyckoff trial(s), "
-        f"resume_attempts={int(args.resume_attempts)}, local_boosts={int(args.resume_local_boosts)}, "
-        f"local_perturbations={int(args.resume_local_perturbations)}"
+        f"resume_attempts={args.resume_attempts}, "
     )
     print(
         f"{'Q':<3} {'SPG':<5} {'Pair':<5} {'WP':<6} {'DOF':<4} {'PrevRef':<7} {'BestR2':<8} "
@@ -455,79 +442,65 @@ def _emit_resume_strategy(ranked_trials: list[dict], args: argparse.Namespace) -
     )
     print("-" * 160)
     for queue_idx, trial in enumerate(ranked_trials, start=1):
-        observed = trial.get("observed") or {}
+        observed = trial.get("observed")
+
         pair = trial.get("pair") or {}
-        est = trial.get("estimated_structures") or {}
         dims = " ".join(f"{float(value):.3f}" for value in trial["cell"].dims)
         # Use Wyckoff labels from the log if available, else from candidate
-        wp_labels = None
-        if pair and "wp_candidates" in pair and trial.get("wp_index") is not None:
-            for wp in pair["wp_candidates"]:
-                if wp.get("wp_index") == trial["wp_index"]:
-                    wp_labels = wp.get("wyckoff_labels")
-                    break
-        if wp_labels is None:
-            wp_labels = ast.literal_eval(format_wyckoff_labels(int(trial["candidate"][0]), trial["candidate"][3]))
+        wp_labels = trial.get("wyckoff_labels")
         best_r2 = float(observed.get("best_r2", None))
         best_chi2 = float(observed.get("best_chi2", None))
         best_eng = float(observed.get("best_eng", None))
         best_sim = float(observed.get("best_sim", None))
         wp_index = trial.get('wp_index') or 0
-        try:
-            wp_index_int = int(wp_index)
-        except (ValueError, TypeError):
-            wp_index_int = 0  # or another default/fallback value
+
         logger.info(
-            f"{queue_idx:<3} {int(pair.get('spg') or trial['candidate'][0]):<5} "
-            f"{int(pair.get('rank') or 0):<5} {wp_index_int:<6} "
-            f"{int(est.get('dof') or trial['candidate'][5]):<4} {int(observed.get('refined_count') or 0):<7} "
+            f"{queue_idx:<3} {pair.get('spg'):<5} "
+            f"{pair['rank']:<5} {wp_index:<6} "
+            f"{trial['dof']:<4} {int(observed.get('refined_count') or 0):<7} "
             f"{(f'{best_r2:.3f}' if best_r2 is not None and best_r2 > -1 else 'n/a'):<8} "
             f"{(f'{best_chi2:.3f}' if best_chi2 is not None and best_chi2 < float('inf') else 'n/a'):<9} "
             f"{(f'{best_eng:.3f}' if best_eng is not None and best_eng < float('inf') else 'n/a'):<8} "
             f"{(f'{best_sim:.3f}' if best_sim is not None and best_sim > -1 else 'n/a'):<8} "
-            f"{int(est.get('base_total') or 0):<7} {int(est.get('max_total') or 0):<7} "
+            f"{int(observed.get('base_total') or 0):<7} {int(observed.get('max_total') or 0):<7} "
             f"{dims} | {wp_labels}"
         )
 
-def _build_resume_trials(parsed_log: dict, state: dict, args: argparse.Namespace) -> list[dict]:
-    composition = state.get("composition") or {}
-    ref_den = (state.get("density_min", 0.0), state.get("density_max", 0.0))
+def _build_resume_trials(parsed_log) -> list[dict]:
+    visited = []
     ranked_trials: list[dict] = []
-
-    for pair in parsed_log.get("pairs", [])[: max(1, int(args.pair_limit))]:
+    for pair in parsed_log.get("pairs", []):
         cell = _make_cell_from_pair(pair)
-        candidates = enumerate_wyckoff(cell.dims, [int(pair["spg"])], composition,
-                                       max_wp = state.get("max_wp", 10),
-                                       max_Z = state.get("max_Z", 24),
-                                       max_dof = state.get("max_dof", 10),
-                                       ref_den=ref_den)
-        by_signature = {
-            _candidate_label_signature(int(pair["spg"]), candidate): candidate
-            for candidate in candidates
-        }
-        used_signatures: set = set()
-
+        cell_str = f"{' '.join(f'{float(x):.3f}' for x in cell.dims)}"
         # Logged candidates
-        for wp in pair.get("wp_candidates", []):
-            signature = _logged_label_signature(wp)
-            candidate = by_signature.get(signature)
-            if candidate is None: continue
-            used_signatures.add(signature)
-            candidate8 = candidate[:8] if len(candidate) > 8 else candidate
-            est = _estimate_structures_for_candidate(
-                candidate8,
-                attempts=int(args.resume_attempts),
-                max_local_boosts=int(args.resume_local_boosts),
-            )
-            ranked_trials.append(
+        for wp in pair["wp_candidates"]:
+            spg, wyckoff_labels = (pair["spg"], wp.get("wyckoff_labels"))
+            entry = (spg, cell_str, wyckoff_labels)
+            if entry in visited:
+                # update existing entry with any new trial data if available
+                for existing in ranked_trials:
+                    if existing['spg'] == spg and existing['cell_str'] == cell_str and existing['wyckoff_labels'] == wyckoff_labels:
+                        existing["observed"]["trial_count"] += wp.get("trial_count")
+                        existing["observed"]["refined_count"] += wp.get("refined_count")
+                        existing["observed"]["best_r2"] = max(existing["observed"]["best_r2"], wp["best_r2"])
+                        existing["observed"]["best_chi2"] = min(existing["observed"]["best_chi2"], wp["best_chi2"])
+                        existing["observed"]["best_eng"] = min(existing["observed"]["best_eng"], wp["best_eng"])
+                        existing["observed"]["best_sim"] = max(existing["observed"]["best_sim"], wp["best_sim"])
+                        break
+                continue
+            else:
+                visited.append(entry)
+                ranked_trials.append(
                 {
+                    "spg": spg,
+                    "cell_str": cell_str,
+                    "wyckoff_labels": wyckoff_labels,
                     "label": f"pair_{pair.get('rank')}_wp_{wp.get('wp_index')}",
                     "pair": pair,
                     "wp_index": wp.get("wp_index"),
                     "cell": cell,
-                    "candidate": candidate8,
-                    "estimated_structures": est,
-                    "summary": f"rank={pair.get('rank')} spg={pair.get('spg')} wp={wp.get('wp_index')} labels={wp.get('wyckoff_labels')}",
+                    "dof": wp.get("dof"),
+                    "summary": f"rank={pair.get('rank')} spg={pair.get('spg')} wp={wp.get('wp_index')}",
                     "observed": {
                         "trial_count": wp.get("trial_count", 0),
                         "refined_count": wp.get("refined_count", 0),
@@ -536,53 +509,10 @@ def _build_resume_trials(parsed_log: dict, state: dict, args: argparse.Namespace
                         "best_eng": wp.get("best_eng", float("inf")),
                         "best_sim": wp.get("best_sim", -1.0),
                     },
-                }
-            )
-            #logger.info(f"Resume trial {wp.get('wyckoff_labels')}: {ranked_trials[-1]['observed']}")
-
-        # Unseen candidates
-        unseen_candidates = []
-        for candidate in candidates:
-            signature = _candidate_label_signature(int(pair["spg"]), candidate)
-            if signature in used_signatures:
-                continue
-            unseen_candidates.append(candidate)
-        unseen_candidates8 = [c[:8] if len(c) > 8 else c for c in unseen_candidates]
-        unseen_candidates8 = sorted(
-            unseen_candidates8,
-            key=lambda candidate: score_wp_candidate(candidate, max_dof=int(candidate[5])),
-            reverse=True,
-        )
-        for unseen_idx, candidate8 in enumerate(unseen_candidates8[: max(0, int(args.include_unseen_per_pair))], start=1):
-            label_text = format_wyckoff_labels(int(pair["spg"]), candidate8[3])
-            est = _estimate_structures_for_candidate(
-                candidate8,
-                attempts=int(args.resume_attempts),
-                max_local_boosts=int(args.resume_local_boosts),
-            )
-            ranked_trials.append(
-                {
-                    "label": f"pair_{pair.get('rank')}_wp_unseen{unseen_idx}",
-                    "pair": pair,
-                    "wp_index": f"unseen{unseen_idx}",
-                    "cell": cell,
-                    "candidate": candidate8,
-                    "estimated_structures": est,
-                    "summary": f"rank={pair.get('rank')} spg={pair.get('spg')} wp=unseen{unseen_idx} labels={label_text}",
-                    "observed": {
-                        "trial_count": 0,
-                        "refined_count": 0,
-                        "best_r2": -1.0,
-                        "best_chi2": float("inf"),
-                        "best_eng": float("inf"),
-                        "best_sim": -1.0,
-                    },
-                }
-            )
-
-    #import sys; sys.exit(0)
+                })
+                #print(spg, cell_str, wyckoff_labels, f"rank={pair.get('rank')} spg={pair.get('spg')}")
     ranked_trials.sort(key=_resume_rank_key, reverse=True)
-    return ranked_trials[: max(1, int(args.candidate_limit))]
+    return ranked_trials[: max(1, 50)]
 
 
 def _previous_baseline_outcome(parsed_log: dict, state: dict) -> dict:
@@ -621,17 +551,22 @@ def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> l
                 csv_file = row.get("csv_file_name", "").strip()
                 if csv_file:
                     path = os.path.join(examples_dir, csv_file)
-                    if os.path.isfile(path):
+                    if os.path.isfile(path) and path not in failures:
                         failures.append(path)
-    return failures
 
+    print(f"Identified {len(failures)} failure CSV(s) from summary: {failures}")
+    for csv_file in failures:
+        if not os.path.isfile(csv_file):
+            print(f"[WARN] Failure CSV not found: {csv_file}")
+    return failures
 
 def run_resume(csv_path, args):
     structure_log = []
     # Build run state
     run_state = build_run_state(DEFAULT_STATE, logger, args, csv_path)
     run_state["pxrd_csv"] = csv_path
-    min_structures = max(0, int(run_state.get("min_structures_before_early_stop", 10)))
+    min_structures = run_state["min_structures_before_early_stop"]
+
     # Find the original run log
     system_stem = _system_stem(csv_path)
     # Try to find the original log in the output dir, supporting both .txt and .log extensions
@@ -664,7 +599,7 @@ def run_resume(csv_path, args):
     # Start timing for structure inference
     _start_time = time.time()
     winner_snapshot = _snapshot_artifacts(winner_outcome["formula"], winner_outcome["spg"], "resume_winner")
-    ranked_trials = _build_resume_trials(parsed_log, run_state, args)
+    ranked_trials = _build_resume_trials(parsed_log)
     logger.info(
         f"Parsed {len(parsed_log.get('pairs') or [])} Phase 2 pair(s) and selected "
         f"{len(ranked_trials)} resume trial(s)."
@@ -683,11 +618,8 @@ def run_resume(csv_path, args):
             if _is_better_outcome(trial_outcome, winner_outcome):
                 winner_state = trial_state
                 winner_outcome = trial_outcome
-                winner_snapshot = _snapshot_artifacts(
-                    winner_outcome["formula"],
-                    winner_outcome["spg"],
-                    "resume_winner",
-                )
+                winner_snapshot = _snapshot_artifacts(winner_outcome["formula"], winner_outcome["spg"],
+                    "resume_winner")
             else:
                 _restore_artifacts(winner_snapshot)
 
@@ -703,24 +635,15 @@ def run_resume(csv_path, args):
             break
 
     # End timing and update timing_breakdown_seconds
-    _end_time = time.time()
-    structure_runtime = _end_time - _start_time
-    timing = winner_state.get("timing_breakdown_seconds")
-    if timing is None:
-        timing = {}
-        winner_state["timing_breakdown_seconds"] = timing
+    structure_runtime = time.time() - _start_time
+    timing = {}
     timing["structure_inference"] = structure_runtime
+    timing["total_runtime"] = structure_runtime
+    timing["spg_and_cell"] = 0.0
 
-    merged_plot = _merged_plot_path(winner_state.get("formula") or _system_stem(csv_path), args.output)
+    merged_plot = _merged_plot_path(winner_state.get("formula"), args.output)
     if combined_plot_log:
-        plot_energy_vs_r2(
-            combined_plot_log,
-            winner_state.get("formula") or _system_stem(csv_path),
-            "resume",
-            str(merged_plot),
-            status="Success" if bool(winner_outcome.get("accepted")) else "Failure",
-            timing_breakdown_seconds=timing,
-        )
+        plot_energy_vs_r2(combined_plot_log, winner_state, merged_plot, timing)
         logger.info(f"Energy–R² plot saved to {merged_plot}")
 
     md_path = _resume_report_paths(csv_path, args.output)
@@ -728,7 +651,8 @@ def run_resume(csv_path, args):
     # Append new result to summary.csv
     input_csv = Path(csv_path)
     status = winner_outcome.get("status") if isinstance(winner_outcome, dict) else "unknown"
-    write_results_csv(input_csv, winner_state, status)
+    winner_state["status"] = status
+    write_results_csv(input_csv, winner_state)
     # Prepare row data from final_outcome
     print(f"Saved resume report to {md_path} and {summary_path}")
 
@@ -738,18 +662,10 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace, s
     trial_state["spg"] = int(trial["pair"]["spg"])
     trial_state["cells"] = [copy.deepcopy(trial["cell"])]
     trial_state["multi_attempts"] = 1
-    trial_state["max_local_boosts"] = max(int(base_state.get("max_local_boosts", 0)), int(args.resume_local_boosts))
-    trial_state["max_local_perturbations"] = max(
-        int(base_state.get("max_local_perturbations", 0)),
-        int(args.resume_local_perturbations),
-    )
-    trial_state["perturb_displacement"] = max(
-        float(base_state.get("perturb_displacement", 0.06)),
-        float(args.resume_perturb_displacement),
-    )
+    trial_state["max_local_perturbations"] = base_state["max_local_perturbations"]
+    trial_state["perturb_displacement"] = base_state["perturb_displacement"]
     trial_state["max_eng_rel_early_stop"] = float(args.success_max_eng_rel)
-    trial_state["forced_wp_solution"] = trial["candidate"]
-    trial_state["suppress_local_energy_plot"] = True
+    trial_state["wp_labels"] = trial["wyckoff_labels"]
     message, trial_state = run_wyckoff_solver(trial_state, [], len(structure_log))
     wyckoff_result = trial_state.get("wyckoff_result") or {}
     status = f"{trial['label']}_success" if wyckoff_result.get("accepted") else "no_solution"
@@ -776,46 +692,10 @@ if __name__ == "__main__":
         help="Optional explicit RunLog path for single-file resume runs.",
     )
     parser.add_argument(
-        "--pair-limit",
-        type=int,
-        default=8,
-        help="Maximum number of Phase 2 ranked pairs to consider from the previous run log.",
-    )
-    parser.add_argument(
-        "--candidate-limit",
-        type=int,
-        default=12,
-        help="Maximum number of targeted forced-WP resume trials to execute.",
-    )
-    parser.add_argument(
-        "--include-unseen-per-pair",
-        type=int,
-        default=1,
-        help="Additional untested WP candidates to include per Phase 2 pair.",
-    )
-    parser.add_argument(
         "--resume-attempts",
         type=int,
         default=3,
         help="Adaptive multi-attempt count for each resume trial.",
-    )
-    parser.add_argument(
-        "--resume-local-boosts",
-        type=int,
-        default=2,
-        help="Maximum local regeneration boosts for each resume trial.",
-    )
-    parser.add_argument(
-        "--resume-local-perturbations",
-        type=int,
-        default=2,
-        help="Maximum local perturb-and-relax trials for each resume trial.",
-    )
-    parser.add_argument(
-        "--resume-perturb-displacement",
-        type=float,
-        default=0.08,
-        help="Perturbation displacement in A for resume trials.",
     )
     parser.add_argument(
         "--success-max-eng-rel",
