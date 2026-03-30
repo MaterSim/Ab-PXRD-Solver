@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Mapping, Sequence, Any
 from .ase_opt import ASE_relax
 from pymatgen.core.periodic_table import Element
-
+from pyxtal.symmetry import Group
+from functools import lru_cache
 
 def plot_XRD(x_obs: Sequence[float], y_obs: Sequence[float],
              x_sim: Sequence[float], y_sim: Sequence[float],
@@ -88,3 +89,19 @@ def relax_structure(atoms: Any, dof: int) -> Any | None:
         atoms = ASE_relax(atoms, opt_lat=False, step=final_step, fmax=final_fmax,
                           logfile='ase.log')
     return atoms
+
+
+@lru_cache(maxsize=256)
+def _get_group(spg: int) -> Group:
+    return Group(int(spg))
+
+def format_wyckoff_labels(spg: int, wp_ids) -> str:
+    group = _get_group(int(spg))
+    labels_nested = []
+    for sub in (wp_ids or []):
+        one_species = []
+        for wp in (sub or []):
+            label = group[int(wp)].get_label()
+            one_species.append(str(label))
+        labels_nested.append(one_species)
+    return str(labels_nested)

@@ -1265,7 +1265,7 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
     return True, unmatched
 
 
-def enumerate_wyckoff_multi_spg(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None):
+def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None):
     """
     Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
 
@@ -1353,23 +1353,6 @@ def get_adaptive_wp_limits(total_candidates, max_to_try):
         if limit > 0 and (not limits or limit > limits[-1]):
             limits.append(limit)
     return limits
-
-
-def should_boost(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2, refine_sim_min, refine_eng_window):
-    """
-    Decide whether a promising candidate justifies extra regeneration trials.
-    Gated by max_local_boosts counter.
-    """
-    if wr is not None and r2 is not None and chi2 is not None:
-        if r2 >= max(min_r2 - 0.12, 0.78) or chi2 <= min(max_chi2 * 2.0, 0.35):
-            return True
-
-    strong_similarity = sim >= max(refine_sim_min + 0.10, 0.82)
-    near_miss_similarity = sim >= max(refine_sim_min + 0.15, 0.85)
-    low_relative_energy = eng_rel <= (refine_eng_window + 0.25)
-    near_miss_energy = eng_rel <= (refine_eng_window + 0.35)
-    return (strong_similarity and low_relative_energy) or (near_miss_similarity and near_miss_energy)
-
 
 def should_perturb(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2, refine_sim_min, refine_eng_window):
     """
@@ -1463,8 +1446,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, max_wp, max_Z, max_dof, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
-                    refine_sim_min=0.7, refine_eng_window=0.5,
-                    max_local_boosts=1, max_local_perturbations=2,
+                    refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
                     forced_wp_solution=None):
@@ -1793,7 +1775,13 @@ if __name__ == "__main__":
                       #f'Examples/PXRD_HgC2N2_122.csv',
                       #f'Examples/PXRD_Mg9Si5_176.csv',
                       #f'Examples/hardPXRD_HfTlCuS3_63.csv',
-                      f'Examples/PXRD_CoO2_12.csv',
+                      #f'Examples/PXRD_CoO2_12.csv',
+                      #f'GSAS_PXRD/Ag3Pm_194.csv',
+                      #f'GSAS_PXRD/AuLi5O4_70.csv',
+                      #f'GSAS_PXRD/Ag3Sb_25.csv',
+                      #f'GSAS_PXRD/Al3H2Ni3Zr3_189.csv',
+                      #f'GSAS_PXRD/Ag6ClF3Mo2O7_156.csv',
+                      f'GSAS_PXRD/As2AuSm_62.csv',
                     ]:
         formula, ref_spg = _infer_formula_spg(Path(match_csv))
         df = pd.read_csv(match_csv)
@@ -1807,12 +1795,13 @@ if __name__ == "__main__":
         solutions = SmartCellSolver(x1[data.peaks],
                         max_mismatch=30,
                         hkl_max=(4, 4, 4),
-                        max_square=20,
+                        max_square=25,
                         total_square=25,
                         theta_tols=[0.1, 0.15, 0.5],
                         min_abc=min_abc,
                         max_abc=max_abc,
                         verbose=False,
+                        max_volume=1000,
                         )
         sols = [
             (sol['spg'], sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
@@ -1822,6 +1811,6 @@ if __name__ == "__main__":
                                         max_solutions=200,
                                         merge_tol=0.02,
                                         ref_spg=ref_spg,
-                                        max_mismatch=20,
+                                        max_mismatch=40,
                                         sort_by='volume')
         print(f"Final consolidated solutions for {match_csv}\n")

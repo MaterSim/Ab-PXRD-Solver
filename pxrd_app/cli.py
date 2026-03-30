@@ -5,8 +5,6 @@ from multiprocessing import get_context
 from pathlib import Path
 
 SPG_INFER_BACKENDS = {"smart-cell", "model"}
-
-
 COMMON_SPG_TOP_K_CHOICES = [3, 5, 10, 20, 25, 30, 50, 100]
 COMMON_SYMMETRY_CHOICES = [
     "auto",
@@ -40,6 +38,12 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         type=int,
         default=24,
         help="Maximum Z value to consider for volume estimation (default: 24).",
+    )
+    parser.add_argument(
+        "--max-sim",
+        type=float,
+        default=0.9,
+        help="Maximum allowed similarity to known structures for accepting a solution (default: 0.9).",
     )
     parser.add_argument(
         "--input",
@@ -103,12 +107,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
             "Defaults to 'auto' when --infer-spg is set; otherwise unset. "
             "'auto' uses filename SPG (if present), 'any' disables filtering."
         ),
-    )
-    parser.add_argument(
-        "--local-boosts",
-        type=int,
-        default=None,
-        help="Maximum number of extra regeneration boosts per promising Wyckoff setting.",
     )
     parser.add_argument(
         "--local-perturbations",
@@ -229,7 +227,7 @@ def run_csv_batch(
         raise RuntimeError(f"{len(failures)} file(s) failed during parallel execution: {failure_text}")
 
 
-def build_run_state(
+def _build_state(
     default_state: dict,
     logger,
     *,
@@ -244,7 +242,6 @@ def build_run_state(
     spg_infer_backend: str | None = None,
     show_spg_predictions: bool | None = None,
     lattice_symmetry: str | None = None,
-    max_local_boosts: int | None = None,
     max_local_perturbations: int | None = None,
     perturb_displacement: float | None = None,
     max_eng_rel: float | None = None,
@@ -283,8 +280,6 @@ def build_run_state(
         run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
     elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
         run_state["lattice_symmetry"] = "any"
-    if max_local_boosts is not None:
-        run_state["max_local_boosts"] = max(0, int(max_local_boosts))
     if max_local_perturbations is not None:
         run_state["max_local_perturbations"] = max(0, int(max_local_perturbations))
     if perturb_displacement is not None:
@@ -313,8 +308,8 @@ def build_run_state(
     return run_state
 
 
-def build_run_state_from_args(default_state: dict, logger, args: argparse.Namespace, csv_path: str) -> dict:
-    return build_run_state(
+def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_path: str) -> dict:
+    return _build_state(
         default_state,
         logger,
         pxrd_csv=csv_path,
@@ -327,14 +322,13 @@ def build_run_state_from_args(default_state: dict, logger, args: argparse.Namesp
         spg_infer_backend=args.spg_backend,
         show_spg_predictions=True,
         lattice_symmetry=resolve_cli_symmetry(args),
-        max_local_boosts=args.local_boosts,
         max_local_perturbations=args.local_perturbations,
         perturb_displacement=args.perturb_displacement,
         max_eng_rel=args.max_eng_rel,
         max_cell_volume=args.max_cell_volume,
         results_dir=args.output,
-        max_wp=getattr(args, "max_wp", None),
-        max_dof=getattr(args, "max_dof", None),
-        max_Z=getattr(args, "max_z", None),
-        max_sim=getattr(args, "max_sim", None),
+        max_wp=args.max_wp,
+        max_dof=args.max_dof,
+        max_Z=args.max_z,
+        max_sim=args.max_sim,
         )

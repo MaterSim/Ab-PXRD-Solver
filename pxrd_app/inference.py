@@ -1,24 +1,12 @@
 from pathlib import Path
-
 import numpy as np
 
 from tools.peak_prediction import predict_peaks, predict_spacegroup
 from tools.solver import SmartCellSolver
 from tools.XRD import Profile
-from pxrd_app.constants import DEFAULT_STATE
+from pxrd_app.constants import DEFAULT_STATE, CRYSTAL_SYSTEM_PRIORITY
 
 SPG_INFER_BACKENDS = {"model", "smart-cell"}
-
-CRYSTAL_SYSTEM_PRIORITY = {
-    "cubic": 7,
-    "hexagonal": 6,
-    "trigonal": 5,
-    "tetragonal": 4,
-    "orthorhombic": 3,
-    "monoclinic": 2,
-    "triclinic": 1,
-}
-
 
 
 def infer_formula_spg(path: str) -> tuple[str | None, int | None]:
@@ -148,8 +136,7 @@ def build_ranked_smart_cell_solution_cache(solutions: list[dict]) -> dict[int, l
     raw_by_spg: dict[int, list[tuple]] = {}
     for sol in rank_smart_cell_spg_cell_solutions(solutions):
         metrics = _smart_solution_metrics(sol)
-        if metrics is None:
-            continue
+        if metrics is None: continue
         spg_i = int(metrics["spg"])
         raw_tuple = (
             spg_i,
@@ -164,7 +151,7 @@ def build_ranked_smart_cell_solution_cache(solutions: list[dict]) -> dict[int, l
     return raw_by_spg
 
 
-def infer_spacegroups_from_backend(
+def infer_spg_from_backend(
     *,
     x1: np.ndarray,
     y1: np.ndarray,
@@ -172,7 +159,6 @@ def infer_spacegroups_from_backend(
     formula: str,
     spg_infer_backend: str,
     spg_top_k: int,
-    min_abc: float,
     max_cell_volume: float | None,
 ) -> dict:
     backend = str(spg_infer_backend or "model").strip().lower()

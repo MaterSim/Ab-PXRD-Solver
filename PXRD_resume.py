@@ -8,66 +8,82 @@ import sys
 import os
 from pathlib import Path
 import time
-
-from pxrd_app.constants import DEFAULT_STATE as default_state
-from pxrd_app.cli import build_common_parser, build_run_state_from_args, collect_input_csv_files
+import shutil
+from pxrd_app.constants import DEFAULT_STATE, PAIR_TABLE_RE, PAIR_HEADER_RE, WP_HEADER_RE, FLOAT_RE
+from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv_files
 from pxrd_app.runtime import write_results_csv
 from pxrd_app.plot import plot_energy_vs_r2
-from pxrd_app.core import (
-    _format_wyckoff_labels_from_ids,
-    _run_data_preprocessor,
-    _run_wyckoff_solver,
-    logger,
-    _extract_outcome,
-    _is_better_outcome,
-    _is_good_sampling_outcome,
-    _restore_artifacts,
-    _safe_float,
-    _safe_int,
-    _snapshot_artifacts,
-)
+from pxrd_app.core import run_data_preprocessor, run_wyckoff_solver, logger
 from tools.manager import CellManager
-from tools.solver import enumerate_wyckoff_multi_spg, score_wp_candidate
+from tools.solver import enumerate_wyckoff, score_wp_candidate
+from tools.utils import format_wyckoff_labels
 
-structure_log = []
+def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
+    wyckoff_result = state.get("wyckoff_result") or {}
+    structure_log = state.get("structure_log") or []
+    refined_entries = [entry for entry in structure_log if entry.get("refined")]
+    best_refined_r2 = max((float(entry.get("r2"), -1.0) for entry in refined_entries), default=None)
+    best_refined_chi2 = min((float(entry.get("chi2"), 1e9) for entry in refined_entries), default=None)
+    min_energy = min((float(entry.get("eng"), 1e9) for entry in structure_log), default=None)
+    selected_energy = float(wyckoff_result.get("selected_energy", 0.0))
+    eng_rel = float(wyckoff_result.get("eng_rel", 0.0))
+    if eng_rel is None and selected_energy is not None and min_energy is not None:
+        eng_rel = max(0.0, selected_energy - min_energy)
 
-PAIR_TABLE_RE = re.compile(
-    r"^\s*(?P<rank>\d+)\s+"
-    r"(?P<spg>\d+)\s+"
-    r"(?P<volume>-?\d+(?:\.\d+)?)\s+"
-    r"(?P<chi2>-?\d+(?:\.\d+)?)\s+"
-    r"(?P<missing>\d+)\s+"
-    r"(?P<est_trials>\d+)\s+"
-    r"(?P<bal_score>-?\d+(?:\.\d+)?)\s+"
-    r"(?P<dims>.+?)\s*$"
-)
-PAIR_HEADER_RE = re.compile(
-    r"^\[Pair\s+(?P<pair_index>\d+)/(?P<pair_total>\d+)\]\s+"
-    r"vol=(?P<volume>-?\d+(?:\.\d+)?)\s+Å³,\s+"
-    r"spg=(?P<spg>\d+),\s+dims=(?P<dims>\[.*?\])"
-    r"(?:[:;.,\s]+.*)?$"
-)
-WP_HEADER_RE = re.compile(
-    r"^\s*WP\s+#(?P<wp_index>\d+):\s+"
-    r"spg=(?P<spg>\d+),\s+count=(?P<count>\d+),\s+dof=(?P<dof>\d+),\s+"
-    r"n_wps=(?P<n_wps>\d+),\s+wyckoff=(?P<wyckoff>.+?)\s*$"
-)
-TRIAL_LINE_RE = re.compile(r"^\*(?P<body>.*)$")
-FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+    return {
+        "label": label,
+        "status": (result or {}).get("status", "unknown"),
+        "message": (result or {}).get("message", ""),
+        "spg": state.get("spg"),
+        "formula": state.get("formula"),
+        "accepted": bool(wyckoff_result.get("accepted", False)),
+        "wr": float(wyckoff_result.get("wr")),
+        "r2": float(wyckoff_result.get("r2")),
+        "chi2": float(wyckoff_result.get("chi2")),
+        "score": float(wyckoff_result.get("score")),
+        "selected_energy": selected_energy,
+        "eng_rel": eng_rel,
+        "attempt": int(wyckoff_result.get("attempt")),
+        "seed": int(wyckoff_result.get("seed")),
+        "cell_count": len(state.get("cells") or []),
+        "structure_count": len(structure_log),
+        "refined_count": len(refined_entries),
+        "best_refined_r2": best_refined_r2,
+        "best_refined_chi2": best_refined_chi2,
+        "min_energy": min_energy,
+        "log_path": state.get("system_run_log"),
+    }
 
+def _outcome_rank_key(outcome: dict) -> tuple:
+    accepted = 1 if outcome.get("accepted") else 0
+    score = float(outcome.get("score", -1e9))
+    r2 = float(outcome.get("r2", -1.0))
+    chi2 = float(outcome.get("chi2", 1e9))
+    eng_rel = float(outcome.get("eng_rel", 1e9))
+    structure_count = int(outcome.get("structure_count", 0))
+    cell_count = int(outcome.get("cell_count", 0))
+    return (accepted, score, r2, -chi2, -eng_rel, structure_count, cell_count)
+
+def _is_better_outcome(candidate: dict, incumbent: dict) -> bool:
+    return _outcome_rank_key(candidate) > _outcome_rank_key(incumbent)
+
+def _is_good_sampling_outcome(outcome: dict, args: argparse.Namespace) -> bool:
+    if not outcome.get("accepted"):
+        return False
+    eng_rel = float(outcome.get("eng_rel", None))
+    if eng_rel is None:
+        return True
+    return eng_rel <= float(args.success_max_eng_rel)
 
 def _system_stem(csv_path: str) -> str:
     return Path(csv_path).stem or "unknown_system"
-
 
 def _resume_report_paths(csv_path: str, results_dir: str) -> tuple[Path, Path]:
     stem = _system_stem(csv_path)
     return Path(results_dir) / f"ResumeReport_{stem}.md"
 
-
 def _merged_plot_path(formula: str, results_dir: str) -> Path:
     return Path(results_dir) / f"EnergyR2_{formula}_resume.png"
-
 
 def _build_resume_log_handler(state: dict) -> logging.Handler:
     source_log = str(state.get("source_run_log") or "").strip()
@@ -111,8 +127,6 @@ def _parse_trial_line(line: str) -> dict | None:
         return None
     stripped_line = star_match.group(0)
 
-    # Extract all numbers (float/int) in order, including negatives
-    all_numbers = [float(x) for x in FLOAT_RE.findall(stripped_line)]
     # Try to extract vol=... Å³
     volume = None
     volume_match = re.search(r"vol=(?P<volume>-?\d+(?:\.\d+)?)Å³", stripped_line)
@@ -122,8 +136,7 @@ def _parse_trial_line(line: str) -> dict | None:
     # Extract perturb, boost, skip_eng_rel if present
     perturb = None
     perturb_match = re.search(r"\[perturb:(?P<idx>\d+)\]", stripped_line)
-    if perturb_match is not None:
-        perturb = int(perturb_match.group("idx"))
+    if perturb_match is not None: perturb = int(perturb_match.group("idx"))
 
     boost = None
     boost_match = re.search(r"\[boost:\+(?P<count>\d+)\]", stripped_line)
@@ -169,6 +182,7 @@ def _parse_trial_line(line: str) -> dict | None:
         "boost": boost,
         "new_best_energy": "+++++" in stripped_line,
     }
+
 def _build_previous_structure_entry(pair: dict | None, wp: dict | None, trial: dict) -> dict:
     spg = int((wp or {}).get("spg") or (pair or {}).get("spg") or 0)
     wp_labels = (wp or {}).get("wyckoff_labels") or []
@@ -177,15 +191,14 @@ def _build_previous_structure_entry(pair: dict | None, wp: dict | None, trial: d
         "eng_rel": None,
         "sim": float(trial["sim"]),
         "r2": float(trial.get("r2") or 0.0),
-        "wr": _safe_float(trial.get("wr")),
-        "chi2": _safe_float(trial.get("chi2")),
+        "wr": float(trial.get("wr") or 0.0),
+        "chi2": float(trial.get("chi2") or 1e9),
         "refined": bool(trial.get("refined", False)),
         "spg": spg,
         "wp_labels": wp_labels,
         "pair_rank": (pair or {}).get("rank"),
         "source": "previous_log",
     }
-
 
 def _parse_run_log(log_path: Path) -> dict:
     lines = log_path.read_text(encoding="utf-8").splitlines()
@@ -282,20 +295,19 @@ def _parse_run_log(log_path: Path) -> dict:
             refined_trials = [trial for trial in trials if trial.get("refined")]
             wp["trial_count"] = len(trials)
             wp["refined_count"] = len(refined_trials)
-            wp["best_sim"] = max((_safe_float(trial.get("sim"), -1.0) for trial in trials), default=-1.0)
-            wp["best_eng"] = min((_safe_float(trial.get("eng"), float("inf")) for trial in trials), default=float("inf"))
-            wp["best_wr"] = min((_safe_float(trial.get("wr"), float("inf")) for trial in refined_trials), default=float("inf"))
-            wp["best_r2"] = max((_safe_float(trial.get("r2"), -1.0) for trial in refined_trials), default=-1.0)
-            wp["best_chi2"] = min((_safe_float(trial.get("chi2"), float("inf")) for trial in refined_trials), default=float("inf"))
+            wp["best_sim"] = max((float(trial.get("sim", -1.0)) for trial in trials), default=-1.0)
+            wp["best_eng"] = min((float(trial.get("eng", float("inf"))) for trial in trials), default=float("inf"))
+            wp["best_wr"] = min((float(trial.get("wr", float("inf"))) for trial in refined_trials), default=float("inf"))
+            wp["best_r2"] = max((float(trial.get("r2", -1.0)) for trial in refined_trials), default=-1.0)
+            wp["best_chi2"] = min((float(trial.get("chi2", float("inf"))) for trial in refined_trials), default=float("inf"))
             #print(f"Parsed WP candidate: SPG {wp['spg']}, count {wp['count']}, dof {wp['dof']}, wyckoff {wp['wyckoff_labels']}")
     best_previous = None
     best_previous_score = None
     for entry in previous_structure_log:
-        wr = _safe_float(entry.get("wr"))
-        r2 = _safe_float(entry.get("r2"))
-        chi2 = _safe_float(entry.get("chi2"))
-        if wr is None or r2 is None or chi2 is None:
-            continue
+        wr = float(entry.get("wr", float("inf")))
+        r2 = float(entry.get("r2", -1.0))
+        chi2 = float(entry.get("chi2", float("inf")))
+        if wr is None or r2 is None or chi2 is None: continue
         score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
         if best_previous_score is None or score > best_previous_score:
             best_previous_score = score
@@ -304,9 +316,9 @@ def _parse_run_log(log_path: Path) -> dict:
                 "wr": wr,
                 "r2": r2,
                 "chi2": chi2,
-                "eng": float(entry.get("eng")),
-                "eng_rel": _safe_float(entry.get("eng_rel")),
-                "spg": _safe_int(entry.get("spg")),
+                "eng": float(entry.get("eng", 0.0)),
+                "eng_rel": float(entry.get("eng_rel", 0.0)),
+                "spg": entry["spg"],
             }
     #import sys; sys.exit(0)
 
@@ -331,27 +343,55 @@ def _make_cell_from_pair(pair: dict) -> CellManager:
         [],
     )
 
+def _restore_artifacts(snapshot: dict[str, str]) -> None:
+    for target, source in snapshot.items():
+        source_path = Path(source)
+        if not source_path.exists():
+            continue
+        target_path = Path(target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+def _artifact_paths(formula: str | None, spg: int | None) -> list[Path]:
+    if not formula or not spg:
+        return []
+    return [
+        Path("Results") / f"Match_{formula}_{spg}.cif",
+        Path("Results") / f"EnergyR2_{formula}_{spg}.png",
+    ]
+
+def _snapshot_artifacts(formula: str | None, spg: int | None, label: str) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    if not formula or not spg:
+        return snapshot
+    snapshot_dir = Path("tmp") / "snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    for artifact in _artifact_paths(formula, spg):
+        if not artifact.exists():
+            continue
+        snapshot_path = snapshot_dir / f"{label}_{artifact.name}"
+        shutil.copy2(artifact, snapshot_path)
+        snapshot[str(artifact)] = str(snapshot_path)
+    return snapshot
 
 def _candidate_label_signature(spg: int, candidate) -> tuple[int, tuple[tuple[str, ...], ...]]:
-    label_text = _format_wyckoff_labels_from_ids(spg, candidate[3])
+    label_text = format_wyckoff_labels(spg, candidate[3])
     labels = ast.literal_eval(label_text)
     return int(spg), tuple(tuple(str(item) for item in group) for group in labels)
 
-
 def _logged_label_signature(wp: dict) -> tuple[int, tuple[tuple[str, ...], ...]]:
     return int(wp["spg"]), tuple(tuple(str(item) for item in group) for group in wp["wyckoff_labels"])
-
 
 def _resume_rank_key(trial: dict) -> tuple:
     observed = trial.get("observed") or {}
     pair = trial.get("pair") or {}
     refined_count = int(observed.get("refined_count") or 0)
-    best_r2 = _safe_float(observed.get("best_r2"), -1.0)
-    best_chi2 = _safe_float(observed.get("best_chi2"), float("inf"))
-    best_eng = _safe_float(observed.get("best_eng"), float("inf"))
-    best_sim = _safe_float(observed.get("best_sim"), -1.0)
-    pair_rank = int(pair.get("rank") or 10**6)
-    bal_score = _safe_float(pair.get("bal_score"), float("inf"))
+    best_r2 = float(observed.get("best_r2", -1.0))
+    best_chi2 = float(observed.get("best_chi2", float("inf")))
+    best_eng = float(observed.get("best_eng", float("inf")))
+    best_sim = float(observed.get("best_sim", -1.0))
+    pair_rank = int(pair.get("rank", 10**6))
+    bal_score = float(pair.get("bal_score", float("inf")))
     candidate_score = score_wp_candidate(trial["candidate"], max_dof=int(trial["candidate"][5]))
     return (
         1 if refined_count > 0 else 0,
@@ -364,7 +404,6 @@ def _resume_rank_key(trial: dict) -> tuple:
         candidate_score,
     )
 
-
 def _resume_attempt_schedule(attempt_idx: int) -> tuple[int, int, int]:
     schedules = [
         (5, 20, 9),
@@ -374,7 +413,6 @@ def _resume_attempt_schedule(attempt_idx: int) -> tuple[int, int, int]:
     if attempt_idx < len(schedules):
         return schedules[attempt_idx]
     return schedules[-1]
-
 
 def _estimate_structures_for_candidate(candidate, attempts: int, max_local_boosts: int) -> dict:
     dof = int(candidate[5])
@@ -403,10 +441,9 @@ def _estimate_structures_for_candidate(candidate, attempts: int, max_local_boost
         "max_total": sum(max_trials_per_attempt),
     }
 
-
 def _emit_resume_strategy(ranked_trials: list[dict], args: argparse.Namespace) -> None:
     print("Resume strategy: rank the queue by prior evidence from the log in this order:")
-    print("  refined count -> best R2 -> best chi2 -> best energy -> best similarity -> original Phase 2 priority")
+    print("refined count -> best R2 -> best chi2 -> best energy -> best similarity -> original Phase 2 priority")
     print(
         f"Resume strategy: {len(ranked_trials)} queued SPG/CELL/Wyckoff trial(s), "
         f"resume_attempts={int(args.resume_attempts)}, local_boosts={int(args.resume_local_boosts)}, "
@@ -430,11 +467,11 @@ def _emit_resume_strategy(ranked_trials: list[dict], args: argparse.Namespace) -
                     wp_labels = wp.get("wyckoff_labels")
                     break
         if wp_labels is None:
-            wp_labels = ast.literal_eval(_format_wyckoff_labels_from_ids(int(trial["candidate"][0]), trial["candidate"][3]))
-        best_r2 = _safe_float(observed.get("best_r2"), None)
-        best_chi2 = _safe_float(observed.get("best_chi2"), None)
-        best_eng = _safe_float(observed.get("best_eng"), None)
-        best_sim = _safe_float(observed.get("best_sim"), None)
+            wp_labels = ast.literal_eval(format_wyckoff_labels(int(trial["candidate"][0]), trial["candidate"][3]))
+        best_r2 = float(observed.get("best_r2", None))
+        best_chi2 = float(observed.get("best_chi2", None))
+        best_eng = float(observed.get("best_eng", None))
+        best_sim = float(observed.get("best_sim", None))
         wp_index = trial.get('wp_index') or 0
         try:
             wp_index_int = int(wp_index)
@@ -459,11 +496,11 @@ def _build_resume_trials(parsed_log: dict, state: dict, args: argparse.Namespace
 
     for pair in parsed_log.get("pairs", [])[: max(1, int(args.pair_limit))]:
         cell = _make_cell_from_pair(pair)
-        candidates = enumerate_wyckoff_multi_spg(cell.dims, [int(pair["spg"])], composition,
-                                                 max_wp = state.get("max_wp", 10),
-                                                 max_Z = state.get("max_Z", 24),
-                                                 max_dof = state.get("max_dof", 10),
-                                                 ref_den=ref_den)
+        candidates = enumerate_wyckoff(cell.dims, [int(pair["spg"])], composition,
+                                       max_wp = state.get("max_wp", 10),
+                                       max_Z = state.get("max_Z", 24),
+                                       max_dof = state.get("max_dof", 10),
+                                       ref_den=ref_den)
         by_signature = {
             _candidate_label_signature(int(pair["spg"]), candidate): candidate
             for candidate in candidates
@@ -517,7 +554,7 @@ def _build_resume_trials(parsed_log: dict, state: dict, args: argparse.Namespace
             reverse=True,
         )
         for unseen_idx, candidate8 in enumerate(unseen_candidates8[: max(0, int(args.include_unseen_per_pair))], start=1):
-            label_text = _format_wyckoff_labels_from_ids(int(pair["spg"]), candidate8[3])
+            label_text = format_wyckoff_labels(int(pair["spg"]), candidate8[3])
             est = _estimate_structures_for_candidate(
                 candidate8,
                 attempts=int(args.resume_attempts),
@@ -592,7 +629,7 @@ def _resolve_failure_csvs_from_summary(summary_csv: str, examples_dir: str) -> l
 def run_resume(csv_path, args):
     structure_log = []
     # Build run state
-    run_state = build_run_state_from_args(default_state, logger, args, csv_path)
+    run_state = build_run_state(DEFAULT_STATE, logger, args, csv_path)
     run_state["pxrd_csv"] = csv_path
     min_structures = max(0, int(run_state.get("min_structures_before_early_stop", 10)))
     # Find the original run log
@@ -617,7 +654,7 @@ def run_resume(csv_path, args):
     if not parsed_log.get("pairs"):
         print(f"[ERROR] No Phase 2 candidates found in run log: {source_log}")
         return
-    _run_data_preprocessor(csv_path, run_state)
+    run_data_preprocessor(csv_path, run_state)
     baseline_outcome = _previous_baseline_outcome(parsed_log, run_state)
     winner_state = run_state
     winner_outcome = baseline_outcome
@@ -626,8 +663,7 @@ def run_resume(csv_path, args):
 
     # Start timing for structure inference
     _start_time = time.time()
-    winner_snapshot = _snapshot_artifacts(winner_outcome.get("formula"), winner_outcome.get("spg"), "resume_winner")
-
+    winner_snapshot = _snapshot_artifacts(winner_outcome["formula"], winner_outcome["spg"], "resume_winner")
     ranked_trials = _build_resume_trials(parsed_log, run_state, args)
     logger.info(
         f"Parsed {len(parsed_log.get('pairs') or [])} Phase 2 pair(s) and selected "
@@ -648,8 +684,8 @@ def run_resume(csv_path, args):
                 winner_state = trial_state
                 winner_outcome = trial_outcome
                 winner_snapshot = _snapshot_artifacts(
-                    winner_outcome.get("formula"),
-                    winner_outcome.get("spg"),
+                    winner_outcome["formula"],
+                    winner_outcome["spg"],
                     "resume_winner",
                 )
             else:
@@ -691,7 +727,8 @@ def run_resume(csv_path, args):
     summary_path = Path(args.output) / "summary.csv"
     # Append new result to summary.csv
     input_csv = Path(csv_path)
-    write_results_csv(input_csv, winner_state, winner_outcome.get("status") if isinstance(winner_outcome, dict) else "unknown")
+    status = winner_outcome.get("status") if isinstance(winner_outcome, dict) else "unknown"
+    write_results_csv(input_csv, winner_state, status)
     # Prepare row data from final_outcome
     print(f"Saved resume report to {md_path} and {summary_path}")
 
@@ -700,7 +737,7 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace, s
     trial_state = copy.deepcopy(base_state)
     trial_state["spg"] = int(trial["pair"]["spg"])
     trial_state["cells"] = [copy.deepcopy(trial["cell"])]
-    trial_state["multi_attempts"] = 1 #max(int(base_state.get("multi_attempts", 1)), int(args.resume_attempts))
+    trial_state["multi_attempts"] = 1
     trial_state["max_local_boosts"] = max(int(base_state.get("max_local_boosts", 0)), int(args.resume_local_boosts))
     trial_state["max_local_perturbations"] = max(
         int(base_state.get("max_local_perturbations", 0)),
@@ -713,7 +750,7 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace, s
     trial_state["max_eng_rel_early_stop"] = float(args.success_max_eng_rel)
     trial_state["forced_wp_solution"] = trial["candidate"]
     trial_state["suppress_local_energy_plot"] = True
-    message, trial_state = _run_wyckoff_solver(trial_state, [], len(structure_log))
+    message, trial_state = run_wyckoff_solver(trial_state, [], len(structure_log))
     wyckoff_result = trial_state.get("wyckoff_result") or {}
     status = f"{trial['label']}_success" if wyckoff_result.get("accepted") else "no_solution"
     outcome = _extract_outcome(trial["label"], trial_state, {"status": status, "message": message})
@@ -809,8 +846,6 @@ if __name__ == "__main__":
                 print(str(exc))
                 sys.exit(1)
 
-    #print(args.success_max_eng_rel); sys.exit(0)
-    # Use run_csv_batch for parallel processing if multiple files
     os.makedirs(args.output + "/cifs", exist_ok=True)
     os.makedirs(args.output + "/logs", exist_ok=True)
     if len(csv_paths) > 1 and args.workers > 1:

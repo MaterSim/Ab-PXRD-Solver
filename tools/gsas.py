@@ -175,8 +175,7 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
     return x, ycalc
 
 def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
-                gpx_name=None,
-                gsas_log=None):
+                gpx_name=None, gsas_log=None, ax=None):
     """
     Refine PXRD data using GSAS-II.
 
@@ -186,6 +185,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
         instprm: Instrument parameter file
         gpx_name: Output GSAS-II project file name
         gsas_log: Log file for GSAS-II output (redirects verbose G2sc messages)
+        ax: Matplotlib axis for plotting (optional)
 
     Returns:
         wR: Weighted R-factor after refinement
@@ -310,7 +310,10 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     # print(f"R2: {R2:.4f}")
     # print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 4))
+    else:
+        fig = None
     ax.plot(x, yobs, 'k.', markersize=2, label='Observed')
     if ycalc is not None:
         ax.plot(x, ycalc, 'r-', linewidth=0.5, alpha=0.7, label='Calculated')
@@ -329,10 +332,11 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     ax.set_title(title)
     ax.legend(loc='upper right', fontsize=8)
     ax.set_xlim([x.min()-0.1, x.max()+0.1])
-    fig.tight_layout()
-    out_png = cif_file.replace('.cif', '_refinement.png')
-    fig.savefig(out_png, dpi=300)
-    plt.close(fig)
+    if fig is not None:
+        fig.tight_layout()
+        out_png = cif_file.replace('.cif', '_refinement.png')
+        fig.savefig(out_png, dpi=300)
+        plt.close(fig)
     # print(f"Saved plot to {out_png}")
 
     return wR, R2, weighted_chi2, refined_cif

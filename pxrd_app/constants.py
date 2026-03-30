@@ -3,6 +3,42 @@
 Constants and default configuration for PXRD agent.
 """
 import os
+import re
+
+CRYSTAL_SYSTEM_PRIORITY = {
+    "cubic": 7,
+    "hexagonal": 6,
+    "trigonal": 5,
+    "tetragonal": 4,
+    "orthorhombic": 3,
+    "monoclinic": 2,
+    "triclinic": 1,
+}
+
+# Regular expressions for PXRD_resume parsing
+PAIR_TABLE_RE = re.compile(
+    r"^\s*(?P<rank>\d+)\s+"
+    r"(?P<spg>\d+)\s+"
+    r"(?P<volume>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<chi2>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<missing>\d+)\s+"
+    r"(?P<est_trials>\d+)\s+"
+    r"(?P<bal_score>-?\d+(?:\.\d+)?)\s+"
+    r"(?P<dims>.+?)\s*$"
+)
+PAIR_HEADER_RE = re.compile(
+    r"^\[Pair\s+(?P<pair_index>\d+)/(?P<pair_total>\d+)\]\s+"
+    r"vol=(?P<volume>-?\d+(?:\.\d+)?)\s+Å³,\s+"
+    r"spg=(?P<spg>\d+),\s+dims=(?P<dims>\[.*?\])"
+    r"(?:[:;.,\s]+.*)?$"
+)
+WP_HEADER_RE = re.compile(
+    r"^\s*WP\s+#(?P<wp_index>\d+):\s+"
+    r"spg=(?P<spg>\d+),\s+count=(?P<count>\d+),\s+dof=(?P<dof>\d+),\s+"
+    r"n_wps=(?P<n_wps>\d+),\s+wyckoff=(?P<wyckoff>.+?)\s*$"
+)
+TRIAL_LINE_RE = re.compile(r"^\*(?P<body>.*)$")
+FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
 def _env_int(name: str, default: int, min_value: int | None = None) -> int:
     raw = os.getenv(name)
@@ -49,14 +85,14 @@ DEFAULT_STATE = {
     "max_force": 0.5,
     "max_stress": 0.3,
     "max_cells": 10,
-    "max_wp": 10,
+    "max_wp": 12,
     "max_dof": 3,
     "max_Z": 24,
-    "max_dof": 10,
+    "max_dof": 12,
     "max_abc": 35.0,
     "min_abc": 2.0,
     "max_cell_volume": None,
-    "cell_solver_max_mismatch": 14, # should be scaled with the number of peaks later
+    "cell_solver_max_mismatch": 30, # should be scaled with the number of peaks later
     "cell_solver_hkl_max": (2, 5, 6),
     "cell_solver_max_square": 28,
     "cell_solver_total_square": 40,
@@ -69,7 +105,6 @@ DEFAULT_STATE = {
     "spg_infer_backend": "model",
     "stop_on_first_accepted_inferred_spg": True,
     "show_spg_predictions": True,
-    "max_local_boosts": _env_int("PXRD_LOCAL_BOOSTS", 1, min_value=0),
     "max_local_perturbations": _env_int("PXRD_LOCAL_PERTURBS", 2, min_value=0),
     "perturb_displacement": float(os.getenv("PXRD_PERTURB_DISPLACEMENT", "0.06")),
     "max_eng_rel_early_stop": 0.05,
