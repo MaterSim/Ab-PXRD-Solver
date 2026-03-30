@@ -87,8 +87,8 @@ DEFAULT_STATE = {
     "max_cells": 10,
     "max_wp": 15,
     "max_Z": 24,
-    "max_dof": 14,
-    "max_abc": 35.0,
+    "max_dof": 25,
+    "max_abc": 36.0,
     "min_abc": 2.0,
     "max_cell_volume": None,
     "cell_solver_max_mismatch": 30, # should be scaled with the number of peaks later

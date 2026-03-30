@@ -256,16 +256,17 @@ def run_cell_solver(state: dict) -> dict:
             verbose=False,
         )
         solutions = solver.solve()
-        if 15 < spg < 75:
-            axis_orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
-        else:
-            axis_orders = [(0, 1, 2)]
+
         sols = []
         for sol in solutions:
-            for axis_order in axis_orders:
-                _cell = np.array([sol['cell'][i] for i in axis_order])
-                if solver.validate_cell(_cell):
-                    sols.append((spg, _cell, sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match']))
+            if 15 < spg < 75:
+                axis_orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+                for axis_order in axis_orders:
+                    _cell = np.array([sol['cell'][i] for i in axis_order])
+                    if solver.validate_cell(_cell):
+                        sols.append((spg, _cell, sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match']))
+            else:
+                sols.append((spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match']))
 
         if not sols:
             state["cells"] = []
