@@ -1132,6 +1132,8 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                         match, unmatch = check_space_group(spg, matched_hkls,
                                                            base_solution['mismatch'],
                                                            axis_order)
+                        #print(f"Checking SPG {spg} for {bra_type} with axis order {axis_order}: match={match}, unmatch={len(unmatch)}")
+                        #import sys; sys.exit()
                         use_direct_rescue = False
                         direct_sol = None
                         if not match:
@@ -1253,7 +1255,7 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
         for hkl in matched_hkls:
             h, k, l = hkl[axis_order[0]], hkl[axis_order[1]], hkl[axis_order[2]]
             if not group.is_valid_hkl(h, k, l):
-                #print(f"Space group {spg} does not allow {hkl}.")
+                #print(f"+++++++Space group {group.number} does not allow {h}/{k}/{l} {group.is_valid_hkl(h, k, l)}.")
                 return False, []
 
     # Check if any unmatched hkls are allowed by the space group
@@ -1293,7 +1295,8 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
 
     for spg in spg_list:
         wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z, max_dof=max_dof, ref_den=ref_den)
-        local_sols = wp_manager.get_wyckoff_positions(verbose)#; print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}')
+        local_sols = wp_manager.get_wyckoff_positions(verbose)
+        #print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}: {len(local_sols)} candidates found. +++++++')
 
         # Tag each solution with which SPG it came from
         for sol in local_sols:
@@ -1537,7 +1540,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         # logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
         if forced_wp_solution is not None:
             normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
-            ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= N3 else []
+            ranked_sols = [normalized_forced_wp] #if normalized_forced_wp[5] <= N3 else []
         else:
             wp_manager = WPManager(spg, cell.dims, composition, max_wp, max_Z, max_dof, ref_den=ref_den)
             sols = wp_manager.get_wyckoff_positions()

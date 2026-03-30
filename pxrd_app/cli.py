@@ -24,25 +24,21 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-wp",
         type=int,
-        default=9,
         help="Maximum number of Wyckoff positions to consider (default: 9).",
     )
     parser.add_argument(
         "--max-dof",
         type=int,
-        default=10,
         help="Maximum degrees of freedom for Wyckoff position combinations (default: 10).",
     )
     parser.add_argument(
         "--max-z",
         type=int,
-        default=24,
         help="Maximum Z value to consider for volume estimation (default: 24).",
     )
     parser.add_argument(
         "--max-sim",
         type=float,
-        default=0.9,
         help="Maximum allowed similarity to known structures for accepting a solution (default: 0.9).",
     )
     parser.add_argument(
@@ -291,14 +287,10 @@ def _build_state(
     if results_dir is not None:
         run_state["results_dir"] = str(results_dir)
 
-    if max_wp is not None:
-        run_state["max_wp"] = int(max_wp)
-    if max_dof is not None:
-        run_state["max_dof"] = int(max_dof)
-    if max_Z is not None:
-        run_state["max_Z"] = int(max_Z)
-    if max_sim is not None:
-        run_state["max_sim"] = float(max_sim)
+    if max_wp is not None: run_state["max_wp"] = int(max_wp)
+    if max_dof is not None: run_state["max_dof"] = int(max_dof)
+    if max_Z is not None: run_state["max_Z"] = int(max_Z)
+    if max_sim is not None: run_state["max_sim"] = float(max_sim)
     run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
 
     return run_state
