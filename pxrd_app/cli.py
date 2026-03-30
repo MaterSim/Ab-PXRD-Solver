@@ -239,10 +239,8 @@ def _build_state(
     multi_attempts: int | None = None,
     seed_base: int | None = None,
     infer_spg_from_pxrd: bool | None = None,
-    try_all_inferred_spg: bool | None = None,
     spg_top_k: int | None = None,
     spg_infer_backend: str | None = None,
-    show_spg_predictions: bool | None = None,
     lattice_symmetry: str | None = None,
     max_local_perturbations: int | None = None,
     perturb_displacement: float | None = None,
@@ -265,8 +263,6 @@ def _build_state(
         run_state["seed_base"] = int(seed_base)
     if infer_spg_from_pxrd is not None:
         run_state["infer_spg_from_pxrd"] = bool(infer_spg_from_pxrd)
-    if try_all_inferred_spg is not None:
-        run_state["stop_on_first_accepted_inferred_spg"] = not bool(try_all_inferred_spg)
     if spg_top_k is not None:
         run_state["spg_top_k"] = int(spg_top_k)
     if spg_infer_backend is not None:
@@ -276,8 +272,6 @@ def _build_state(
         else:
             logger.warning(f"Unsupported spg infer backend '{spg_infer_backend}', using model backend.")
             run_state["spg_infer_backend"] = "model"
-    if show_spg_predictions is not None:
-        run_state["show_spg_predictions"] = bool(show_spg_predictions)
     if lattice_symmetry is not None:
         run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
     elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
@@ -319,10 +313,8 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         multi_attempts=args.multi_attempts,
         seed_base=args.seed_base,
         infer_spg_from_pxrd=args.infer_spg,
-        try_all_inferred_spg=args.try_all_inferred_spg,
         spg_top_k=args.spg_top_k,
         spg_infer_backend=args.spg_backend,
-        show_spg_predictions=True,
         lattice_symmetry=resolve_cli_symmetry(args),
         max_local_perturbations=args.local_perturbations,
         perturb_displacement=args.perturb_displacement,

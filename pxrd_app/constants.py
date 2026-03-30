@@ -103,8 +103,6 @@ DEFAULT_STATE = {
     "seed_base": _env_int("PXRD_SEED_BASE", 20260315),
     "spg_top_k": 25,
     "spg_infer_backend": "model",
-    "stop_on_first_accepted_inferred_spg": True,
-    "show_spg_predictions": True,
     "max_local_perturbations": _env_int("PXRD_LOCAL_PERTURBS", 2, min_value=0),
     "perturb_displacement": float(os.getenv("PXRD_PERTURB_DISPLACEMENT", "0.06")),
     "max_eng_rel_early_stop": 0.05,
