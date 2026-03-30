@@ -40,6 +40,7 @@ def main() -> None:
     args = _parse_args()
     try:
         csv_files = collect_input_csv_files(args.input)
+        if args.reverse: csv_files = list(reversed(csv_files))
     except FileNotFoundError as exc:
         print(str(exc))
         sys.exit(1)

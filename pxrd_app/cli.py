@@ -76,9 +76,9 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Infer space group from PXRD/profile model instead of filename convention.",
     )
     parser.add_argument(
-        "--try-all-inferred-spg",
+        "--reverse",
         action="store_true",
-        help="When --infer-spg is on, do not stop at first accepted SG; evaluate all inferred candidates and keep best.",
+        help="Reverse the order of processing CSV files.",
     )
     parser.add_argument(
         "--spg-top-k",
@@ -149,6 +149,8 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         default="Results",
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
+
+
     return parser
 
 
