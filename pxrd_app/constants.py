@@ -107,6 +107,8 @@ DEFAULT_STATE = {
     "max_eng_rel_early_stop": 0.05,
     "max_eng_rel": 0.025,
     "min_structures_before_early_stop": 10,
+    "N1": 5, # top-N cells
+    "N2": 40, # top-N wps per cell
 }
 
 VALID_LATTICE_SYMMETRIES = {

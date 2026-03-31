@@ -375,16 +375,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         except Exception:
             pass
 
-    def _attempt_schedule(i: int) -> tuple[int, int, int]:
-        schedules = [
-            (5, 20, 9),
-            (7, 25, 10),
-            (10, 30, 12),
-        ]
-        if i < len(schedules):
-            return schedules[i]
-        return schedules[-1]
-
     def _score_result(res: dict) -> float:
         wr = res["wr"]
         r2 = res["r2"]
@@ -399,10 +389,11 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         return bool(r2 >= min_r2 and chi2 <= max_chi2)
 
     struc_count = state.get("Struc_count") or 0
+    N1 = state.get("N1")
+    N2 = state.get("N2")
 
     for attempt_idx in range(attempts):
         seed = seed_base + 9973 * attempt_idx
-        N1, N2, N3 = _attempt_schedule(attempt_idx)
         _set_seed(seed)
 
         attempt_prefix = run_tmp_dir / f"Match_{formula}_{spg}_attempt{attempt_idx + 1}"
@@ -410,7 +401,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
         attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
         logger.info(
-            f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, (N1={N1}, N2={N2}, N3={N3}), "
+            f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, (N1={N1}, N2={N2}), "
             f"Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
             f"{struc_count} structures")
 
@@ -428,9 +419,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             y1,
             eng_min,
             sim_max,
-            N1,
             N2,
-            N3,
             struc_count if structure_id_counter is None else structure_id_counter,
             max_force,
             max_stress,

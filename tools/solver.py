@@ -1448,7 +1448,7 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
     }
 
 def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
-                    match_csv, peaks, x1, y1, eng_min, sim_max, N1, N2, N3, struc_count,
+                    match_csv, peaks, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, max_wp, max_Z, max_dof, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
@@ -1471,7 +1471,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         x1, y1: Simulated PXRD data arrays.
         eng_min: Current minimum energy.
         sim_max: Current maximum similarity.
-        N1, N2, N3: Limits for loops.
+        N2: Limits for loops.
         struc_count: Number of structures successfully generated so far.
         max_force: Maximum allowed force for relaxed structures.
         max_stress: Maximum allowed stress for relaxed structures.
@@ -1530,27 +1530,25 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
 
         return (None, None, None, None, eng_best, None, None, struc_count)
 
-    trial_cells = list(cells[:N1])
+    #trial_cells = list(cells[:N1])
     early_stop = False
     local_accepted_result = None
 
     # Track emitted structure IDs to avoid duplicates
     emitted_id_messages = set()
-    for cell in trial_cells:
+    for cell in cells:
         # logger.info(f"\nTrying cell: {cell.dims}, missing peaks: {cell.missing}")
         if forced_wp_solution is not None:
             normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
-            ranked_sols = [normalized_forced_wp] #if normalized_forced_wp[5] <= N3 else []
+            ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= max_dof else []
         else:
             wp_manager = WPManager(spg, cell.dims, composition, max_wp, max_Z, max_dof, ref_den=ref_den)
-            sols = wp_manager.get_wyckoff_positions()
-            ranked_sols = [sol for sol in sols if sol[5] <= N3]
+            ranked_sols = wp_manager.get_wyckoff_positions()
+            ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol), reverse=True)
         if len(ranked_sols) == 0:
-            logger.info(f"No Wyckoff candidates satisfy DOF <= {N3} for cell {cell.dims}.")
+            logger.info(f"No Wyckoff candidates satisfy DOF <= {max_dof} for cell {cell.dims}.")
             continue
 
-        if forced_wp_solution is None:
-            ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol, max_dof=N3), reverse=True)
         wp_limits = get_adaptive_wp_limits(len(ranked_sols), N2)
 
         prev_limit = 0
