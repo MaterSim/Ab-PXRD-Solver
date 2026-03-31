@@ -1787,6 +1787,7 @@ if __name__ == "__main__":
                       #f'GSAS_PXRD/Al3H2Ni3Zr3_189.csv',
                       #f'GSAS_PXRD/Ag6ClF3Mo2O7_156.csv',
                       f'GSAS_PXRD/As2AuSm_62.csv',
+                      f'GSAS_PXRD/S2Se4W3_187.csv',
                     ]:
         formula, ref_spg = _infer_formula_spg(Path(match_csv))
         df = pd.read_csv(match_csv)

@@ -961,14 +961,25 @@ def run_pipeline(state: dict) -> dict:
                 f"Skipped {len(skipped_pairs)} individual (cell, SPG) pair(s) due to zero valid Wyckoff "
                 f"position(s) in the given Z range.")
 
-        spg_cell_end_time = time.perf_counter()
-        structure_start_time = spg_cell_end_time
 
-        # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
-        # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
-        # only for that SPG to avoid redundant work across identical cell dims.
-        terminate_pair = False
-        
+    if len(all_seed_cells) == 0:
+        logger.info("No inferred SG candidate produced valid cells.")
+        state["msg"] = "No valid cells are found."
+        return state
+
+    # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
+    # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
+    # only for that SPG to avoid redundant work across identical cell dims.
+    spg_cell_end_time = time.perf_counter()
+    structure_start_time = spg_cell_end_time
+    terminate_pair = False
+
+    for it in range(5):
+        # Just in case some strctures failed very frequently
+        if len(global_structure_log) >= state['min_structures_before_early_stop']:
+            logger.info(f"Reached maximum structure limit and Stop further generation.")
+            break
+
         for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
             consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg, max_wp, max_Z, max_dof)
             if not consolidated_wp: continue
