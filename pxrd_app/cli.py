@@ -22,6 +22,18 @@ COMMON_SYMMETRY_CHOICES = [
 def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
+        "--begin", '-b',
+        type=int,
+        default=0,
+        help="Index of the first CSV file to process (default: 0).",
+    )
+    parser.add_argument(
+        "--end", '-e',
+        type=int,
+        default=-1,
+        help="Index of the last CSV file to process (default: all).",
+    )
+    parser.add_argument(
         "--max-wp",
         type=int,
         help="Maximum number of Wyckoff positions to consider (default: 9).",

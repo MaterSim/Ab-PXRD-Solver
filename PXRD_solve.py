@@ -28,7 +28,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     try:
-        csv_files = collect_input_csv_files(args.input)
+        csv_files = collect_input_csv_files(args.input)[args.begin:args.end]
         if args.reverse: csv_files = list(reversed(csv_files))
     except FileNotFoundError as exc:
         print(str(exc))
