@@ -1085,6 +1085,7 @@ def run_pipeline(state: dict) -> dict:
         formula_str = state.get("formula", "unknown")
         results_dir = state.get("results_dir", "Results")
         output_png = f"{results_dir}/EnergyR2_{formula_str}.png"
+        best_trial_state['status'] = status
         plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 
         if status == "Success":

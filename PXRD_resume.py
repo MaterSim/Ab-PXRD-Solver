@@ -36,9 +36,9 @@ def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
         "spg": state.get("spg"),
         "formula": state.get("formula"),
         "accepted": bool(wyckoff_result.get("accepted", False)),
-        "wr": float(wyckoff_result.get("wr")),
-        "r2": float(wyckoff_result.get("r2")),
-        "chi2": float(wyckoff_result.get("chi2")),
+        "wr": float(wyckoff_result.get("wr", 1e9)),
+        "r2": float(wyckoff_result.get("r2", -1.0)),
+        "chi2": float(wyckoff_result.get("chi2", 1e9)),
         "score": float(wyckoff_result.get("score")),
         "selected_energy": selected_energy,
         "eng_rel": eng_rel,
@@ -592,6 +592,7 @@ def run_resume(csv_path, args):
     run_data_preprocessor(csv_path, run_state)
     baseline_outcome = _previous_baseline_outcome(parsed_log, run_state)
     winner_state = run_state
+    winner_state["best_result"] = None
     winner_outcome = baseline_outcome
     followup_trials: list[dict] = []
     combined_plot_log = copy.deepcopy(parsed_log.get("previous_structure_log") or [])
@@ -630,6 +631,7 @@ def run_resume(csv_path, args):
 
             if good_outcome and len(structure_log) >= min_structures:
                 logger.info(f"stopping resume search early.")
+                winner_state["status"] = "Success"
                 break
         if good_outcome:
             break
@@ -650,8 +652,6 @@ def run_resume(csv_path, args):
     summary_path = Path(args.output) / "summary.csv"
     # Append new result to summary.csv
     input_csv = Path(csv_path)
-    status = winner_outcome.get("status") if isinstance(winner_outcome, dict) else "unknown"
-    winner_state["status"] = status
     write_results_csv(input_csv, winner_state)
     # Prepare row data from final_outcome
     print(f"Saved resume report to {md_path} and {summary_path}")
@@ -669,8 +669,18 @@ def _run_resume_trial(base_state: dict, trial: dict, args: argparse.Namespace, s
     message, trial_state = run_wyckoff_solver(trial_state, [], len(structure_log))
     wyckoff_result = trial_state.get("wyckoff_result") or {}
     status = f"{trial['label']}_success" if wyckoff_result.get("accepted") else "no_solution"
-    outcome = _extract_outcome(trial["label"], trial_state, {"status": status, "message": message})
-    outcome["summary"] = trial["summary"]
+    if wyckoff_result["wr"] is not None:
+        outcome = _extract_outcome(trial["label"], trial_state, {"status": status, "message": message})
+        outcome["summary"] = trial["summary"]
+    else:
+        outcome = {
+            "label": trial["label"],
+            "status": status,
+            "message": message,
+            "spg": trial_state.get("spg"),
+            "formula": trial_state.get("formula"),
+            "accepted": False,
+        }
     return trial_state, outcome
 
 if __name__ == "__main__":
