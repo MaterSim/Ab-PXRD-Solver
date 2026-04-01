@@ -1099,9 +1099,9 @@ def run_pipeline(state: dict) -> dict:
         state["status"] = status
         state["msg"] = best_trial_message 
         return state
-
-    wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
-    state["msg"] = wyckoff_message
+    # QZ: why do we need this loop?
+    #wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
+    #state["msg"] = wyckoff_message
     return state
 
 def _get_system_run_log_path(state: dict) -> str:

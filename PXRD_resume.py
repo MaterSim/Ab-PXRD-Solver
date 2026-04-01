@@ -14,6 +14,7 @@ from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv
 from pxrd_app.runtime import write_results_csv
 from pxrd_app.plot import plot_energy_vs_r2
 from pxrd_app.core import run_data_preprocessor, run_wyckoff_solver, logger
+from pxrd_app.inference import infer_formula_spg, symmetry_from_spg
 from tools.manager import CellManager
 from tools.utils import format_wyckoff_labels
 
@@ -391,14 +392,6 @@ def _snapshot_artifacts(formula: str | None, spg: int | None, label: str) -> dic
         snapshot[str(artifact)] = str(snapshot_path)
     return snapshot
 
-def _candidate_label_signature(spg: int, candidate) -> tuple[int, tuple[tuple[str, ...], ...]]:
-    label_text = format_wyckoff_labels(spg, candidate[3])
-    labels = ast.literal_eval(label_text)
-    return int(spg), tuple(tuple(str(item) for item in group) for group in labels)
-
-def _logged_label_signature(wp: dict) -> tuple[int, tuple[tuple[str, ...], ...]]:
-    return int(wp["spg"]), tuple(tuple(str(item) for item in group) for group in wp["wyckoff_labels"])
-
 def _resume_rank_key(trial: dict) -> tuple:
     observed = trial.get("observed") or {}
     pair = trial.get("pair") or {}
@@ -418,16 +411,6 @@ def _resume_rank_key(trial: dict) -> tuple:
         -pair_rank,
         -bal_score if bal_score != float("inf") else -1e9,
     )
-
-def _resume_attempt_schedule(attempt_idx: int) -> tuple[int, int, int]:
-    schedules = [
-        (5, 20, 9),
-        (7, 25, 10),
-        (10, 30, 12),
-    ]
-    if attempt_idx < len(schedules):
-        return schedules[attempt_idx]
-    return schedules[-1]
 
 def _emit_resume_strategy(ranked_trials: list[dict], args: argparse.Namespace) -> None:
     print("Resume strategy: rank the queue by prior evidence from the log in this order:")
@@ -542,19 +525,34 @@ def _previous_baseline_outcome(parsed_log: dict, state: dict) -> dict:
         "log_path": state.get("source_run_log"),
     }
 
-def _resolve_failure_csvs(summary_csv: str, examples_dir: str) -> list:
+def _resolve_failure_csvs(summary_csv: str, examples_dir: str, symmetry: str = "auto") -> list:
     failures = []
+    symmetry = (symmetry or "auto").strip().lower()
+    use_symmetry_filter = symmetry not in {"", "auto", "any"}
+
     with open(summary_csv, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row.get("Status", "").strip().lower() == "failure":
                 csv_file = row.get("csv_file_name", "").strip()
                 if csv_file:
+                    if use_symmetry_filter:
+                        _, spg = infer_formula_spg(csv_file)
+                        csv_symmetry = symmetry_from_spg(spg)
+                        if csv_symmetry != symmetry:
+                            continue
                     path = os.path.join(examples_dir, csv_file)
                     if os.path.isfile(path) and path not in failures:
                         failures.append(path)
 
-    print(f"Identified {len(failures)} failure CSV(s) from summary: {failures}")
+    if use_symmetry_filter:
+        print(
+            f"Identified {len(failures)} failure CSV(s) from summary "
+            f"with symmetry='{symmetry}': {failures}"
+        )
+    else:
+        print(f"Identified {len(failures)} failure CSV(s) from summary: {failures}")
+
     for csv_file in failures:
         if not os.path.isfile(csv_file):
             print(f"[WARN] Failure CSV not found: {csv_file}")
@@ -636,6 +634,11 @@ def run_resume(csv_path, args):
         if good_outcome:
             break
 
+    # A resume run that produced an accepted winner should be recorded as success
+    # even if it stopped before reaching the exploratory min-structure target.
+    if winner_outcome.get("accepted") or good_outcome:
+        winner_state["status"] = "Success"
+
     # End timing and update timing_breakdown_seconds
     structure_runtime = time.time() - _start_time
     timing = {}
@@ -716,7 +719,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if args.summary:
-        csv_paths = _resolve_failure_csvs(args.summary, args.input_dir)
+        csv_paths = _resolve_failure_csvs(args.summary, args.input_dir, args.symmetry)
         if not csv_paths:
             print(f"No failed systems found in summary CSV: {args.summary}")
             sys.exit(1)
@@ -725,7 +728,7 @@ if __name__ == "__main__":
         if os.path.isfile(summary_file):
             print(f"Found summary.csv in output directory; resuming failed systems from that summary.")
             args.summary = summary_file
-            csv_paths = _resolve_failure_csvs(summary_file, args.input_dir)
+            csv_paths = _resolve_failure_csvs(summary_file, args.input_dir, args.symmetry)
             if not csv_paths:
                 print(f"No failed systems found in existing summary CSV: {summary_file}")
                 sys.exit(1)
