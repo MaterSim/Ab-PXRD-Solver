@@ -14,7 +14,7 @@ def plot_energy_vs_r2(
     Structures that were never refined receive R²=0.
     """
     formula = best_state.get("formula", "Unknown Formula")
-    status = best_state['best_result'].get("status")
+    status = best_state.get("status")
     engs = [e["eng"] for e in structure_log]
     r2s  = [e["r2"]  for e in structure_log]
     mask = [e.get("refined", False) for e in structure_log]
@@ -75,7 +75,7 @@ def plot_energy_vs_r2(
 
     # --- Lower plot: Best fit PXRD ---
     # plot best fit from best state if available, otherwise show placeholder text
-    if best_state is not None:
+    if best_state is not None and best_state.get("best_result") is not None:
         pxrd_csv = best_state.get("pxrd_csv")
         INST_FILE = best_state.get("INST_FILE")
         match_cif = f"tmp/{formula}_best_state.cif"
