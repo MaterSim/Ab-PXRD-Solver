@@ -956,6 +956,12 @@ def run_pipeline(state: dict) -> dict:
         state["msg"] = "No valid cells are found."
         return state
 
+    list_wp_only = bool(state.get("list_wp_only", False))
+    if list_wp_only:
+        logger.info(
+            "List-WP-only mode enabled: listing Wyckoff candidates and skipping structure generation."
+        )
+
     # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
     # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
     # only for that SPG to avoid redundant work across identical cell dims.
@@ -1004,6 +1010,9 @@ def run_pipeline(state: dict) -> dict:
                         f"WP #{wp_attempted}: spg={spg_val}, count={count}, dof={dof}, "
                         f"n_wps={num_wps}, wyckoff={wp_labels_text}"
                     )
+
+                    if list_wp_only:
+                        continue
 
                     trial_state["spg"] = spg_val
                     trial_state["cells"] = copy.deepcopy([cell])
@@ -1069,6 +1078,14 @@ def run_pipeline(state: dict) -> dict:
                 if terminate_pair: break
                 prev_limit = limit
             if terminate_pair: break
+
+    if list_wp_only:
+        timing_breakdown = _timing_breakdown_seconds()
+        state["timing_breakdown_seconds"] = timing_breakdown
+        state["status"] = "WP-Only"
+        state["msg"] = "Wyckoff combinations listed only; structure generation skipped."
+        logger.info(state["msg"])
+        return state
 
     timing_breakdown = _timing_breakdown_seconds()
     if not any_seed_had_cells:

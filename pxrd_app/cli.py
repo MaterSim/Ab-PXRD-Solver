@@ -144,6 +144,14 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Maximum allowed unit-cell volume (A^3) for cell solutions. Larger cells are discarded.",
     )
     parser.add_argument(
+        "--list-wp-only",
+        action="store_true",
+        help=(
+            "List Wyckoff candidates for each planned (cell, SPG) pair and skip "
+            "all structure generation/refinement trials."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -254,6 +262,7 @@ def _build_state(
     perturb_displacement: float | None = None,
     max_eng_rel: float | None = None,
     max_cell_volume: float | None = None,
+    list_wp_only: bool | None = None,
     results_dir: str | None = None,
     max_wp: int | None = None,
     max_dof: int | None = None,
@@ -296,6 +305,8 @@ def _build_state(
             run_state["max_cell_volume"] = max_cell_volume
         else:
             logger.warning(f"Ignoring non-positive max_cell_volume={max_cell_volume}; expected > 0.")
+    if list_wp_only is not None:
+        run_state["list_wp_only"] = bool(list_wp_only)
     if results_dir is not None:
         run_state["results_dir"] = str(results_dir)
 
@@ -324,6 +335,7 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         perturb_displacement=args.perturb_displacement,
         max_eng_rel=args.max_eng_rel,
         max_cell_volume=args.max_cell_volume,
+        list_wp_only=args.list_wp_only,
         results_dir=args.output,
         max_wp=args.max_wp,
         max_dof=args.max_dof,

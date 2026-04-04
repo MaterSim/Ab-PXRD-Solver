@@ -760,10 +760,11 @@ class CellSolver:
             results: list of solution dictionaries containing cell parameters and matched peaks
         """
 
-        h, k, l = self.hkl_max
+        h, k, l = self.hkl_max#; print(f"Generating hkl guesses with max indices: h={h}, k={k}, l={l}")
         guesses = self.group.generate_hkl_guesses(h, k, l, max_square=self.max_square,
                                               total_square=self.total_square,
                                               verbose=self.verbose)
+        print(f"Generated {len(guesses)} raw hkl guess sets before filtering.")
         raw_guess_count = len(guesses)
         if self.spg is not None:
             print(f"Generated {raw_guess_count} hkl guess sets for space group {self.spg}.")
@@ -1188,8 +1189,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                             }
                             cell_str = '[' + ', '.join(f'{float(x):.3f}' for x in np.asarray(cell).tolist()) + ']'
                             volume = solver.get_volume_from_cell(cell)
-                            if max_volume_cap is not None and volume > max_volume_cap:
-                                continue
+                            if max_volume_cap is not None and volume > max_volume_cap: continue
                             print(f"Solution for {bra_type}, {spg}, cell: {cell_str}, volume: {volume:.2f}, mismatch: {len(unmatch)}, chi2: {chi2_vals[1]:.4f}")
                             solutions.append(solution)
                             count += 1
@@ -1778,7 +1778,7 @@ if __name__ == "__main__":
                 pass
         return formula_guess, spg_guess
 
-    for match_csv in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
+    for data in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
                       #f'Examples/PXRD_Be2SiBi_119.csv',
                       #f'Examples/PXRD_K2SnO6_148.csv',
                       #f'Examples/PXRD_HgC2N2_122.csv',
@@ -1792,15 +1792,23 @@ if __name__ == "__main__":
                       #f'GSAS_PXRD/Ag6ClF3Mo2O7_156.csv',
                       #f'GSAS_PXRD/As2AuSm_62.csv',
                       #f'GSAS_PXRD/S2Se4W3_187.csv',
-                      f'GSAS_PXRD/BaMn4O8_12.csv',
+                      #f'GSAS_PXRD/BaMn4O8_12.csv',
+                      #(f'GSAS_PXRD/Co3Ni6S8_44.csv', 488.90),
+                      #(f'GSAS_PXRD/AlMg_187.csv', 37.66),
+                      #(f'GSAS_PXRD/CeCu4LaSi4_123.csv', 166.75),
+                      #(f'GSAS_PXRD/BiI3_162.csv', 368.32),
+                      #(f'GSAS_PXRD/BeH2_72.csv', 280.64), #
+                      #(f'GSAS_PXRD/Al3EuSi_107.csv', 205.06),
+                      #(f'GSAS_PXRD/AsCd2Cl2_14.csv', 549.84),
+                      (f'GSAS_PXRD/Li_166.csv', 183.62),
                     ]:
+        match_csv, ref_volume = data if isinstance(data, tuple) else (data, None)
         formula, ref_spg = _infer_formula_spg(Path(match_csv))
         df = pd.read_csv(match_csv)
-        x1 = df.iloc[:, 0].values
-        y1 = df.iloc[:, 1].values
+        x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values
         data = RawDataManager(x1, y1, bg_subtract=False)
-        data.get_peaks_from_scipy()
-        data.filter_peaks_by_ml(threshold=0.8, min_height=3.0, max_theta=50.0)
+        data.get_peaks_from_scipy()#height=25.0)
+        data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)#, max_theta=50.0)
         #data.get_peaks_from_scipy_adaptive()
         peaks = data.peaks
         peak_positions = x1[peaks]
@@ -1811,22 +1819,23 @@ if __name__ == "__main__":
             solver = CellSolver(ref_spg,
                             x1[data.peaks],
                             max_mismatch=30,
-                            hkl_max=(4, 4, 4),
+                            hkl_max=(4, 3, 3),
                             max_square=25,
                             total_square=25,
                             theta_tols=[0.1, 0.15, 0.5],
                             min_abc=min_abc,
                             max_abc=max_abc,
-                            verbose=False,
+                            verbose=True,
                             )
             solutions = solver.solve()
             sols = [
                 (ref_spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
                 for sol in solutions
             ]
-            _, msg = solver.validate_cell(np.array([13.75, 3.16, 9.67, 133.90], dtype=np.float64))
+            #_, msg = solver.validate_cell(np.array([13.75, 3.16, 9.67, 133.90], dtype=np.float64))
+            #_, msg = solver.validate_cell(np.array([13.75, 3.16, 9.67, 133.90], dtype=np.float64))
             #print(sols)
-            print(msg)
+            #print(msg)
         else:
             solutions = SmartCellSolver(x1[data.peaks],
                             max_mismatch=30,
@@ -1850,6 +1859,7 @@ if __name__ == "__main__":
                                         max_solutions=200,
                                         merge_tol=0.02,
                                         ref_spg=ref_spg,
+                                        ref_volume=ref_volume,
                                         max_mismatch=40,
                                         sort_by='volume')
         print(f"Final consolidated solutions for {match_csv}\n")
