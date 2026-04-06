@@ -325,6 +325,93 @@ def _match_obs_exp_peaks(obs_thetas, exp_thetas, tol):
     errs = np.asarray(errs, dtype=float)
     return matched_obs_ids, matched_exp_ids, errs, used_exp_mask
 
+
+def _format_large_error_details(obs_thetas, exp_thetas, exp_hkls,
+                                matched_obs_ids, matched_exp_ids, errs,
+                                theta_tols, max_items=8):
+    """
+    Build a compact debug string listing matched peak pairs that exceed
+    the angle-dependent error tolerances.
+    """
+    if len(errs) == 0:
+        return ""
+
+    obs_thetas = np.asarray(obs_thetas)
+    exp_thetas = np.asarray(exp_thetas)
+    matched_obs_ids = np.asarray(matched_obs_ids, dtype=int)
+    matched_exp_ids = np.asarray(matched_exp_ids, dtype=int)
+    errs = np.asarray(errs, dtype=float)
+
+    obs_matched = obs_thetas[matched_obs_ids]
+    limits = np.full(len(obs_matched), float(theta_tols[2]), dtype=float)
+    limits[obs_matched < 50.0] = float(theta_tols[1])
+    limits[obs_matched < 30.0] = float(theta_tols[0])
+
+    bad_ids = np.where(np.abs(errs) > limits)[0]
+    if len(bad_ids) == 0:
+        return ""
+
+    # Show the largest offenders first.
+    order = bad_ids[np.argsort(np.abs(errs[bad_ids]))[::-1]]
+    lines = ["Large-error pairs (obs, calc, err, tol, hkl):"]
+    for idx in order[:max_items]:
+        obs_theta = float(obs_matched[idx])
+        exp_id = int(matched_exp_ids[idx])
+        exp_theta = float(exp_thetas[exp_id])
+        err = float(errs[idx])
+        tol = float(limits[idx])
+        hkl = tuple(int(v) for v in exp_hkls[exp_id])
+        lines.append(
+            f"obs={obs_theta:.3f}, calc={exp_theta:.3f}, "
+            f"err={err:.3f}, tol={tol:.3f}, hkl={hkl}"
+        )
+    return "\n".join(lines)
+
+
+def _format_unmatched_obs_details(obs_thetas, exp_thetas, exp_hkls,
+                                  matched_obs_ids, max_items=8):
+    """
+    Build a compact debug string listing observed peaks that had no
+    calculated peak within tolerance, along with their nearest calculated peak.
+    """
+    obs_thetas = np.asarray(obs_thetas)
+    exp_thetas = np.asarray(exp_thetas)
+    matched_obs_ids = np.asarray(matched_obs_ids, dtype=int)
+
+    if len(obs_thetas) == 0:
+        return ""
+
+    unmatched_obs_ids = np.setdiff1d(np.arange(len(obs_thetas)), matched_obs_ids)
+    if len(unmatched_obs_ids) == 0:
+        return ""
+
+    if len(exp_thetas) == 0:
+        lines = ["Unmatched observed peaks (no calculated peaks available):"]
+        for obs_id in unmatched_obs_ids[:max_items]:
+            lines.append(f"obs={float(obs_thetas[obs_id]):.3f}")
+        return "\n".join(lines)
+
+    nearest_ids = np.array([
+        int(np.argmin(np.abs(exp_thetas - obs_thetas[obs_id])))
+        for obs_id in unmatched_obs_ids
+    ], dtype=int)
+    nearest_errs = np.abs(obs_thetas[unmatched_obs_ids] - exp_thetas[nearest_ids])
+    order = np.argsort(nearest_errs)[::-1]
+
+    lines = ["Unmatched observed peaks (nearest calc, abs err, hkl):"]
+    for idx in order[:max_items]:
+        obs_id = int(unmatched_obs_ids[idx])
+        exp_id = int(nearest_ids[idx])
+        obs_theta = float(obs_thetas[obs_id])
+        exp_theta = float(exp_thetas[exp_id])
+        err = float(obs_theta - exp_theta)
+        hkl = tuple(int(v) for v in exp_hkls[exp_id])
+        lines.append(
+            f"obs={obs_theta:.3f}, calc={exp_theta:.3f}, "
+            f"abs_err={abs(err):.3f}, err={err:.3f}, hkl={hkl}"
+        )
+    return "\n".join(lines)
+
 class CellSolver:
     def __init__(self, spg, thetas, bra=None, N_add=5, max_mismatch=20, theta_tols=[0.1, 0.15, 0.5],
                  cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
@@ -531,6 +618,9 @@ class CellSolver:
         used_exp_mask[sort_ids] = observable_sorted
 
         if len(ids_matched) == self.theta_count:
+            #print(f"Perfect match for cell: {cell_str}")
+            #print("Observed thetas:", self.thetas)
+            #print("Expected thetas:", exp_thetas)
             # Greedy global assignment of matched peaks.
             matched_exp_ids = []
             errs = []
@@ -599,11 +689,20 @@ class CellSolver:
             else:
                 msg = f"Rejected cell: {cell_str}, mismatch {len(mis_matched_peaks)}/{self.max_mismatch}"
         else:
+            if verbose:
+                details = _format_unmatched_obs_details(
+                    self.thetas,
+                    exp_thetas,
+                    exp_hkls,
+                    ids_matched,
+                )
+                if details:
+                    print(details)
             msg = f"Rejected cell: {cell_str}, matched {len(ids_matched)}/{self.theta_count} peaks"
         return None, msg
 
 
-    def validate_cell_loose(self, cell, trial_hkls=None, hkl=None, h_max=None, k_max=None, l_max=None):
+    def validate_cell_loose(self, cell, trial_hkls=None, hkl=None, h_max=None, k_max=None, l_max=None, verbose=False):
         """
         Validate the cell parameters by comparing the expected 2theta values with the observed ones.
         We ignore the restriction of matching all peaks and allow some mismatches
@@ -613,6 +712,7 @@ class CellSolver:
             trial_hkls: list of hkls to consider for this cell
             hkl: the original hkl used to generate the cell (for reference)
             h_max, k_max, l_max: maximum h, k, l indices to consider based on the cell parameters
+            verbose: whether to print verbose output
 
         Returns:
             solution: dict containing the cell parameters, (mis)matched peaks, and chi2
@@ -678,6 +778,18 @@ class CellSolver:
             max_error_50 > self.theta_tols[1] or \
                 max_error > self.theta_tols[2]:
             msg = f"\nmax error: {max_error_30:.4f} {max_error_50:.4f} {max_error:.4f}"
+            if verbose:
+                details = _format_large_error_details(
+                    self.thetas,
+                    exp_thetas,
+                    exp_hkls,
+                    ids_matched,
+                    matched_exp_ids,
+                    errs,
+                    self.theta_tols,
+                )
+                if details:
+                    msg += "\n" + details
 
         if chi2_half > max(chi2, 0.01) or chi2 > self.max_chi2:
             msg += f"\nLarge chi2: {chi2_half:.4f} {chi2:.4f}"
@@ -1034,6 +1146,16 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                 solver_max_guess = 12000
             elif bra_type.startswith('orthorhombic'):
                 solver_max_guess = 25000
+            elif bra_index in [9, 10, 11, 12]: # teragonal and hexagonal
+                solver_hkl_max = (
+                    min(int(hkl_max[0]), 3),
+                    min(int(hkl_max[1]), 3),
+                    min(int(hkl_max[2]), 10),
+                )
+
+            if bra_index in [15, 14, 8, 7]: # orthorhombic
+                solver_max_square = max(int(max_square), 35)
+                solver_total_square = max(int(total_square), 35)
 
             # use very strict criteria to get initial cell solutions for each space group,
             # then use those solutions to determine the centering and possible space groups.
@@ -1044,7 +1166,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                                 min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
                                 theta_tols=theta_tols, max_guess=solver_max_guess,
                                 verbose=verbose)
-            base_solutions = solver.solve(max_solutions=15, max_count=20)
+            base_solutions = solver.solve(max_solutions=25, max_count=100)
             if len(base_solutions) == 0: continue
 
             count = 0
@@ -1779,47 +1901,88 @@ if __name__ == "__main__":
         return formula_guess, spg_guess
 
     for data in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
+                      #(f'GSAS_PXRD/O2Rb_139.csv', 115.46),
+                      (f'GSAS_PXRD/Ba3P4_43.csv', 1721.07),
+                      #(f'GSAS_PXRD/Fe2O4Ti_36.csv', 304.28),
                       #f'Examples/PXRD_Be2SiBi_119.csv',
                       #f'Examples/PXRD_K2SnO6_148.csv',
                       #f'Examples/PXRD_HgC2N2_122.csv',
                       #f'Examples/PXRD_Mg9Si5_176.csv',
                       #f'Examples/hardPXRD_HfTlCuS3_63.csv',
                       #f'Examples/PXRD_CoO2_12.csv',
-                      #f'GSAS_PXRD/Ag3Pm_194.csv',
-                      #f'GSAS_PXRD/AuLi5O4_70.csv',
-                      #f'GSAS_PXRD/Ag3Sb_25.csv',
-                      #f'GSAS_PXRD/Al3H2Ni3Zr3_189.csv',
-                      #f'GSAS_PXRD/Ag6ClF3Mo2O7_156.csv',
-                      #f'GSAS_PXRD/As2AuSm_62.csv',
-                      #f'GSAS_PXRD/S2Se4W3_187.csv',
                       #f'GSAS_PXRD/BaMn4O8_12.csv',
+                      #(f'GSAS_PXRD/AsCd2Cl2_14.csv', 549.84),
+                      #(f'GSAS_PXRD/PdPm2Pt_225.csv', 364.50),
+                      #(f'GSAS_PXRD/Pa3Te_221.csv', 95.46),
+                      #(f'GSAS_PXRD/Hg3Mg_194.csv', 189.09),
+                      #(f'GSAS_PXRD/AsAuEu_194.csv', 142.64),
+                      #(f'GSAS_PXRD/AsMnPd_189.csv', 144.73),
+                      #(f'GSAS_PXRD/Al3H2Ni3Zr3_189.csv', 146.83),
+                      #(f'GSAS_PXRD/AlMg_187.csv', 37.66),
+                      #(f'GSAS_PXRD/PbS_186.csv', 221.80),
+                      #(f'GSAS_PXRD/AsNdPd_186.csv', 128.87),
+                      #(f'GSAS_PXRD/In2Ni3S2_166.csv', 337.66),
+                      #(f'GSAS_PXRD/PbS_160.csv', 160.12),
+                      #(f'GSAS_PXRD/S8TlV6_147.csv', 238.46),
+                      #(f'GSAS_PXRD/O2Zr_141.csv', 172.37),
+                      #(f'GSAS_PXRD/O2SbSm2_139.csv', 209.28),
+                      #(f'GSAS_PXRD/AsFe2_129.csv', 77.97),
+                      #(f'GSAS_PXRD/ErTe2_129.csv', 173.24),
+                      #(f'GSAS_PXRD/AsPd5Tl_123.csv', 115.95),
+                      #(f'GSAS_PXRD/Al3CNi9_123.csv', 143.96),
+                      #(f'GSAS_PXRD/CeCu4LaSi4_123.csv', 166.75),
+                      #(f'GSAS_PXRD/Eu2IrPd3Si4_115.csv', 180.60),
+                      #(f'GSAS_PXRD/Al3EuSi_107.csv', 205.06),
+                      #(f'GSAS_PXRD/F3OV_76.csv', 277.97),
+                      #(f'GSAS_PXRD/AsErTe_62.csv', 297.10),
+                      #(f'GSAS_PXRD/AsHoS_62.csv', 247.71),
+                      #(f'GSAS_PXRD/Pd3Rh3U2_47.csv', 133.31),
+                      #(f'GSAS_PXRD/O6RbTa2_46.csv', 488.90),
                       #(f'GSAS_PXRD/Co3Ni6S8_44.csv', 488.90),
+                      #(f'GSAS_PXRD/Co3Ni6S8_44.csv', 488.90),
+                      #(f'GSAS_PXRD/F11Ni6O_38.csv', 411.66),
                       #(f'GSAS_PXRD/AlMg_187.csv', 37.66),
                       #(f'GSAS_PXRD/CeCu4LaSi4_123.csv', 166.75),
-                      #(f'GSAS_PXRD/BiI3_162.csv', 368.32),
-                      #(f'GSAS_PXRD/BeH2_72.csv', 280.64), #
                       #(f'GSAS_PXRD/Al3EuSi_107.csv', 205.06),
-                      #(f'GSAS_PXRD/AsCd2Cl2_14.csv', 549.84),
-                      (f'GSAS_PXRD/Li_166.csv', 183.62),
+                      #(f'GSAS_PXRD/Cu3O4_225.csv', 733.66),
+                      #(f'GSAS_PXRD/Li_166.csv', 183.62),       #pass
+                      #(f'GSAS_PXRD/Li_229.csv', 40.68),        #pass
+                      #(f'GSAS_PXRD/Li_225.csv', 81.39),        #pass
+                      #(f'GSAS_PXRD/Li_194.csv', 81.46),        #pass
+                      #(f'GSAS_PXRD/Li3N_191.csv', 43.50),      #pass
+                      #(f'GSAS_PXRD/HLi4N_88.csv', 227.87),     #pass
+                      #(f'GSAS_PXRD/N_136.csv', 89.17),         #pass
+                      #(f'GSAS_PXRD/BeH2_72.csv', 280.64),      #pass
+                      #(f'GSAS_PXRD/B12BeC2_166.csv', 336.32),  #pass
+                      #(f'GSAS_PXRD/B3Li_127.csv', 146.90), #pass
+                      #(f'GSAS_PXRD/H8Si_31.csv', 233.55),
                     ]:
         match_csv, ref_volume = data if isinstance(data, tuple) else (data, None)
         formula, ref_spg = _infer_formula_spg(Path(match_csv))
         df = pd.read_csv(match_csv)
         x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values
-        data = RawDataManager(x1, y1, bg_subtract=False)
-        data.get_peaks_from_scipy()#height=25.0)
-        data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)#, max_theta=50.0)
+        if y1.min() > 2.5:
+            bg_subtract = True 
+        else:
+            if y1.min() > 1.0:
+                y1 -= y1.min()
+            bg_subtract = False
+        min_height = 7.5 if bg_subtract else 5.0 #4#3.5#0
+        height = min_height if bg_subtract else 1.0
+        data = RawDataManager(x1, y1, bg_subtract=bg_subtract) #bg_subtract=False)
+        data.get_peaks_from_scipy(height=min_height)#height=25.0)
+        data.filter_peaks_by_ml(threshold=0.8, min_height=min_height)#, max_theta=50.0)
         #data.get_peaks_from_scipy_adaptive()
         peaks = data.peaks
         peak_positions = x1[peaks]
-        data.plot()
+        data.plot('test.png')
         min_abc = 2.0
         max_abc = 35.0
         if ref_spg is not None:
             solver = CellSolver(ref_spg,
                             x1[data.peaks],
                             max_mismatch=30,
-                            hkl_max=(4, 3, 3),
+                            hkl_max=(4, 4, 12),
                             max_square=25,
                             total_square=25,
                             theta_tols=[0.1, 0.15, 0.5],
@@ -1827,15 +1990,14 @@ if __name__ == "__main__":
                             max_abc=max_abc,
                             verbose=True,
                             )
-            solutions = solver.solve()
+            solutions = solver.solve(max_solutions=100, max_count=100)
             sols = [
                 (ref_spg, sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])
                 for sol in solutions
             ]
             #_, msg = solver.validate_cell(np.array([13.75, 3.16, 9.67, 133.90], dtype=np.float64))
-            #_, msg = solver.validate_cell(np.array([13.75, 3.16, 9.67, 133.90], dtype=np.float64))
-            #print(sols)
-            #print(msg)
+            #_, msg = solver.validate_cell(np.array([6.24, 15.00, 18.40], dtype=np.float64), verbose=True)
+            #print(f"Validation message for test cell: {msg}"); import sys; sys.exit(0)
         else:
             solutions = SmartCellSolver(x1[data.peaks],
                             max_mismatch=30,
