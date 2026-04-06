@@ -114,6 +114,7 @@ def _get_cell_solver_kwargs(state: dict) -> dict:
         "max_guess": state.get("cell_solver_max_guess", 50000),
     }
 
+
 def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     formula_from_filename, spg_from_filename = infer_formula_spg(pxrd_csv)
     formula_override = state.get("formula")
@@ -169,8 +170,10 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
         state["spg_predictions"] = [spg for spg, _prob in predictions]
         if result.get("source"):
             state["spg_prediction_source"] = result["source"]
-        if result.get("smart_cell_raw_solutions_by_spg"):
-            state["smart_cell_raw_solutions_by_spg"] = result["smart_cell_raw_solutions_by_spg"]
+        if result.get("smart_cell_candidates_by_spg"):
+            state["smart_cell_candidates_by_spg"] = result["smart_cell_candidates_by_spg"]
+        if result.get("smart_cell_metrics_by_pair"):
+            state["smart_cell_metrics_by_pair"] = result["smart_cell_metrics_by_pair"]
         if result.get("smart_cell_ranked_spg_cells"):
             state["smart_cell_ranked_spg_cells"] = result["smart_cell_ranked_spg_cells"]
 
@@ -205,50 +208,21 @@ def run_cell_solver(state: dict) -> dict:
     max_cell_volume = state.get("max_cell_volume")
     cell_solver_kwargs = _get_cell_solver_kwargs(state)
 
-    def _filter_cells_by_max_volume(cells: list) -> tuple[list, int]:
-        if max_cell_volume is None:
-            return cells, 0
-        cap = float(max_cell_volume)
-        kept = []
-        removed = 0
-        for cell in cells:
-            vol = float(getattr(cell, "size", float("inf")))
-            if vol <= cap:
-                kept.append(cell)
-            else:
-                removed += 1
-        return kept, removed
-
     if state['infer_spg_from_pxrd']:
-        smart_raw_by_spg = state["smart_cell_raw_solutions_by_spg"]
+        smart_raw_by_spg = state.get("smart_cell_candidates_by_spg") or {}
         if spg in smart_raw_by_spg:
             raw_solutions = smart_raw_by_spg[spg]
             if raw_solutions:
                 cells = CellManager.consolidate(raw_solutions, max_solutions=max_cells, merge_tol=0.05)
-                cells, removed_by_volume = _filter_cells_by_max_volume(cells)
                 state["cells"] = cells
                 if not cells:
-                    text = (
-                        f"Cell solving found no valid unit cells for formula {formula} in space group {spg} "
-                        f" ({float(max_cell_volume):.2f} Å^3).\n"
-                    )
-                    return {
-                        "status": "no_cells",
-                        "message": text,
-                        "cells": [],
-                    }
+                    text = f"Cell solving found no valid unit cells for formula {formula} in space group {spg}.\n"
+                    return {"status": "no_cells", "message": text, "cells": []}
                 text = (
                     f"Cell solving completed for formula {formula} in space group {spg} "
                     f"using SmartCellSolver cache.\n"
                 )
-                if removed_by_volume > 0:
-                    text += (
-                        f"Filtered out {removed_by_volume} cell solution(s) with volume > "
-                        f"{float(max_cell_volume):.2f} Å^3.\n"
-                    )
-                return {
-                    "status": "success",
-                    "message": text,
+                return {"status": "success", "message": text,
                     "cells": [{"dimensions": cell.dims, "missing_peaks": cell.missing} for cell in cells],
                 }
         else:
@@ -267,6 +241,7 @@ def run_cell_solver(state: dict) -> dict:
             min_abc=cell_solver_kwargs["min_abc"],
             max_chi2=cell_solver_kwargs["max_chi2"],
             max_guess=cell_solver_kwargs["max_guess"],
+            max_volume=max_cell_volume,
             verbose=False,
         )
         solutions = solver.solve()
@@ -292,14 +267,10 @@ def run_cell_solver(state: dict) -> dict:
             }
 
         cells = CellManager.consolidate(sols, max_solutions=max_cells, merge_tol=0.05)
-        cells, removed_by_volume = _filter_cells_by_max_volume(cells)
 
         if not cells:
             state["cells"] = []
-            text = (
-                f"Cell solving found no valid unit cells for formula {formula} in space group {spg} "
-                f"after applying max volume filter ({float(max_cell_volume):.2f} Å^3).\n"
-            )
+            text = f"Cell solving found no valid unit cells for formula {formula} in space group {spg}.\n"
             return {
                 "status": "no_cells",
                 "message": text,
@@ -308,11 +279,6 @@ def run_cell_solver(state: dict) -> dict:
 
         state["cells"] = cells
         text = f"Cell solving completed for formula {formula} in space group {spg}.\n"
-        if removed_by_volume > 0:
-            text += (
-                f"Filtered out {removed_by_volume} cell solution(s) with volume > "
-                f"{float(max_cell_volume):.2f} Å^3.\n"
-            )
         return {
             "status": "success",
             "message": text,
@@ -617,34 +583,6 @@ def run_pipeline(state: dict) -> dict:
         )
         logger.info(f"CIF={cif_text}, PNG={png_text}")
 
-    def _validate_reused_cell_for_spg(cell_obj, spg_value: int, peak_positions: np.ndarray):
-        """
-        QZ: This should be moved to solver....
-        """
-        cell_solver_kwargs = _get_cell_solver_kwargs(state)
-        solver = CellSolver(
-            int(spg_value),
-            peak_positions,
-            max_mismatch=cell_solver_kwargs["max_mismatch"],
-            hkl_max=cell_solver_kwargs["hkl_max"],
-            max_square=cell_solver_kwargs["max_square"],
-            total_square=cell_solver_kwargs["total_square"],
-            theta_tols=cell_solver_kwargs["theta_tols"],
-            min_abc=cell_solver_kwargs["min_abc"],
-            max_chi2=cell_solver_kwargs["max_chi2"],
-            max_guess=cell_solver_kwargs["max_guess"],
-            verbose=False,
-        )
-        solution, reason = solver.validate_cell(np.array(cell_obj.dims, dtype=float))
-        if solution is None:
-            return False, None, reason
-        metrics = {
-            "chi2": float(solution["chi2"][1]),
-            "missing": int(len(solution["mismatch"])),
-            "errors": [float(x) for x in solution["errors"]],
-        }
-        return True, metrics, None
-
     pipeline_start_time = time.perf_counter()
     spg_cell_end_time: float | None = None
     structure_start_time: float | None = None
@@ -653,22 +591,16 @@ def run_pipeline(state: dict) -> dict:
     run_data_preprocessor(state["pxrd_csv"], state)
 
     infer_spg = state["infer_spg_from_pxrd"]
-    peak_positions_np = np.array(state.get("peak_positions") or [], dtype=float)
     composition = state["composition"]
     density_min, density_max = state["density_min"], state["density_max"]
-
-    def _chi2_bucket(value: float, tol: float = 5e-4) -> int:
-        if tol <= 0:
-            return int(np.round(float(value) * 1e6))
-        return int(np.round(float(value) / tol))
 
     def _balanced_pair_priority(
         est_trials: int,
         volume: float,
         min_trials: int,
         min_volume: float,
-        trial_weight: float = 0.65,
-        volume_weight: float = 0.35,
+        trial_weight: float = 0.6,
+        volume_weight: float = 0.4,
     ) -> float:
         safe_trials = max(1.0, float(est_trials))
         safe_volume = max(1e-6, float(volume))
@@ -678,21 +610,15 @@ def run_pipeline(state: dict) -> dict:
         volume_ratio = safe_volume / ref_volume
         return float((trial_ratio ** trial_weight) * (volume_ratio ** volume_weight))
 
-    def canonical_cell(cell_obj) -> tuple:
-        dims = np.array(getattr(cell_obj, "dims", []), dtype=float)
-        if len(dims) == 0:
-            return (0, ())
-        if len(dims) >= 3:
-            abc = tuple(round(float(x), 3) for x in sorted(dims[:3].tolist()))
-            tail = tuple(round(float(x), 2) for x in dims[3:].tolist())
-            return (len(dims), abc + tail)
-        return (len(dims), tuple(round(float(x), 3) for x in sorted(dims.tolist())))
-
     wp_candidate_cache: dict[tuple, list] = {}
     wp_cost_cache: dict[tuple, tuple[int, int]] = {}
 
+    def _cell_cache_key(cell_obj, spg_value) -> tuple:
+        dims_sig = tuple(round(float(x), 3) for x in np.array(cell_obj.dims).tolist())
+        return (int(spg_value), dims_sig)
+
     def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof) -> list:
-        key = (canonical_cell(cell_obj), spg_value)
+        key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_candidate_cache: return wp_candidate_cache[key]
         candidates = enumerate_wyckoff(
             cell_obj.dims,
@@ -707,18 +633,15 @@ def run_pipeline(state: dict) -> dict:
         return candidates
 
     def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int]:
-        key = (canonical_cell(cell_obj), spg_value)
-        #print(wp_candidate_cache)
-        #print(f"Estimating cost for cell {cell_obj.dims} under SPG {spg_value} with key {key}.")
+        key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_cost_cache: return wp_cost_cache[key]
 
         candidates = _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof)
         #print(f"Found {len(candidates)} Wyckoff candidates for cell {cell_obj.dims} under SPG {spg_value}/{max_wp}.")
         candidate_count = len(candidates)
-        top_candidates = candidates[:20]
 
         est_trials = 0
-        for candidate in top_candidates:
+        for candidate in candidates:
             dof = int(candidate[5])
             n4 = dof * 3 if dof != 1 else 4
             est_trials += (n4 + 1)
@@ -726,7 +649,7 @@ def run_pipeline(state: dict) -> dict:
         if candidate_count == 0:
             est_trials = 10**9
 
-        out = (candidate_count, est_trials)
+        out = (candidate_count, len(candidates), est_trials)
         wp_cost_cache[key] = out
         return out
 
@@ -805,98 +728,31 @@ def run_pipeline(state: dict) -> dict:
 
     if all_seed_cells:
         # ── Phase 2: plan ALL (cell, spg) pairs with explicit cost estimates ─
-        # 1. Group permutation-equivalent / near-identical cells into families.
-        # 2. For each (cell, spg), estimate cost by Wyckoff candidate count and
-        #    estimated number of generated trials.
-        # 3. Globally rank every pair by a balanced score that combines
-        #    relative estimated trials and relative cell volume.
-        grouped_seed_cells: dict[tuple, list[tuple[float, object, int]]] = {}
-        for item in all_seed_cells:
-            _vol, _cell, _spg = item
-            sig = canonical_cell(_cell)
-            grouped_seed_cells.setdefault(sig, []).append(item)
-
-        planned_groups = []
-        skipped_pairs = []
-        for sig, members in grouped_seed_cells.items():
-            enriched_members = []
-            for _vol, _cell, _spg in members:
-                cand_count, est_trials = _estimate_pair_cost(_cell, _spg, max_wp, max_Z, max_dof)
-                if cand_count == 0:
-                    #print(f"Warning: (cell, SPG) pair with volume {_vol:.1f} Å³ and SPG {_spg} has no valid Wyckoff assignments; skipping.")
-                    skipped_pairs.append((_vol, _spg))  # no valid Wyckoff assignments — skip
-                    continue
-                enriched_members.append(
-                    {
-                        "vol": float(_vol),
-                        "cell": _cell,
-                        "spg": int(_spg),
-                        "cand_count": int(cand_count),
-                        "est_trials": int(est_trials),
-                    }
-                )
-            if not enriched_members: continue
-
-            enriched_members.sort(
-                key=lambda m: (
-                    m["est_trials"],
-                    round(m["vol"], 1),
-                    m["cand_count"],
-                    spg_rank.get(m["spg"], 10**9),
-                    getattr(m["cell"], "missing", 999),
-                    _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
-                    getattr(m["cell"], "chi2", 1e9),
-                    -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
-                    -int(m["spg"]),
-                )
-            )
-            best_symmetry = max(
-                CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0)
-                for m in enriched_members
-            )
-            best_missing = min(getattr(m["cell"], "missing", 999) for m in enriched_members)
-            best_chi2 = min(float(getattr(m["cell"], "chi2", 1e9)) for m in enriched_members)
-            best_pred_rank = min(spg_rank.get(m["spg"], 10**9) for m in enriched_members)
-            min_group_volume = min(float(m["vol"]) for m in enriched_members)
-            min_group_trials = min(int(m["est_trials"]) for m in enriched_members)
-            min_group_candidates = min(int(m["cand_count"]) for m in enriched_members)
-            planned_groups.append(
-                {
-                    "signature": sig,
-                    "members": enriched_members,
-                    "best_symmetry": best_symmetry,
-                    "best_missing": best_missing,
-                    "best_chi2": best_chi2,
-                    "best_pred_rank": best_pred_rank,
-                    "min_volume": min_group_volume,
-                    "min_trials": min_group_trials,
-                    "min_candidates": min_group_candidates,
-                }
+        # For each (cell, spg) pair, estimate cost by Wyckoff candidate count and
+        # estimated number of generated trials. Globally rank every pair by a balanced 
+        # score combining relative estimated trials and relative volume.
+        total_count = 0
+        planned_pairs = []
+        
+        for _vol, _cell, _spg in all_seed_cells:
+            cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg, max_wp, max_Z, max_dof)
+            if cand_count == 0: continue
+            total_count += cand_count
+            planned_pairs.append(
+                {"vol": _vol,
+                 "cell": _cell,
+                 "spg": _spg,
+                 "cand_count": cand_count,
+                 "est_wps": est_wps,
+                 "est_trials": est_trials}
             )
 
-        planned_groups.sort(
-            key=lambda g: (
-                g["min_trials"],
-                round(g["min_volume"], 1),
-                g["min_candidates"],
-                -g["best_symmetry"],
-                g["best_pred_rank"],
-                g["best_missing"],
-                _chi2_bucket(g["best_chi2"]),
-            )
-        )
-        if len(planned_groups) == 0:
+        if len(planned_pairs) == 0:
             logger.info("No viable (cell, SPG) pairs found; cannot proceed to structure generation.")
             return state
-        logger.info(f"Planned {len(planned_groups)} cells across {len(predicted_spgs)} seed SPG candidates.")
-        planned_pairs = [
-            member
-            for group in planned_groups
-            for member in group["members"]
-        ]
 
-        min_pair_trials = min(int(member["est_trials"]) for member in planned_pairs)
-        min_pair_volume = min(float(member["vol"]) for member in planned_pairs)
+        min_pair_trials = min(int(m["est_trials"]) for m in planned_pairs)
+        min_pair_volume = min(float(m["vol"]) for m in planned_pairs)
         for member in planned_pairs:
             member["balance_score"] = _balanced_pair_priority(
                 member["est_trials"],
@@ -910,26 +766,26 @@ def run_pipeline(state: dict) -> dict:
                 m["est_trials"],
                 round(m["vol"], 1),
                 m["cand_count"],
-                -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(int(m["spg"])), 0),
+                -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(m["spg"])),
                 spg_rank.get(m["spg"], 10**9),
                 getattr(m["cell"], "missing", 999),
-                _chi2_bucket(getattr(m["cell"], "chi2", 1e9)),
+                int(np.round(float(getattr(m["cell"], "chi2", 1e9)) / 5e-4)),
                 getattr(m["cell"], "chi2", 1e9),
                 -int(m["spg"]),
             )
         )
 
-        all_seed_cells = [
-            (member["vol"], member["cell"], member["spg"])
-            for member in planned_pairs
-        ]
-
+        all_seed_cells = [(m["vol"], m["cell"], m["spg"]) for m in planned_pairs]
+        if len(all_seed_cells) == 0:
+            logger.info("No inferred SG candidate produced valid cells.")
+            state["msg"] = "No valid cells are found."
+            return state
         volumes = [float(item[0]) for item in all_seed_cells]
-        vol_lo = min(volumes)
-        vol_hi = max(volumes)
+        vol_lo, vol_hi = min(volumes), max(volumes)
         logger.info(
-            f"Phase 2: planned {len(all_seed_cells)} (cell, SPG) pair(s) across "
-            f"{len(planned_groups)} cell family/families. Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
+            f"Phase 2: ranked {len(planned_pairs)} (cell, SPG) pair(s) from {len(predicted_spgs)} seed SPG candidates. "
+            f"Volume range: {vol_lo:.1f}–{vol_hi:.1f} Å³"
+            f" | Total candidates: {total_count}"
         )
         logger.info(
             "Phase 2 strategy: globally rank every (cell, SPG) pair by a balanced "
@@ -941,40 +797,26 @@ def run_pipeline(state: dict) -> dict:
 
         # ── Phase 2 summary table ────────────────────────────────────────────
         logger.info(
-            f"\n{'Rank':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8} {'Missing':<8} {'EstTrials':<10} {'BalScore':<9} Dims"
+            f"\n{'Pair':<5} {'WPs':<5} {'SPG':<5} {'Volume(Å³)':<11} {'EstTrials':<10} {'Chi2':<8} {'Missing':<8} {'BalScore':<9} Dims"
         )
         logger.info("-" * 104)
         for _ri, _pair in enumerate(planned_pairs, start=1):
             _vol = _pair["vol"]
             _cell = _pair["cell"]
             _spg = _pair["spg"]
+            _est_wps = _pair["est_wps"]
             _est_trials = _pair["est_trials"]
             _balance_score = float(_pair.get("balance_score", float("nan")))
             _dims_str = "  ".join(f"{float(x):8.3f}" for x in _cell.dims)
             logger.info(
-                f"{_ri:<5} {_spg:<5} {_vol:<11.1f} "
-                f"{getattr(_cell, 'chi2', float('nan')):<8.4f} "
-                f"{getattr(_cell, 'missing', -1):<8} {_est_trials:<10} {_balance_score:<9.3f} {_dims_str}"
+                f"{_ri:<5} {_est_wps:<5} {_spg:<5} {_vol:<11.1f} "
+                f"{getattr(_cell, 'chi2', float('nan')):<8.4f} {_est_trials:<10}"
+                f"{getattr(_cell, 'missing', -1):<8} {_balance_score:<9.3f} {_dims_str}"
             )
         logger.info("")
 
-        # ─ Summary of skipped pairs ─
-        if skipped_pairs:
-            logger.info(
-                f"Skipped {len(skipped_pairs)} individual (cell, SPG) pair(s) due to zero valid Wyckoff "
-                f"position(s) in the given Z range.")
-
-
-    if len(all_seed_cells) == 0:
-        logger.info("No inferred SG candidate produced valid cells.")
-        state["msg"] = "No valid cells are found."
-        return state
-
     list_wp_only = bool(state.get("list_wp_only", False))
-    if list_wp_only:
-        logger.info(
-            "List-WP-only mode enabled: listing Wyckoff candidates and skipping structure generation."
-        )
+    if list_wp_only: logger.info("List Wyckoff candidates and skip structure generation.")
 
     # ── Phase 3: systematic structure generation across all ranked (cell, spg) pairs ──
     # Each entry is already a specific (cell, spg) pairing — enumerate Wyckoff
@@ -982,22 +824,24 @@ def run_pipeline(state: dict) -> dict:
     spg_cell_end_time = time.perf_counter()
     structure_start_time = spg_cell_end_time
     terminate_pair = False
-    structure_limit = int(state.get('min_structures_before_early_stop', 10))
+    structure_limit = state['min_structures_before_early_stop']
+    N_cells = len(all_seed_cells)
 
     for it in range(5):
         # Just in case some strctures failed very frequently
-        if len(global_structure_log) >= structure_limit:
+        if len(global_structure_log) >= structure_limit and terminate_pair:
             logger.info(f"Reached maximum structure limit and Stop further generation.")
             break
 
         for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
             consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg, max_wp, max_Z, max_dof)
+            N_wps = len(consolidated_wp)
             if not consolidated_wp: continue
 
-            top_preview = [f"spg={s[0]} count={s[6]} dof={s[5]}" for s in consolidated_wp[:3]]
-            logger.info(
-                f"\n[Pair {rank_idx}/{len(all_seed_cells)}] vol={vol:.1f} Å³, spg={seed_spg}, dims={[round(float(x), 3) for x in cell.dims]}: {len(consolidated_wp)} WP candidates. Top: {' | '.join(top_preview)}"
-            )
+            pair_str = f"Rank {rank_idx}/{N_cells}"
+            dim_str = "  ".join(f"{float(x):8.3f}" for x in cell.dims)
+            vol_str = f"vol={vol:.1f} Å³"
+            logger.info(f"\n[{pair_str}] {vol_str}, spg={seed_spg}, dims={dim_str}: {N_wps} WP choices.")
 
             wp_limits = get_adaptive_wp_limits(len(consolidated_wp), 20)
             prev_limit = 0
@@ -1012,23 +856,15 @@ def run_pipeline(state: dict) -> dict:
                 for sol in consolidated_wp[prev_limit:limit]:
                     # Enforce early-stop structure budget immediately, not only
                     # at the outer-loop boundary, to avoid overshooting by 1+ WPs.
-                    if len(global_structure_log) >= structure_limit:
+                    if len(global_structure_log) >= structure_limit and terminate_pair:
                         logger.info(
                             f"Reached maximum structure limit ({structure_limit}) while exploring pair "
                             f"{rank_idx}/{len(all_seed_cells)}; stopping further generation."
                         )
-                        terminate_pair = True
                         break
 
                     spg_val, _comp, _lat, wp_ids, num_wps, dof, count, Z, orig_spg = sol
                     wp_attempted += 1
-
-                    passed, _metrics, reject_reason = _validate_reused_cell_for_spg(
-                        cell, spg_val, peak_positions_np
-                    )
-                    if not passed:
-                        logger.info(f"\nPair {rank_idx} rejected for spg={spg_val}: {reject_reason}")
-                        continue
 
                     wp_labels_text = format_wyckoff_labels(spg_val, wp_ids)
                     logger.info(
@@ -1036,8 +872,7 @@ def run_pipeline(state: dict) -> dict:
                         f"n_wps={num_wps}, wyckoff={wp_labels_text}"
                     )
 
-                    if list_wp_only:
-                        continue
+                    if list_wp_only: continue
 
                     trial_state["spg"] = spg_val
                     trial_state["cells"] = copy.deepcopy([cell])
@@ -1118,6 +953,7 @@ def run_pipeline(state: dict) -> dict:
                 prev_limit = limit
             if terminate_pair: break
 
+    state["Total_est"] = total_count
     if list_wp_only:
         timing_breakdown = _timing_breakdown_seconds()
         state["timing_breakdown_seconds"] = timing_breakdown
@@ -1156,9 +992,6 @@ def run_pipeline(state: dict) -> dict:
         state["status"] = status
         state["msg"] = best_trial_message 
         return state
-    # QZ: why do we need this loop?
-    #wyckoff_message, _ = run_wyckoff_solver(state, global_structure_log)
-    #state["msg"] = wyckoff_message
     return state
 
 def _get_system_run_log_path(state: dict) -> str:

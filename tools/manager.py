@@ -542,7 +542,7 @@ class CellManager:
 
     @classmethod
     def consolidate(cls, raw_data, merge_tol=0.15, max_solutions=10, ref_cell=None,
-                    verbose=False, debug=False, ref_spg=None, ref_volume=None, 
+                    verbose=False, debug=False, ref_spg=None, ref_volume=None,
                     max_mismatch=30, chi2_tie_tol=5e-4, sort_by='chi2'):
         """
         Class method: Takes raw list of [spg, dims, missing, chi2, d2, error], instantiates objects,
@@ -772,7 +772,7 @@ class WPManager:
             max_dof (int): Maximum degrees of freedom to consider
             ref_den (float): Reference density to use for Z estimation (optional)
         """
-        df = read_csv(rf("pyxtal", "database/spg_num_wps_raw.csv"))
+        df = read_csv(rf("pyxtal", "database/spg_num_wps_mp.csv"))
         self.spg = spg
         self.df = df[df['spg'] == self.spg]
         self.cell = cell

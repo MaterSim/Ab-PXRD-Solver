@@ -412,12 +412,92 @@ def _format_unmatched_obs_details(obs_thetas, exp_thetas, exp_hkls,
         )
     return "\n".join(lines)
 
+
+def rescue_spg_cell(spg_value, candidate_cell, state):
+    """Attempt direct SPG rescue for a candidate cell.
+    
+    Args:
+        spg_value: Space group number
+        candidate_cell: Cell parameters [a, b, c] or permuted variant
+        state: Dict containing solver state with keys:
+            - direct_solver_cache: Cache of CellSolver instances by SPG
+            - direct_validate_cache: Cache of validation results
+            - branch_rescue_stats: Local stats dict for branch
+            - rescue_stats: Global stats dict
+            - thetas: Observed theta values
+            - solver_hkl_max: Max hkl indices
+            - max_mismatch: Max allowed mismatch
+            - max_chi2: Max chi2 threshold
+            - solver_max_square: Max hkl^2 sum per axis
+            - solver_total_square: Max total hkl^2
+            - min_abc: Min cell parameter
+            - max_abc: Max cell parameter
+            - min_volume: Min cell volume
+            - theta_tols: Theta tolerances
+            - solver_max_guess: Max guess iterations
+            - max_volume: Max volume
+    
+    Returns:
+        (success, solution) tuple where success is bool and solution is dict or None
+    """
+    branch_rescue_stats = state['branch_rescue_stats']
+    rescue_stats = state['rescue_stats']
+    direct_solver_cache = state['direct_solver_cache']
+    direct_validate_cache = state['direct_validate_cache']
+    
+    branch_rescue_stats["triggered"] += 1
+    rescue_stats["triggered"] += 1
+    cell_sig = tuple(round(float(x), 4) for x in np.asarray(candidate_cell).tolist())
+    cache_key = (int(spg_value), cell_sig)
+    if cache_key in direct_validate_cache:
+        branch_rescue_stats["cache_hits"] += 1
+        rescue_stats["cache_hits"] += 1
+        cached_out = direct_validate_cache[cache_key]
+        if cached_out[0]:
+            branch_rescue_stats["accepted"] += 1
+            rescue_stats["accepted"] += 1
+        return cached_out
+
+    direct_solver = direct_solver_cache.get(int(spg_value))
+    if direct_solver is None:
+        direct_solver = CellSolver(
+            spg=int(spg_value),
+            thetas=state['thetas'],
+            hkl_max=state['solver_hkl_max'],
+            max_mismatch=state['max_mismatch'],
+            max_chi2=state['max_chi2'],
+            max_square=state['solver_max_square'],
+            total_square=state['solver_total_square'],
+            min_abc=state['min_abc'],
+            max_abc=state['max_abc'],
+            min_volume=state['min_volume'],
+            theta_tols=state['theta_tols'],
+            max_guess=min(4000, state['solver_max_guess']),
+            max_volume=state['max_volume'],
+            verbose=False,
+        )
+        direct_solver_cache[int(spg_value)] = direct_solver
+
+    branch_rescue_stats["solver_checks"] += 1
+    rescue_stats["solver_checks"] += 1
+    sol_direct, _ = direct_solver.validate_cell(np.array(candidate_cell, dtype=float))
+    if sol_direct is None:
+        out = (False, None)
+    else:
+        out = (True, sol_direct)
+
+    if out[0]:
+        branch_rescue_stats["accepted"] += 1
+        rescue_stats["accepted"] += 1
+    direct_validate_cache[cache_key] = out
+    return out
+
 class CellSolver:
     def __init__(self, spg, thetas, bra=None, N_add=5, max_mismatch=20, theta_tols=[0.1, 0.15, 0.5],
                  cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
                  total_square=50, min_abc=2.0, max_abc=30.0,
                  min_angle=30.0, max_angle=150.0, min_volume=20.0, max_chi2=0.5,
-                 N_batch=20, wave_length=1.54184, max_guess=50000, verbose=False):
+                 N_batch=20, wave_length=1.54184, max_guess=50000, max_volume=None, verbose=False):
         """
         PXRD Cell Solver from the given spg and 2theta values.
         The algorithm is based on generating possible hkl combinations
@@ -444,6 +524,7 @@ class CellSolver:
             N_batch: batch size for processing guesses
             wave_length: X-ray wavelength (default Cu Kα = 1.54184 Å)
             max_guess: maximum number of cell guesses to evaluate
+            max_volume: optional maximum unit-cell volume to accept
             verbose: whether to print verbose output
         """
         if bra is None:
@@ -471,6 +552,7 @@ class CellSolver:
         self.min_angle = min_angle
         self.max_angle = max_angle
         self.min_volume = min_volume
+        self.max_volume = None if max_volume is None else float(max_volume)
         self.max_chi2 = max_chi2
         self.N_batch = N_batch
         self.wave_length = wave_length
@@ -587,6 +669,10 @@ class CellSolver:
             return None, f"Rejected cell due to abc parameters out of range: {cell_str}"
         if self.bravais == 3 and (cell[3] < self.min_angle or cell[3] > self.max_angle):
             return None, f"Rejected cell due to angle parameters out of range: {cell_str}"
+        if self.max_volume is not None:
+            volume = self.get_volume_from_cell(cell)
+            if volume > self.max_volume:
+                return None, f"Rejected cell due to volume out of range: {cell_str} ({volume:.2f} > {self.max_volume:.2f})"
 
         mask = (
             (trial_hkls_abs[:, 0] <= h_max)
@@ -876,7 +962,7 @@ class CellSolver:
         guesses = self.group.generate_hkl_guesses(h, k, l, max_square=self.max_square,
                                               total_square=self.total_square,
                                               verbose=self.verbose)
-        print(f"Generated {len(guesses)} raw hkl guess sets before filtering.")
+        #print(f"Generated {len(guesses)} raw hkl guess sets before filtering.")
         raw_guess_count = len(guesses)
         if self.spg is not None:
             print(f"Generated {raw_guess_count} hkl guess sets for space group {self.spg}.")
@@ -892,11 +978,11 @@ class CellSolver:
             dets = np.linalg.det(coeff)
             valid_mask = np.abs(dets) > 1e-10
             if np.any(~valid_mask):
-                if self.spg is not None:
-                    print(
-                        f"Filtered singular orthorhombic hkl guess sets for space group {self.spg}: "
-                        f"{len(guesses)} -> {int(np.count_nonzero(valid_mask))}."
-                    )
+                #if self.spg is not None:
+                #    print(
+                #        f"Filtered singular orthorhombic hkl guess sets for space group {self.spg}: "
+                #        f"{len(guesses)} -> {int(np.count_nonzero(valid_mask))}."
+                #    )
                 guesses = guesses[valid_mask]
                 if len(guesses) == 0:
                     return []
@@ -1120,11 +1206,23 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
             ('monoclinic-P', 2, 4, [3, 4, 6, 7, 10, 11, 13, 14]),
         ]
-        max_volume_cap = None if max_volume is None else float(max_volume)
         min_mismatch = max_mismatch + 1
+        rescue_stats = {
+            "triggered": 0,
+            "accepted": 0,
+            "solver_checks": 0,
+            "cache_hits": 0,
+        }
         solutions = []
         for _id, (bra_type, bra_index, ideal_mismatch, spgs) in enumerate(bra_list):
             print(f"Trying {bra_type} ...")
+            branch_rescue_stats = {
+                "triggered": 0,
+                "accepted": 0,
+                "solver_checks": 0,
+                "cache_hits": 0,
+                "exceptions": 0,
+            }
             solver_hkl_max = hkl_max
             solver_max_square = max_square
             solver_total_square = total_square
@@ -1164,80 +1262,36 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=solver_hkl_max, max_mismatch=max_mismatch,
                                 max_chi2=max_chi2, max_square=solver_max_square, total_square=solver_total_square,
                                 min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
-                                theta_tols=theta_tols, max_guess=solver_max_guess,
+                                theta_tols=theta_tols, max_guess=solver_max_guess, max_volume=max_volume,
                                 verbose=verbose)
             base_solutions = solver.solve(max_solutions=25, max_count=100)
             if len(base_solutions) == 0: continue
 
             count = 0
-            # Build supercell variants: for each base solution also try n×cell (n=2,3)
-            # so we don't miss a correct super-cell whose primitive hits max_mismatch
-            # in the base SPG (which has no extinctions).  The super-cell is then
-            # checked against the real SPG's extinction rules and often has 0 mismatch.
-            extended_base_solutions = list(base_solutions)
-            for _bs in base_solutions:
-                for _n in (2, 3):
-                    _sup_cell = [c * _n for c in _bs['cell']]
-                    if any(c > max_abc for c in _sup_cell):
-                        continue
-                    _sup_vol = solver.get_volume_from_cell(_sup_cell)
-                    if _sup_vol > max_abc ** 3:
-                        continue
-                    if max_volume_cap is not None and _sup_vol > max_volume_cap:
-                        continue
-                    _sup = {k: v for k, v in _bs.items()}
-                    _sup['cell'] = _sup_cell
-                    _sup['match'] = [
-                        (tuple(int(v) * _n for v in hkl), obs_theta, cal_theta)
-                        for (hkl, obs_theta, cal_theta) in _bs['match']
-                    ]
-                    _sup['mismatch'] = [
-                        (tuple(int(v) * _n for v in hkl), theta)
-                        for (hkl, theta) in _bs['mismatch']
-                    ]
-                    extended_base_solutions.append(_sup)
-
             direct_solver_cache = {}
             direct_validate_cache = {}
 
-            def _try_direct_spg_rescue(spg_value, candidate_cell):
-                cell_sig = tuple(round(float(x), 4) for x in np.asarray(candidate_cell).tolist())
-                cache_key = (int(spg_value), cell_sig)
-                if cache_key in direct_validate_cache:
-                    return direct_validate_cache[cache_key]
+            rescue_state = {
+                'direct_solver_cache': direct_solver_cache,
+                'direct_validate_cache': direct_validate_cache,
+                'branch_rescue_stats': branch_rescue_stats,
+                'rescue_stats': rescue_stats,
+                'thetas': thetas,
+                'solver_hkl_max': solver_hkl_max,
+                'max_mismatch': max_mismatch,
+                'max_chi2': max_chi2,
+                'solver_max_square': solver_max_square,
+                'solver_total_square': solver_total_square,
+                'min_abc': min_abc,
+                'max_abc': max_abc,
+                'min_volume': min_volume,
+                'theta_tols': theta_tols,
+                'solver_max_guess': solver_max_guess,
+                'max_volume': max_volume,
+            }
+            early_stop = False
 
-                try:
-                    direct_solver = direct_solver_cache.get(int(spg_value))
-                    if direct_solver is None:
-                        direct_solver = CellSolver(
-                            spg=int(spg_value),
-                            thetas=thetas,
-                            hkl_max=solver_hkl_max,
-                            max_mismatch=max_mismatch,
-                            max_chi2=max_chi2,
-                            max_square=solver_max_square,
-                            total_square=solver_total_square,
-                            min_abc=min_abc,
-                            max_abc=max_abc,
-                            min_volume=min_volume,
-                            theta_tols=theta_tols,
-                            max_guess=min(4000, solver_max_guess),
-                            verbose=False,
-                        )
-                        direct_solver_cache[int(spg_value)] = direct_solver
-
-                    sol_direct, _ = direct_solver.validate_cell(np.array(candidate_cell, dtype=float))
-                    if sol_direct is None:
-                        out = (False, None)
-                    else:
-                        out = (True, sol_direct)
-                except Exception:
-                    out = (False, None)
-
-                direct_validate_cache[cache_key] = out
-                return out
-
-            for base_solution in extended_base_solutions:
+            for base_solution in base_solutions:
                 if bra_index in [4, 7, 8]:
                     axis_orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
                 elif bra_index in [5]: #A-center
@@ -1266,15 +1320,11 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                         use_direct_rescue = False
                         direct_sol = None
                         if not match:
-                            rescue_ok, direct_sol = _try_direct_spg_rescue(spg, candidate_cell)
+                            rescue_ok, direct_sol = rescue_spg_cell(spg, candidate_cell, rescue_state)
                             if rescue_ok:
                                 match = True
                                 use_direct_rescue = True
                                 unmatch = direct_sol.get('mismatch', [])
-                                #print(
-                                #    f"Direct SG rescue accepted: spg={spg}, cell="
-                                #    f"[{', '.join(f'{float(x):.3f}' for x in np.asarray(candidate_cell).tolist())}]"
-                                #)
 
                         if match:
                             #if verbose:
@@ -1309,16 +1359,27 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                                 'errors': errors_vals,
                                 'id': id_vals,
                             }
-                            cell_str = '[' + ', '.join(f'{float(x):.3f}' for x in np.asarray(cell).tolist()) + ']'
                             volume = solver.get_volume_from_cell(cell)
-                            if max_volume_cap is not None and volume > max_volume_cap: continue
-                            print(f"Solution for {bra_type}, {spg}, cell: {cell_str}, volume: {volume:.2f}, mismatch: {len(unmatch)}, chi2: {chi2_vals[1]:.4f}")
+                            if max_volume is not None and volume > max_volume: continue
+                            #cell_str = '[' + ', '.join(f'{float(x):.3f}' for x in np.asarray(cell).tolist()) + ']'
+                            #print(f"Solution for {bra_type}, {spg}, cell: {cell_str}, volume: {volume:.2f}, mismatch: {len(unmatch)}, chi2: {chi2_vals[1]:.4f}")
                             solutions.append(solution)
+                            min_mismatch = min(min_mismatch, len(unmatch))
                             count += 1
-                            if min_mismatch > len(unmatch):
-                                min_mismatch = len(unmatch)
+
+            if branch_rescue_stats["triggered"] > 0:
+                print(
+                    f"Direct SG rescue stats ({bra_type}): "
+                    f"triggered={branch_rescue_stats['triggered']}, "
+                    f"accepted={branch_rescue_stats['accepted']}, "
+                    f"cache_hits={branch_rescue_stats['cache_hits']}, "
+                    f"solver_checks={branch_rescue_stats['solver_checks']}, "
+                )
             # Early stop with high confidence
             if count > 0 and min_mismatch <= ideal_mismatch:
+                early_stop = True
+
+            if early_stop and bra_index not in [11, 12]: # For higher symmetry branches, we can be more confident about early stopping.
                 print(
                     f"SmartCellSolver early stop: {bra_type} reached ideal mismatch "
                     f"(best={min_mismatch}, ideal={ideal_mismatch})."

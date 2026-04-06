@@ -150,6 +150,29 @@ def rank_smart_cell_spg_cell_solutions(solutions: list[dict]) -> list[dict]:
     return [sol for _metrics, sol in ranked]
 
 
+def _smart_cell_pair_key(spg: int, cell) -> tuple[int, tuple[float, ...]]:
+    dims = np.asarray(cell, dtype=float).tolist()
+    return int(spg), tuple(round(float(x), 4) for x in dims)
+
+
+def build_smart_cell_metrics_cache(solutions: list[dict]) -> dict[tuple[int, tuple[float, ...]], dict]:
+    metrics_by_pair: dict[tuple[int, tuple[float, ...]], dict] = {}
+    for sol in rank_smart_cell_spg_cell_solutions(solutions):
+        metrics = _smart_solution_metrics(sol)
+        if metrics is None:
+            continue
+        key = _smart_cell_pair_key(int(metrics["spg"]), sol.get("cell"))
+        record = {
+            "chi2": float(metrics["chi2"]),
+            "missing": int(metrics["mismatch"]),
+            "errors": [float(x) for x in (sol.get("errors", []) or [])],
+        }
+        prev = metrics_by_pair.get(key)
+        if prev is None or (record["missing"], record["chi2"]) < (prev["missing"], prev["chi2"]):
+            metrics_by_pair[key] = record
+    return metrics_by_pair
+
+
 def build_ranked_smart_cell_solution_cache(solutions: list[dict]) -> dict[int, list[tuple]]:
     raw_by_spg: dict[int, list[tuple]] = {}
     for sol in rank_smart_cell_spg_cell_solutions(solutions):
@@ -186,7 +209,8 @@ def infer_spg_from_backend(
     result = {
         "predictions": [],
         "source": None,
-        "smart_cell_raw_solutions_by_spg": {},
+        "smart_cell_candidates_by_spg": {},
+        "smart_cell_metrics_by_pair": {},
         "smart_cell_ranked_spg_cells": [],
     }
 
@@ -206,7 +230,9 @@ def infer_spg_from_backend(
             verbose=False,
         )
         result["smart_cell_ranked_spg_cells"] = rank_smart_cell_spg_cell_solutions(smart_solutions)
-        result["smart_cell_raw_solutions_by_spg"] = build_ranked_smart_cell_solution_cache(smart_solutions)
+        candidate_map = build_ranked_smart_cell_solution_cache(smart_solutions)
+        result["smart_cell_candidates_by_spg"] = candidate_map
+        result["smart_cell_metrics_by_pair"] = build_smart_cell_metrics_cache(smart_solutions)
         result["predictions"] = rank_spg_candidates_from_smart_solutions(smart_solutions, top_k=spg_top_k)
         result["source"] = "smart_cell_solver"
         if result["predictions"]:

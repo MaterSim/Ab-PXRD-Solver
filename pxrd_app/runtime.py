@@ -6,7 +6,7 @@ FAILURE_STATUSES = {"no_cells", "no_solution"}
 
 _DEFAULT_RESULTS_DIR = "Results"
 CSV_COLUMNS = [
-    "csv_file_name", "Runtime", "N_struc",
+    "csv_file_name", "Runtime", "N_struc", "N_est",
     "Status", "E", "dE", "R2", "Chi2", "SPG", "Wyckoff", "Cell",
 ]
 
@@ -112,6 +112,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
     # --- Structure count ---
     structure_log = run_state.get("structure_log") or []
     n_struc = len(structure_log)
+    n_est = run_state.get("Total_est", 0)
 
     # --- Best-structure metrics (only on success) ---
     E = dE = R2 = Chi2 = SPG = Wyckoff = Cell = ""
@@ -135,7 +136,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
         writer = csv.writer(fh)
         if write_header: writer.writerow(CSV_COLUMNS)
         writer.writerow([
-            csv_file_name, runtime_str, n_struc,
+            csv_file_name, runtime_str, n_struc, n_est,
             status_label, E, dE, R2, Chi2, SPG, Wyckoff, Cell,
         ])
 
