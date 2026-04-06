@@ -645,8 +645,8 @@ class CellManager:
                         if verbose:
                             print(f"{'MERGE':<6} | {str(candidate)} | Similar (dropped)")
                     continue
-
-        print(f"Consolidation: {len(kept_solutions)} unique solutions from {len(raw_data)} entries.")
+        if len(kept_solutions) > 0:
+            print(f"Consolidation: {len(kept_solutions)} unique solutions from {len(raw_data)} entries.")
         if debug and not match_cell and ref_cell is not None:
             print("Warning: No solutions matched the reference volume criteria.")
             import sys; sys.exit()

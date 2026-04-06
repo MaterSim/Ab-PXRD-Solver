@@ -838,7 +838,7 @@ def run_pipeline(state: dict) -> dict:
             N_wps = len(consolidated_wp)
             if not consolidated_wp: continue
 
-            pair_str = f"Rank {rank_idx}/{N_cells}"
+            pair_str = f"Pair {rank_idx}/{N_cells}"
             dim_str = "  ".join(f"{float(x):8.3f}" for x in cell.dims)
             vol_str = f"vol={vol:.1f} Å³"
             logger.info(f"\n[{pair_str}] {vol_str}, spg={seed_spg}, dims={dim_str}: {N_wps} WP choices.")
