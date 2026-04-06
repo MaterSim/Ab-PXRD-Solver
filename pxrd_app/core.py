@@ -797,7 +797,7 @@ def run_pipeline(state: dict) -> dict:
 
         # ── Phase 2 summary table ────────────────────────────────────────────
         logger.info(
-            f"\n{'Pair':<5} {'WPs':<5} {'SPG':<5} {'Volume(Å³)':<11} {'EstTrials':<10} {'Chi2':<8} {'Missing':<8} {'BalScore':<9} Dims"
+            f"\n{'Pair':<5} {'WPs':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8}{'EstTrials':<10}{'Missing':<8} {'BalScore':<9} Dims"
         )
         logger.info("-" * 104)
         for _ri, _pair in enumerate(planned_pairs, start=1):
