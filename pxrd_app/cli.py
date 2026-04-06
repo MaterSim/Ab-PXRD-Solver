@@ -165,7 +165,11 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         default="Results",
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
-
+    parser.add_argument(
+        "--use-debug",
+        action="store_true",
+        help="Enable debug mode for detailed logging.",
+    )
 
     return parser
 

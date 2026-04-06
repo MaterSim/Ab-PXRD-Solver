@@ -135,9 +135,23 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
 
     df = pd.read_csv(pxrd_csv, comment='#')
     x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values
-    data = RawDataManager(x1, y1, bg_subtract=False)
-    data.get_peaks_from_scipy()
-    data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
+
+    # Background subtraction and peak detection
+    if y1.min() > 2.5:
+        bg_subtract = True 
+    else:
+        if y1.min() > 1.0:
+            y1 -= y1.min()
+        bg_subtract = False
+    min_height = 7.5 if bg_subtract else 3.0
+    height = min_height if bg_subtract else 1.0
+    data = RawDataManager(x1, y1, bg_subtract=bg_subtract)
+    data.get_peaks_from_scipy(height=height)
+    data.filter_peaks_by_ml(threshold=0.8, min_height=min_height)
+    
+    #data = RawDataManager(x1, y1, bg_subtract=False)
+    #data.get_peaks_from_scipy()
+    #data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
     peaks = data.peaks
     peak_positions = x1[peaks]
 

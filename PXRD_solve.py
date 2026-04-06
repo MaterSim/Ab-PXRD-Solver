@@ -28,7 +28,15 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     try:
-        csv_files = collect_input_csv_files(args.input)
+        if args.use_debug:
+            with open("bug.txt", "r", encoding="utf-8") as f:
+                csv_files = [
+                    line.strip()
+                    for line in f
+                    if line.strip() and not line.lstrip().startswith("#")
+                ]
+        else:
+            csv_files = collect_input_csv_files(args.input)
         if len(csv_files) > 1: csv_files = csv_files[args.begin:args.end]
         if args.reverse: csv_files = list(reversed(csv_files))
     except FileNotFoundError as exc:
