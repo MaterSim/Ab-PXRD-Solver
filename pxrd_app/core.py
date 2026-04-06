@@ -135,7 +135,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     density_min, density_max = density['min'], density['max']
 
     df = pd.read_csv(pxrd_csv, comment='#')
-    x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values
+    x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values.copy()
 
     # Background subtraction and peak detection
     if y1.min() > 2.5:
