@@ -982,10 +982,11 @@ def run_pipeline(state: dict) -> dict:
     spg_cell_end_time = time.perf_counter()
     structure_start_time = spg_cell_end_time
     terminate_pair = False
+    structure_limit = int(state.get('min_structures_before_early_stop', 10))
 
     for it in range(5):
         # Just in case some strctures failed very frequently
-        if len(global_structure_log) >= state['min_structures_before_early_stop']:
+        if len(global_structure_log) >= structure_limit:
             logger.info(f"Reached maximum structure limit and Stop further generation.")
             break
 
@@ -1009,6 +1010,16 @@ def run_pipeline(state: dict) -> dict:
                 if wp_attempted >= len(consolidated_wp): break
 
                 for sol in consolidated_wp[prev_limit:limit]:
+                    # Enforce early-stop structure budget immediately, not only
+                    # at the outer-loop boundary, to avoid overshooting by 1+ WPs.
+                    if len(global_structure_log) >= structure_limit:
+                        logger.info(
+                            f"Reached maximum structure limit ({structure_limit}) while exploring pair "
+                            f"{rank_idx}/{len(all_seed_cells)}; stopping further generation."
+                        )
+                        terminate_pair = True
+                        break
+
                     spg_val, _comp, _lat, wp_ids, num_wps, dof, count, Z, orig_spg = sol
                     wp_attempted += 1
 
@@ -1089,6 +1100,20 @@ def run_pipeline(state: dict) -> dict:
                                     f"and {wp_attempted} WP candidate(s).")
                                     terminate_pair = True
                                     break
+
+                    # If we already have an accepted solution, stop once the
+                    # minimum-structures exploration budget is reached.
+                    if (
+                        len(global_structure_log) >= structure_limit
+                        and best_trial_state is not None
+                        and (best_trial_state.get("best_result") or {}).get("accepted")
+                    ):
+                        logger.info(
+                            f"Accepted solution found and structure budget reached "
+                            f"({len(global_structure_log)}/{structure_limit}); stopping search."
+                        )
+                        terminate_pair = True
+                        break
                 if terminate_pair: break
                 prev_limit = limit
             if terminate_pair: break
@@ -1114,8 +1139,9 @@ def run_pipeline(state: dict) -> dict:
         # End of all-pairs loop: emit global plot covering every structure tried
         state["timing_breakdown_seconds"] = timing_breakdown
         formula_str = state.get("formula", "unknown")
+        spg_str = f"SG{best_trial_spg}" if best_trial_spg is not None else "SG_unknown"
         results_dir = state.get("results_dir", "Results")
-        output_png = f"{results_dir}/EnergyR2_{formula_str}.png"
+        output_png = f"{results_dir}/EnergyR2_{formula_str}_{spg_str}.png"
         best_trial_state['status'] = status
         plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 

@@ -82,9 +82,6 @@ def _resume_report_paths(csv_path: str, results_dir: str) -> tuple[Path, Path]:
     stem = _system_stem(csv_path)
     return Path(results_dir) / f"ResumeReport_{stem}.md"
 
-def _merged_plot_path(formula: str, results_dir: str) -> Path:
-    return Path(results_dir) / f"EnergyR2_{formula}_resume.png"
-
 def _build_resume_log_handler(state: dict) -> logging.Handler:
     source_log = str(state.get("source_run_log") or "").strip()
     if not source_log:
@@ -645,8 +642,9 @@ def run_resume(csv_path, args):
     timing["structure_inference"] = structure_runtime
     timing["total_runtime"] = structure_runtime
     timing["spg_and_cell"] = 0.0
-
-    merged_plot = _merged_plot_path(winner_state.get("formula"), args.output)
+    formula = winner_state.get("formula") or "unknown_formula"
+    spg = winner_state.get("spg") or "unknown_spg"
+    merged_plot = Path(args.output) / f"EnergyR2_{formula}_{spg}_resume.png"
     if combined_plot_log:
         plot_energy_vs_r2(combined_plot_log, winner_state, merged_plot, timing)
         logger.info(f"Energy–R² plot saved to {merged_plot}")
