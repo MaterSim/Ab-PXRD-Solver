@@ -415,7 +415,7 @@ def _format_unmatched_obs_details(obs_thetas, exp_thetas, exp_hkls,
 
 def rescue_spg_cell(spg_value, candidate_cell, state):
     """Attempt direct SPG rescue for a candidate cell.
-    
+
     Args:
         spg_value: Space group number
         candidate_cell: Cell parameters [a, b, c] or permuted variant
@@ -436,7 +436,7 @@ def rescue_spg_cell(spg_value, candidate_cell, state):
             - theta_tols: Theta tolerances
             - solver_max_guess: Max guess iterations
             - max_volume: Max volume
-    
+
     Returns:
         (success, solution) tuple where success is bool and solution is dict or None
     """
@@ -444,7 +444,7 @@ def rescue_spg_cell(spg_value, candidate_cell, state):
     rescue_stats = state['rescue_stats']
     direct_solver_cache = state['direct_solver_cache']
     direct_validate_cache = state['direct_validate_cache']
-    
+
     branch_rescue_stats["triggered"] += 1
     rescue_stats["triggered"] += 1
     cell_sig = tuple(round(float(x), 4) for x in np.asarray(candidate_cell).tolist())
@@ -1379,7 +1379,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             if count > 0 and min_mismatch <= ideal_mismatch:
                 early_stop = True
 
-            if early_stop and bra_index not in [11, 12]: # For higher symmetry branches, we can be more confident about early stopping.
+            if early_stop and bra_index not in [11, 12, 15]: # For higher symmetry branches, we can be more confident about early stopping.
                 print(
                     f"SmartCellSolver early stop: {bra_type} reached ideal mismatch "
                     f"(best={min_mismatch}, ideal={ideal_mismatch})."
@@ -1681,7 +1681,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
     """
     # print(f"\n{'='*60}, struc_count={struc_count}, structure_log={len(structure_log)}")
     # Special case for single-element systems: be more permissive to allow more candidates to be refined and potentially find a good match.
-    if len(composition.keys()) == 1: sim_max = min(sim_max, 0.5)  # be more permissive for single-element systems where sim is less reliable
+    if len(composition.keys()) == 1: sim_max = min(sim_max, 0.4)  # be more permissive for single-element systems where sim is less reliable
     eng_best = eng_min
     best_refined_result = None
     best_refined_score = -1e9
@@ -1963,7 +1963,7 @@ if __name__ == "__main__":
 
     for data in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
                       #(f'GSAS_PXRD/O2Rb_139.csv', 115.46),
-                      (f'GSAS_PXRD/Ba3P4_43.csv', 1721.07),
+                      #(f'GSAS_PXRD/Ba3P4_43.csv', 1721.07),
                       #(f'GSAS_PXRD/Fe2O4Ti_36.csv', 304.28),
                       #f'Examples/PXRD_Be2SiBi_119.csv',
                       #f'Examples/PXRD_K2SnO6_148.csv',
@@ -2008,7 +2008,7 @@ if __name__ == "__main__":
                       #(f'GSAS_PXRD/Cu3O4_225.csv', 733.66),
                       #(f'GSAS_PXRD/Li_166.csv', 183.62),       #pass
                       #(f'GSAS_PXRD/Li_229.csv', 40.68),        #pass
-                      #(f'GSAS_PXRD/Li_225.csv', 81.39),        #pass
+                      (f'GSAS_PXRD/Li_225.csv', 81.39),        #pass
                       #(f'GSAS_PXRD/Li_194.csv', 81.46),        #pass
                       #(f'GSAS_PXRD/Li3N_191.csv', 43.50),      #pass
                       #(f'GSAS_PXRD/HLi4N_88.csv', 227.87),     #pass
@@ -2023,7 +2023,7 @@ if __name__ == "__main__":
         df = pd.read_csv(match_csv)
         x1, y1 = df.iloc[:, 0].values, df.iloc[:, 1].values
         if y1.min() > 2.5:
-            bg_subtract = True 
+            bg_subtract = True
         else:
             if y1.min() > 1.0:
                 y1 -= y1.min()

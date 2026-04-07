@@ -300,6 +300,16 @@ class RawDataManager:
         plt.savefig(figname)
         plt.close()
 
+    def to_csv(self, filename):
+        """
+        Save the processed XRD data to a CSV file.
+
+        Args:
+            filename (str): The name of the file to save the data to.
+        """
+        data = np.column_stack((self.x, self.y))
+        np.savetxt(filename, data, delimiter=",", header="2theta,intensity", comments="")
+
     def plot_peaks_vs_cell_solutions(self, cell_solutions, match_ids=[],
                                      chi2_limit=None,
                                      title=None,

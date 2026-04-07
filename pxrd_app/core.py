@@ -28,6 +28,23 @@ console_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
+
+def get_pair_priority(
+    est_trials: int,
+    volume: float,
+    min_trials: int,
+    min_volume: float,
+    trial_weight: float = 0.5,
+    volume_weight: float = 0.5,
+) -> float:
+    safe_trials = max(1.0, float(est_trials))
+    safe_volume = max(1e-6, float(volume))
+    ref_trials = max(1.0, float(min_trials))
+    ref_volume = max(1e-6, float(min_volume))
+    trial_ratio = safe_trials / ref_trials
+    volume_ratio = safe_volume / ref_volume
+    return float((trial_ratio ** trial_weight) * (volume_ratio ** volume_weight))
+
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
     if not text:
@@ -139,22 +156,32 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
 
     # Background subtraction and peak detection
     if y1.min() > 2.5:
-        bg_subtract = True 
+        bg_subtract = True
     else:
         if y1.min() > 1.0:
             y1 -= y1.min()
         bg_subtract = False
-    min_height = 7.5 if bg_subtract else 3.0
+    min_height = 7.5 if bg_subtract else 5.0
     height = min_height if bg_subtract else 1.0
     data = RawDataManager(x1, y1, bg_subtract=bg_subtract)
     data.get_peaks_from_scipy(height=height)
     data.filter_peaks_by_ml(threshold=0.8, min_height=min_height)
-    
+    if bg_subtract:
+        state['pxrd_csv'] = pxrd_csv.replace(".csv", "_bg_subtracted.csv")
+        print(pxrd_csv, state['pxrd_csv'])
+        data.to_csv(state['pxrd_csv'])
+        logger.info(f"Background subtraction applied (min intensity {y1.min():.2f} > 2.5).")
+
     #data = RawDataManager(x1, y1, bg_subtract=False)
     #data.get_peaks_from_scipy()
     #data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
     peaks = data.peaks
     peak_positions = x1[peaks]
+
+    # QZ: Just to handle cases with very few peaks with light elements.
+    if len(peaks) <= 10 and bg_subtract:
+        state['sim_max'] = 0.4
+        state['max_chi2'] = 0.22
 
     if infer_spg:
         result = infer_spg_from_backend(
@@ -227,7 +254,7 @@ def run_cell_solver(state: dict) -> dict:
                 }
         else:
             raise ValueError(f"SmartCellSolver cannot find SPG {spg}. Exiting.")
-            
+
     else:
         peak_positions_np = np.array(peak_positions)
         solver = CellSolver(
@@ -594,21 +621,7 @@ def run_pipeline(state: dict) -> dict:
     composition = state["composition"]
     density_min, density_max = state["density_min"], state["density_max"]
 
-    def _balanced_pair_priority(
-        est_trials: int,
-        volume: float,
-        min_trials: int,
-        min_volume: float,
-        trial_weight: float = 0.6,
-        volume_weight: float = 0.4,
-    ) -> float:
-        safe_trials = max(1.0, float(est_trials))
-        safe_volume = max(1e-6, float(volume))
-        ref_trials = max(1.0, float(min_trials))
-        ref_volume = max(1e-6, float(min_volume))
-        trial_ratio = safe_trials / ref_trials
-        volume_ratio = safe_volume / ref_volume
-        return float((trial_ratio ** trial_weight) * (volume_ratio ** volume_weight))
+
 
     wp_candidate_cache: dict[tuple, list] = {}
     wp_cost_cache: dict[tuple, tuple[int, int]] = {}
@@ -729,11 +742,11 @@ def run_pipeline(state: dict) -> dict:
     if all_seed_cells:
         # ── Phase 2: plan ALL (cell, spg) pairs with explicit cost estimates ─
         # For each (cell, spg) pair, estimate cost by Wyckoff candidate count and
-        # estimated number of generated trials. Globally rank every pair by a balanced 
+        # estimated number of generated trials. Globally rank every pair by a balanced
         # score combining relative estimated trials and relative volume.
         total_count = 0
         planned_pairs = []
-        
+
         for _vol, _cell, _spg in all_seed_cells:
             cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg, max_wp, max_Z, max_dof)
             if cand_count == 0: continue
@@ -754,7 +767,7 @@ def run_pipeline(state: dict) -> dict:
         min_pair_trials = min(int(m["est_trials"]) for m in planned_pairs)
         min_pair_volume = min(float(m["vol"]) for m in planned_pairs)
         for member in planned_pairs:
-            member["balance_score"] = _balanced_pair_priority(
+            member["balance_score"] = get_pair_priority(
                 member["est_trials"],
                 member["vol"],
                 min_pair_trials,
@@ -982,7 +995,7 @@ def run_pipeline(state: dict) -> dict:
         plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 
         if status == "Success":
-            _emit_accepted_solution(best_trial_spg, best_trial_result, 
+            _emit_accepted_solution(best_trial_spg, best_trial_result,
                                     prefix="Best accepted solution")
             logger.info(f"Return best result in spg={best_trial_spg}.")
         else:
@@ -990,7 +1003,7 @@ def run_pipeline(state: dict) -> dict:
         logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
         state.update(best_trial_state)
         state["status"] = status
-        state["msg"] = best_trial_message 
+        state["msg"] = best_trial_message
         return state
     return state
 

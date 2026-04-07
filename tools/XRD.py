@@ -876,13 +876,17 @@ def add_peak_caglioti(twotheta, mu, gamma, sigma2, eta=0.5, step=0.02):
 
     # Gaussian component: G(x) = exp(-x²/(2σ²)) / (σ√(2π))
     sigma = np.sqrt(sigma2)
-    gaussian = np.exp(-x**2 / (2 * sigma2)) / (sigma * np.sqrt(2 * np.pi))
+    # Use errstate to suppress underflow warning: when x is far from peak, exp underflows to 0 (correct behavior)
+    with np.errstate(under='ignore'):
+        gaussian = np.exp(-x**2 / (2 * sigma2)) / (sigma * np.sqrt(2 * np.pi))
 
     # Lorentzian component: L(x) = (γ/π) / (x² + γ²)
     lorentzian = gamma / (np.pi * (x**2 + gamma**2))
 
     # Pseudo-Voigt: η*L + (1-η)*G
-    pseudo_voigt = eta * lorentzian + (1 - eta) * gaussian
+    # Underflow in far tails is expected and numerically equivalent to zero contribution.
+    with np.errstate(under='ignore'):
+        pseudo_voigt = eta * lorentzian + (1 - eta) * gaussian
 
     # Mask to only include significant contributions
     mask = np.abs(twotheta - mu) <= l_gap
