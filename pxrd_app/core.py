@@ -45,7 +45,7 @@ def get_pair_priority(
     ref_volume = max(1e-6, float(min_volume))
     trial_ratio = safe_trials / ref_trials
     volume_ratio = safe_volume / ref_volume
-    missing_score = (missing_peaks + 1) / max_missing
+    missing_score = (missing_peaks + 1) / (max_missing + 1)
     return (trial_ratio ** trial_weight) * (volume_ratio ** volume_weight) * missing_score
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
