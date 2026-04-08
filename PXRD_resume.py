@@ -732,7 +732,7 @@ if __name__ == "__main__":
                 sys.exit(1)
         else:
             try:
-                csv_paths = [str(path) for path in collect_input_csv_files(args.input)]
+                csv_paths = [str(path) for path in collect_input_csv_files(args.input, use_list=args.use_list)]
             except FileNotFoundError as exc:
                 print(str(exc))
                 sys.exit(1)

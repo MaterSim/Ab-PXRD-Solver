@@ -493,8 +493,8 @@ def rescue_spg_cell(spg_value, candidate_cell, state):
     return out
 
 class CellSolver:
-    def __init__(self, spg, thetas, bra=None, N_add=5, max_mismatch=20, theta_tols=[0.1, 0.15, 0.5],
-                 cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
+    def __init__(self, spg, thetas, bra=None, N_add=5, max_mismatch=20,
+                 theta_tols=[0.1, 0.15, 0.5], cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
                  total_square=50, min_abc=2.0, max_abc=30.0,
                  min_angle=30.0, max_angle=150.0, min_volume=20.0, max_chi2=0.5,
                  N_batch=20, wave_length=1.54184, max_guess=50000, max_volume=None, verbose=False):
@@ -1227,6 +1227,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             solver_max_square = max_square
             solver_total_square = total_square
             solver_max_guess = 50000
+            N_add = 5
             if bra_index in [5, 6, 7, 8]: # orthorhombic
                 for id in range(_id+1, len(bra_list)-2):
                     spgs += bra_list[id][-1]
@@ -1235,13 +1236,16 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             # combinatorics can explode (e.g., monoclinic-C > 1e6 raw guesses).
             if bra_type.startswith('monoclinic'):
                 solver_hkl_max = (
-                    min(int(hkl_max[0]), 2),
+                    min(int(hkl_max[0]), 3),
                     min(int(hkl_max[1]), 4),
                     min(int(hkl_max[2]), 4),
                 )
                 solver_max_square = min(int(max_square), 20)
                 solver_total_square = min(int(total_square), 28)
-                solver_max_guess = 12000
+                if bra_index == 2:
+                    N_add, solver_max_guess = 3, 30000
+                else:
+                    N_add, solver_max_guess = 4, 25000
             elif bra_type.startswith('orthorhombic'):
                 solver_max_guess = 25000
             elif bra_index in [9, 10, 11, 12]: # teragonal and hexagonal
@@ -1255,12 +1259,14 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                 solver_max_square = max(int(max_square), 35)
                 solver_total_square = max(int(total_square), 35)
 
+
             # use very strict criteria to get initial cell solutions for each space group,
             # then use those solutions to determine the centering and possible space groups.
             # This way we can significantly reduce the number of space groups we need to check in the later steps,
             # and also increase the chances of finding the correct solution by starting with a more accurate initial guess.
-            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=solver_hkl_max, max_mismatch=max_mismatch,
-                                max_chi2=max_chi2, max_square=solver_max_square, total_square=solver_total_square,
+            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=solver_hkl_max, 
+                                N_add=N_add, max_mismatch=max_mismatch, max_chi2=max_chi2,
+                                max_square=solver_max_square, total_square=solver_total_square,
                                 min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
                                 theta_tols=theta_tols, max_guess=solver_max_guess, max_volume=max_volume,
                                 verbose=verbose)
@@ -1298,22 +1304,39 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                     axis_orders = [(0, 1, 2), (0, 2, 1)]
                 elif bra_index in [6]: #C-center
                     axis_orders = [(0, 1, 2), (1, 0, 2)]
+                elif bra_index in [2, 3]: #Monoclinic
+                    axis_orders = [(0, 1, 2), (2, 1, 0)]
                 else:
                     axis_orders = [(0, 1, 2)]
 
                 matched_hkls = [m[0] for m in base_solution['match']]
+                base_cell = base_solution['cell']
+                base_match = base_solution['match']
+                base_mismatch = base_solution['mismatch']
 
                 for axis_order in axis_orders:
-                    #permuted_hkls = [tuple(m[0][i] for i in axis_order) for m in matched_hkls]
-                    #if len(axis_orders)==6: print(f"Permuted hkls: {permuted_hkls}"); import sys; sys.exit("Debugging stop.")
+                    # Axis permutations are only meaningful for orthorhombic SPGs (16-74).
+                    has_orthorhombic_spg = any(15 < spg < 75 for spg in spgs)
+                    if has_orthorhombic_spg:
+                        permuted_cell = [base_cell[i] for i in axis_order]
+                        permuted_match = [
+                            (tuple(m[0][i] for i in axis_order), m[1], m[2])
+                            for m in base_match
+                        ]
+                        permuted_mismatch = [
+                            (tuple(m[0][i] for i in axis_order), m[1])
+                            for m in base_mismatch
+                        ]
+                    else:
+                        permuted_cell = base_cell
+                        permuted_match = base_match
+                        permuted_mismatch = base_mismatch
                     for spg in spgs:
-                        if 15 < spg < 75:
-                            candidate_cell = [base_solution['cell'][i] for i in axis_order]
-                        else:
-                            candidate_cell = base_solution['cell']
+                        use_axis_permutation = 15 < spg < 75
+                        candidate_cell = permuted_cell if use_axis_permutation else base_cell
 
                         match, unmatch = check_space_group(spg, matched_hkls,
-                                                           base_solution['mismatch'],
+                                                           base_mismatch,
                                                            axis_order)
                         #print(f"Checking SPG {spg} for {bra_type} with axis order {axis_order}: match={match}, unmatch={len(unmatch)}")
                         #import sys; sys.exit()
@@ -1338,15 +1361,15 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                                 id_vals = direct_sol.get('id', base_solution['id'])
                             elif 15 < spg < 75:
                                 cell = candidate_cell
-                                peaks = [(tuple(m[0][i] for i in axis_order), m[1], m[2]) for m in base_solution['match']]
-                                mis_peaks = [(tuple(m[0][i] for i in axis_order), m[1]) for m in base_solution['mismatch']]
+                                peaks = permuted_match
+                                mis_peaks = permuted_mismatch
                                 chi2_vals = base_solution['chi2']
                                 errors_vals = base_solution['errors']
                                 id_vals = base_solution['id']
                             else:
-                                cell = base_solution['cell']
-                                peaks = base_solution['match']
-                                mis_peaks = base_solution['mismatch']
+                                cell = base_cell
+                                peaks = base_match
+                                mis_peaks = base_mismatch
                                 chi2_vals = base_solution['chi2']
                                 errors_vals = base_solution['errors']
                                 id_vals = base_solution['id']
@@ -1964,7 +1987,7 @@ if __name__ == "__main__":
     for data in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
                       #(f'GSAS_PXRD/O2Rb_139.csv', 115.46),
                       #(f'GSAS_PXRD/Ba3P4_43.csv', 1721.07),
-                      (f'GSAS_PXRD/Fe2O4Ti_36.csv', 304.28),
+                      #(f'GSAS_PXRD/Fe2O4Ti_36.csv', 304.28),
                       #f'Examples/PXRD_Be2SiBi_119.csv',
                       #f'Examples/PXRD_K2SnO6_148.csv',
                       #f'Examples/PXRD_HgC2N2_122.csv',
@@ -1972,7 +1995,6 @@ if __name__ == "__main__":
                       #f'Examples/hardPXRD_HfTlCuS3_63.csv',
                       #f'Examples/PXRD_CoO2_12.csv',
                       #f'GSAS_PXRD/BaMn4O8_12.csv',
-                      #(f'GSAS_PXRD/AsCd2Cl2_14.csv', 549.84),
                       #(f'GSAS_PXRD/PdPm2Pt_225.csv', 364.50),
                       #(f'GSAS_PXRD/Pa3Te_221.csv', 95.46),
                       #(f'GSAS_PXRD/Hg3Mg_194.csv', 189.09),
@@ -2017,6 +2039,17 @@ if __name__ == "__main__":
                       #(f'GSAS_PXRD/B12BeC2_166.csv', 336.32),  #pass
                       #(f'GSAS_PXRD/B3Li_127.csv', 146.90), #pass
                       #(f'GSAS_PXRD/H8Si_31.csv', 233.55),
+                      #(f'GSAS_PXRD/AsCd2Cl2_14.csv', 549.84),
+                      #(f'GSAS_PXRD/RbTe6_15.csv', 1058.53), #pass
+                      #(f'GSAS_PXRD/Co3LiO6_12.csv', 419.64), #++++++
+                      #(f'GSAS_PXRD/AsPd5_12.csv', 363.93), #++++++
+                      #(f'GSAS_PXRD/In3Rh2Sr2_12.csv', 342.05), #++++++
+                      #(f'GSAS_PXRD/In4SbTe3_8.csv', 243.44), #pass
+                      #(f'GSAS_PXRD/O2Si_9.csv', 363.63), #pass
+                      #(f'GSAS_PXRD/BaSb2_11.csv', 656.92),
+                      (f'GSAS_PXRD/S4V_15.csv', 892.36),
+                      #(f'GSAS_PXRD/B2Li2Se5_15.csv', 666.82),
+                      #(f'GSAS_PXRD/LiMo2O4_15.csv', 361.04),
                     ]:
         match_csv, ref_volume = data if isinstance(data, tuple) else (data, None)
         formula, ref_spg = _infer_formula_spg(Path(match_csv))
@@ -2028,7 +2061,7 @@ if __name__ == "__main__":
             if y1.min() > 1.0:
                 y1 -= y1.min()
             bg_subtract = False
-        min_height = 7.5 if bg_subtract else 5.0 #4#3.5#0
+        min_height = 7.5 if bg_subtract else 2.0 #4#3.5#0
         height = min_height if bg_subtract else 1.0
         data = RawDataManager(x1, y1, bg_subtract=bg_subtract) #bg_subtract=False)
         data.get_peaks_from_scipy(height=min_height)#height=25.0)
@@ -2039,7 +2072,7 @@ if __name__ == "__main__":
         data.plot('test.png')
         min_abc = 2.0
         max_abc = 35.0
-        if ref_spg is not None:
+        if False: #ref_spg is not None:
             solver = CellSolver(ref_spg,
                             x1[data.peaks],
                             max_mismatch=30,
@@ -2068,8 +2101,8 @@ if __name__ == "__main__":
                             theta_tols=[0.1, 0.15, 0.5],
                             min_abc=min_abc,
                             max_abc=max_abc,
-                            verbose=False,
-                            max_volume=1000,
+                            verbose=True,
+                            max_volume=2000,
                             )
             sols = [
                 (sol['spg'], sol['cell'], sol['mismatch'], sol['chi2'][1], sol['errors'], sol['id'], sol['match'])

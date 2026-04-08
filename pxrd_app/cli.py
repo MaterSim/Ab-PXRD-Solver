@@ -62,6 +62,14 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--use-list",
+        action="store_true",
+        help=(
+            "Treat --input as a text file containing CSV paths (one per line). "
+            "Blank lines and lines starting with '#' are ignored."
+        ),
+    )
+    parser.add_argument(
         "--formula",
         default="",
         help="Optional formula override. Leave empty to parse from filename.",
@@ -165,12 +173,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         default="Results",
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
-    parser.add_argument(
-        "--use-debug",
-        action="store_true",
-        help="Enable debug mode for detailed logging.",
-    )
-
     return parser
 
 
@@ -182,8 +184,30 @@ def resolve_cli_symmetry(args: argparse.Namespace) -> str | None:
     return "auto" if args.infer_spg else None
 
 
-def collect_input_csv_files(input_csv: str) -> list[Path]:
+def collect_input_csv_files(input_csv: str, use_list: bool = False) -> list[Path]:
     input_path = Path(input_csv)
+    if use_list:
+        if not input_path.is_file():
+            raise FileNotFoundError(f"List file does not exist: {input_path}")
+
+        base_dir = input_path.parent
+        csv_files: list[Path] = []
+        with input_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                entry = line.strip()
+                if not entry or entry.startswith("#"):
+                    continue
+                p = Path(entry)
+                if not p.is_absolute():
+                    p = (base_dir / p).resolve()
+                if not p.is_file():
+                    raise FileNotFoundError(f"CSV path from list file does not exist: {p}")
+                csv_files.append(p)
+
+        if not csv_files:
+            raise FileNotFoundError(f"No CSV paths found in list file: {input_path}")
+        return csv_files
+
     if input_path.is_dir():
         csv_files = sorted(input_path.glob("*.csv"))
         if not csv_files:

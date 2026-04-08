@@ -854,10 +854,13 @@ def run_pipeline(state: dict) -> dict:
     structure_limit = state['min_structures_before_early_stop']
     N_cells = len(all_seed_cells)
 
-    for it in range(5):
+    for it in range(3):
         # Just in case some strctures failed very frequently
         if len(global_structure_log) >= structure_limit and terminate_pair:
             logger.info(f"Reached maximum structure limit and Stop further generation.")
+            break
+        if it > 0 and len(global_structure_log) >= structure_limit:
+            logger.info(f"More than one attempt reached and Stop further generation.")
             break
 
         for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):

@@ -618,7 +618,7 @@ class CellManager:
 
             if ref_spg is not None and base.spg == ref_spg:
                 strs += f'+++++Matched SPG'
-            if ref_volume is not None and abs(base.size - ref_volume) / ref_volume < merge_tol * 2:
+            if ref_volume is not None and abs(base.size - ref_volume) / ref_volume < merge_tol * 2.5:
                 strs += f'++volume'
             if ref_cell is not None:
                 if base.is_similar_to_cell(ref_cell, tol=merge_tol):
