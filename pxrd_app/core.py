@@ -635,7 +635,7 @@ def run_pipeline(state: dict) -> dict:
 
 
     wp_candidate_cache: dict[tuple, list] = {}
-    wp_cost_cache: dict[tuple, tuple[int, int]] = {}
+    wp_cost_cache: dict[tuple, tuple[int, int, int]] = {}
 
     def _cell_cache_key(cell_obj, spg_value) -> tuple:
         dims_sig = tuple(round(float(x), 3) for x in np.array(cell_obj.dims).tolist())
@@ -656,12 +656,11 @@ def run_pipeline(state: dict) -> dict:
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int]:
+    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int, int]:
         key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_cost_cache: return wp_cost_cache[key]
 
         candidates = _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof)
-        #print(f"Found {len(candidates)} Wyckoff candidates for cell {cell_obj.dims} under SPG {spg_value}/{max_wp}.")
         candidate_count = len(candidates)
 
         est_trials = 0
@@ -673,7 +672,7 @@ def run_pipeline(state: dict) -> dict:
         if candidate_count == 0:
             est_trials = 10**9
 
-        out = (candidate_count, len(candidates), est_trials)
+        out = (candidate_count, candidate_count, est_trials)
         wp_cost_cache[key] = out
         return out
 
