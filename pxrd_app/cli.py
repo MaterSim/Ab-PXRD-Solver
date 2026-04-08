@@ -190,7 +190,7 @@ def collect_input_csv_files(input_csv: str, use_list: bool = False) -> list[Path
         if not input_path.is_file():
             raise FileNotFoundError(f"List file does not exist: {input_path}")
 
-        base_dir = input_path.parent
+        base_dir = ''#input_path.parent
         csv_files: list[Path] = []
         with input_path.open("r", encoding="utf-8") as f:
             for line in f:

@@ -12,6 +12,28 @@ import time
 import io
 import contextlib
 import numpy as np
+
+# --- Set thread limits BEFORE importing MACE/PyTorch to prevent oversubscription ---
+# This prevents each worker from spawning excessive threads
+def _configure_thread_limits(threads_per_worker=1):
+    """
+    Set thread limits for CPU-heavy libraries before they're imported.
+    This prevents each multiprocessing worker from spawning threads for all available CPUs.
+    
+    Args:
+        threads_per_worker: number of threads each worker should use (default: 1)
+    """
+    # Set limits for various threading backends
+    os.environ.setdefault('OMP_NUM_THREADS', str(threads_per_worker))
+    os.environ.setdefault('OPENBLAS_NUM_THREADS', str(threads_per_worker))
+    os.environ.setdefault('MKL_NUM_THREADS', str(threads_per_worker))
+    os.environ.setdefault('NUMEXPR_NUM_THREADS', str(threads_per_worker))
+    os.environ.setdefault('PYTORCH_NUM_THREADS', str(threads_per_worker))
+
+# Configure thread limits (can be overridden via environment variable)
+_threads_per_worker = int(os.getenv('PXRD_THREADS_PER_WORKER', '1'))
+_configure_thread_limits(_threads_per_worker)
+# -----------------------------------------------------------------------
 from ase.constraints import FixSymmetry
 from ase.filters import UnitCellFilter
 from ase.optimize.fire import FIRE
@@ -202,6 +224,8 @@ def get_calculator(calculator):
     if isinstance(calculator, str):
         if calculator == "UMA":
             if _cached_uma is None:
+                import torch
+                torch.set_num_threads(_threads_per_worker)
                 from fairchem.core import pretrained_mlip, FAIRChemCalculator
                 predictor = pretrained_mlip.get_predict_unit("uma-s-1p1")
                 _cached_uma = FAIRChemCalculator(predictor,
@@ -216,9 +240,13 @@ def get_calculator(calculator):
                     warnings.filterwarnings("ignore", category=FutureWarning)
                     if _silence_mace_output():
                         with _silence_external_output(True):
+                            import torch
+                            torch.set_num_threads(_threads_per_worker)
                             from mace.calculators import mace_mp
                             _cached_mace = mace_mp(model="small")
                     else:
+                        import torch
+                        torch.set_num_threads(_threads_per_worker)
                         from mace.calculators import mace_mp
                         _cached_mace = mace_mp(model="small")
             calc = _cached_mace
