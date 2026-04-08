@@ -1964,7 +1964,7 @@ if __name__ == "__main__":
     for data in [#f'Examples/PXRD_Ba14Na14LiN6_225.csv',
                       #(f'GSAS_PXRD/O2Rb_139.csv', 115.46),
                       #(f'GSAS_PXRD/Ba3P4_43.csv', 1721.07),
-                      #(f'GSAS_PXRD/Fe2O4Ti_36.csv', 304.28),
+                      (f'GSAS_PXRD/Fe2O4Ti_36.csv', 304.28),
                       #f'Examples/PXRD_Be2SiBi_119.csv',
                       #f'Examples/PXRD_K2SnO6_148.csv',
                       #f'Examples/PXRD_HgC2N2_122.csv',
@@ -2008,7 +2008,7 @@ if __name__ == "__main__":
                       #(f'GSAS_PXRD/Cu3O4_225.csv', 733.66),
                       #(f'GSAS_PXRD/Li_166.csv', 183.62),       #pass
                       #(f'GSAS_PXRD/Li_229.csv', 40.68),        #pass
-                      (f'GSAS_PXRD/Li_225.csv', 81.39),        #pass
+                      #(f'GSAS_PXRD/Li_225.csv', 81.39),        #pass
                       #(f'GSAS_PXRD/Li_194.csv', 81.46),        #pass
                       #(f'GSAS_PXRD/Li3N_191.csv', 43.50),      #pass
                       #(f'GSAS_PXRD/HLi4N_88.csv', 227.87),     #pass

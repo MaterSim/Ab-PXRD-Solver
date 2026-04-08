@@ -28,12 +28,14 @@ console_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-
+# Prefer higher-symmetry, lower-trial solutions and smaller volumes
 def get_pair_priority(
     est_trials: int,
     volume: float,
+    missing_peaks: int,
     min_trials: int,
     min_volume: float,
+    max_missing: int,
     trial_weight: float = 0.5,
     volume_weight: float = 0.5,
 ) -> float:
@@ -43,7 +45,8 @@ def get_pair_priority(
     ref_volume = max(1e-6, float(min_volume))
     trial_ratio = safe_trials / ref_trials
     volume_ratio = safe_volume / ref_volume
-    return float((trial_ratio ** trial_weight) * (volume_ratio ** volume_weight))
+    missing_score = (missing_peaks + 1) / max_missing
+    return (trial_ratio ** trial_weight) * (volume_ratio ** volume_weight) * missing_score
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
@@ -157,12 +160,20 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     # Background subtraction and peak detection
     if y1.min() > 2.5:
         bg_subtract = True
+        min_height = 7.5
+        height = 7.5
     else:
-        if y1.min() > 1.0:
+        if y1.min() > 0.25:
+            print(f"Background subtraction applied (min intensity {y1.min():.2f} > 0.25).")
             y1 -= y1.min()
+            min_height = 3.0
+            height = 3.0
+        else:
+            min_height = 3.0
+            height = 1.5
         bg_subtract = False
-    min_height = 7.5 if bg_subtract else 5.0
-    height = min_height if bg_subtract else 1.0
+    #min_height = 7.5 if bg_subtract else 5.0
+    #height = min_height if bg_subtract else 1.5
     data = RawDataManager(x1, y1, bg_subtract=bg_subtract)
     data.get_peaks_from_scipy(height=height)
     data.filter_peaks_by_ml(threshold=0.8, min_height=min_height)
@@ -766,12 +777,15 @@ def run_pipeline(state: dict) -> dict:
 
         min_pair_trials = min(int(m["est_trials"]) for m in planned_pairs)
         min_pair_volume = min(float(m["vol"]) for m in planned_pairs)
+        max_missing = max(m["cell"].missing for m in planned_pairs)
         for member in planned_pairs:
             member["balance_score"] = get_pair_priority(
                 member["est_trials"],
                 member["vol"],
+                member["cell"].missing,
                 min_pair_trials,
                 min_pair_volume,
+                max_missing,
             )
         planned_pairs.sort(
             key=lambda m: (
@@ -987,10 +1001,11 @@ def run_pipeline(state: dict) -> dict:
 
         # End of all-pairs loop: emit global plot covering every structure tried
         state["timing_breakdown_seconds"] = timing_breakdown
-        formula_str = state.get("formula", "unknown")
+        #formula_str = state.get("formula", "unknown")
+        tag = state['pxrd_csv'].split("/")[-1].split(".")[0]
         spg_str = f"SG{best_trial_spg}" if best_trial_spg is not None else "SG_unknown"
         results_dir = state.get("results_dir", "Results")
-        output_png = f"{results_dir}/EnergyR2_{formula_str}_{spg_str}.png"
+        output_png = f"{results_dir}/EnergyR2_{tag}_{spg_str}.png"
         best_trial_state['status'] = status
         plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 
