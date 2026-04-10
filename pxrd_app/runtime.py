@@ -97,7 +97,7 @@ def _extract_xtal_wyckoff(xtal) -> str | None:
 
 
 def write_results_csv(input_csv: str, run_state: dict | None) -> None:
-    """Append one summary row to <results_dir>/summary.csv."""
+    """Upsert one summary row in <results_dir>/summary.csv by csv_file_name."""
     # --- Status ---
     status_label = run_state.get("status")
     print(f"Run status (status_label): {status_label}")
@@ -128,17 +128,68 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
         Cell = xtal.lattice.encode()
 
     csv_file_name = os.path.basename(input_csv)
+    is_placeholder_failure = (
+        status_label == "Failure"
+        and runtime_s <= 0
+        and n_struc == 0
+        and int(n_est or 0) == 0
+    )
+
+    if is_placeholder_failure:
+        # Skip writing empty placeholder failures that can occur when a worker dies
+        # before real progress is recorded. This avoids stale false negatives.
+        print(f"Skipping placeholder failure row for {csv_file_name}")
+        return
+
+    row_data = {
+        "csv_file_name": csv_file_name,
+        "Runtime": runtime_str,
+        "N_struc": str(n_struc),
+        "N_est": str(n_est),
+        "Status": status_label,
+        "E": E,
+        "dE": dE,
+        "R2": R2,
+        "Chi2": Chi2,
+        "SPG": SPG,
+        "Wyckoff": Wyckoff,
+        "Cell": Cell,
+    }
 
     results_csv = Path(run_state.get("results_dir") or _DEFAULT_RESULTS_DIR) / "summary.csv"
     results_csv.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not results_csv.exists() or results_csv.stat().st_size == 0
-    with open(results_csv, "a+", newline="") as fh:
-        writer = csv.writer(fh)
-        if write_header: writer.writerow(CSV_COLUMNS)
-        writer.writerow([
-            csv_file_name, runtime_str, n_struc, n_est,
-            status_label, E, dE, R2, Chi2, SPG, Wyckoff, Cell,
-        ])
+    existing_rows: list[dict[str, str]] = []
+    if results_csv.exists() and results_csv.stat().st_size > 0:
+        with open(results_csv, "r", newline="") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                if not row:
+                    continue
+                existing_rows.append({col: row.get(col, "") for col in CSV_COLUMNS})
+
+    updated_rows: list[dict[str, str]] = []
+    replaced = False
+    for row in existing_rows:
+        if row.get("csv_file_name") == csv_file_name:
+            if replaced:
+                continue
+            existing_status = (row.get("Status") or "").strip()
+            if existing_status == "Success" and status_label != "Success":
+                # Keep the successful row; do not downgrade it with a later failure.
+                updated_rows.append(row)
+            else:
+                updated_rows.append(row_data)
+            replaced = True
+            continue
+        updated_rows.append(row)
+
+    if not replaced:
+        updated_rows.append(row_data)
+
+    with open(results_csv, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(updated_rows)
 
 
 def format_seconds(seconds: float) -> str:

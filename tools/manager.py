@@ -627,10 +627,11 @@ class CellManager:
                 #elif base.size / ref_volume > 1.1:
                 #    print(f"Cell volume {base.size:.1f} is larger than reference {ref_volume:.1f}. Stop.")
                 #    break
-            print(strs)
+            if verbose:
+                print(strs)
 
             kept_solutions.append(base)
-            if len(kept_solutions) >= max_solutions:# or match_vol:
+            if verbose and len(kept_solutions) >= max_solutions:# or match_vol:
                 print(f"Reached maximum of {max_solutions} solutions, stop.")
                 break
 
@@ -655,7 +656,7 @@ class CellManager:
                         if verbose:
                             print(f"{'MERGE':<6} | {str(candidate)} | Similar (dropped)")
                     continue
-        if len(kept_solutions) > 0:
+        if verbose and len(kept_solutions) > 0:
             print(f"Consolidation: {len(kept_solutions)} unique solutions from {len(raw_data)} entries.")
         if debug and not match_cell and ref_cell is not None:
             print("Warning: No solutions matched the reference volume criteria.")

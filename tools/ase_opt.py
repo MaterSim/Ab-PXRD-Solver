@@ -13,27 +13,18 @@ import io
 import contextlib
 import numpy as np
 
-# --- Set thread limits BEFORE importing MACE/PyTorch to prevent oversubscription ---
-# This prevents each worker from spawning excessive threads
-def _configure_thread_limits(threads_per_worker=1):
-    """
-    Set thread limits for CPU-heavy libraries before they're imported.
-    This prevents each multiprocessing worker from spawning threads for all available CPUs.
-    
-    Args:
-        threads_per_worker: number of threads each worker should use (default: 1)
-    """
-    # Set limits for various threading backends
-    os.environ.setdefault('OMP_NUM_THREADS', str(threads_per_worker))
-    os.environ.setdefault('OPENBLAS_NUM_THREADS', str(threads_per_worker))
-    os.environ.setdefault('MKL_NUM_THREADS', str(threads_per_worker))
-    os.environ.setdefault('NUMEXPR_NUM_THREADS', str(threads_per_worker))
-    os.environ.setdefault('PYTORCH_NUM_THREADS', str(threads_per_worker))
-
-# Configure thread limits (can be overridden via environment variable)
+# --- Limit threads per worker BEFORE importing PyTorch/MACE ---
+# Without this, each worker defaults to using ALL available CPU cores.
+# With 48 parallel workers on a 48-core node that means 48×48 = 2304 threads.
+# Setting to 1 keeps total threads at 48 (one per worker).
+# Override via PXRD_THREADS_PER_WORKER env var if needed.
 _threads_per_worker = int(os.getenv('PXRD_THREADS_PER_WORKER', '1'))
-_configure_thread_limits(_threads_per_worker)
+os.environ.setdefault('OMP_NUM_THREADS', str(_threads_per_worker))
+os.environ.setdefault('OPENBLAS_NUM_THREADS', str(_threads_per_worker))
+os.environ.setdefault('MKL_NUM_THREADS', str(_threads_per_worker))
+os.environ.setdefault('NUMEXPR_NUM_THREADS', str(_threads_per_worker))
 # -----------------------------------------------------------------------
+
 from ase.constraints import FixSymmetry
 from ase.filters import UnitCellFilter
 from ase.optimize.fire import FIRE
@@ -162,13 +153,15 @@ def _ase_relax_impl(
             dyn = FIRE(atoms, a=0.1, logfile=logfile) if logfile is not None else FIRE(atoms, a=0.1)
 
         with np.errstate(under='ignore'):
-            dyn.run(fmax=fmax, steps=step_init)
+            with _silence_external_output(True):
+                dyn.run(fmax=fmax, steps=step_init)
         forces = atoms.get_forces()
         _fmax = np.sqrt((forces**2).sum(axis=1).max())
 
         if _fmax < 1e3 and step > step_init:
             with np.errstate(under='ignore'):
-                dyn.run(fmax=fmax, steps=step - step_init)
+                with _silence_external_output(True):
+                    dyn.run(fmax=fmax, steps=step - step_init)
             forces = atoms.get_forces()
             _fmax = np.sqrt((forces**2).sum(axis=1).max())
             if _fmax > 100:
@@ -234,19 +227,17 @@ def get_calculator(calculator):
 
         elif calculator == "MACE":
             if _cached_mace is None:
+                import torch
+                torch.set_num_threads(_threads_per_worker)
                 # Suppress MACE warnings about float32 and torch.load
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message=".*float32.*")
                     warnings.filterwarnings("ignore", category=FutureWarning)
                     if _silence_mace_output():
                         with _silence_external_output(True):
-                            import torch
-                            torch.set_num_threads(_threads_per_worker)
                             from mace.calculators import mace_mp
                             _cached_mace = mace_mp(model="small")
                     else:
-                        import torch
-                        torch.set_num_threads(_threads_per_worker)
                         from mace.calculators import mace_mp
                         _cached_mace = mace_mp(model="small")
             calc = _cached_mace

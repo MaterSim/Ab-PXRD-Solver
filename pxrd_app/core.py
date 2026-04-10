@@ -458,6 +458,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             max_eng_rel_early_stop=max_eng_rel_early_stop,
             min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
+            ase_logfile=state.get("ase_logfile"),
         )
 
         print(f"{struc_count} new structure(s). Total structures: {len(all_structure_log)}.")

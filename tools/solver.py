@@ -1666,7 +1666,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
-                    forced_wp_solution=None):
+                    forced_wp_solution=None, ase_logfile=None):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1794,7 +1794,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     if not xtal.valid:
                         N_false += 1
                         continue
-                    atoms = relax_structure(xtal.to_ase(), xm.dof)
+                    atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
                     if atoms is None:
                         N_false += 1
                         continue
@@ -1876,7 +1876,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                                     local_perturbations += 1
                                     displacement = max(0.02, perturb_displacement * (0.67 if wr is not None else 1.0))
                                     perturbed_atoms = perturb_atoms(atoms, displacement=displacement)
-                                    perturbed_atoms = relax_structure(perturbed_atoms, xm.dof)
+                                    perturbed_atoms = relax_structure(perturbed_atoms, xm.dof, ase_logfile=ase_logfile)
                                     if perturbed_atoms is None:
                                         continue
 

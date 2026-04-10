@@ -1,6 +1,7 @@
 import argparse
 import copy
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 from pathlib import Path
 
@@ -169,6 +170,33 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--parallel-retry-rounds",
+        type=int,
+        default=3,
+        help=(
+            "Number of extra parallel retry rounds after the initial pool attempt when a "
+            "BrokenProcessPool occurs. Set to 0 to disable retries."
+        ),
+    )
+    parser.add_argument(
+        "--parallel-retry-min-workers",
+        type=int,
+        default=1,
+        help=(
+            "Minimum worker count to use during parallel retry rounds while backing off "
+            "from the initial --workers value."
+        ),
+    )
+    parser.add_argument(
+        "--ase-logfile",
+        type=str,
+        default=None,
+        help=(
+            "Filename/path for ASE FIRE optimizer logs. "
+            "Default is None (disable ASE log file output)."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default="Results",
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
@@ -249,24 +277,63 @@ def run_csv_batch(
         return
 
     failures: list[tuple[str, str]] = []
+    pending: list[tuple[int, str]] = [
+        (idx, str(csv_path))
+        for idx, csv_path in enumerate(csv_files, start=1)
+    ]
+    total = len(pending)
+    completed_ok = 0
+    max_parallel_retry_rounds = max(0, int(getattr(args, "parallel_retry_rounds", 3)))
+    retry_min_workers = max(1, int(getattr(args, "parallel_retry_min_workers", 1)))
     mp_context = get_context("spawn")
-    with ProcessPoolExecutor(max_workers=workers, mp_context=mp_context) as executor:
-        future_map = {
-            executor.submit(run_one, str(csv_path), args): (idx, str(csv_path))
-            for idx, csv_path in enumerate(csv_files, start=1)
-        }
-        completed = 0
-        total = len(future_map)
-        for future in as_completed(future_map):
-            idx, csv_str = future_map[future]
-            completed += 1
-            try:
-                future.result()
-                print(f"[{completed}/{total}] Completed file {idx}: {csv_str}")
-            except Exception as exc:
-                failures.append((csv_str, str(exc)))
-                print(f"[{completed}/{total}] Failed file {idx}: {csv_str}")
-                print(f"  Reason: {exc}")
+
+    for retry_round in range(max_parallel_retry_rounds + 1):
+        if not pending:
+            break
+
+        # Retry rounds use fresh process pools with reduced worker fanout for stability.
+        max_round_workers = max(retry_min_workers, workers // (2 ** retry_round))
+        round_workers = min(len(pending), max_round_workers)
+        if retry_round == 0:
+            print(
+                f"Running batch in parallel pool with {round_workers} worker(s)."
+            )
+        else:
+            print(
+                f"\nRetry round {retry_round}/{max_parallel_retry_rounds}: "
+                f"re-queueing {len(pending)} file(s) in parallel with {round_workers} worker(s)."
+            )
+
+        broken_pool_files: list[tuple[int, str]] = []
+        with ProcessPoolExecutor(max_workers=round_workers, mp_context=mp_context) as executor:
+            future_map = {
+                executor.submit(run_one, csv_str, args): (idx, csv_str)
+                for idx, csv_str in pending
+            }
+            for future in as_completed(future_map):
+                idx, csv_str = future_map[future]
+                try:
+                    future.result()
+                    completed_ok += 1
+                    print(f"[{completed_ok}/{total}] Completed file {idx}: {csv_str}")
+                except BrokenProcessPool:
+                    broken_pool_files.append((idx, csv_str))
+                    print(
+                        f"Pool crashed for file {idx}: {csv_str} "
+                        f"(will retry in parallel round {retry_round + 1})"
+                    )
+                except Exception as exc:
+                    failures.append((csv_str, str(exc)))
+                    print(f"Failed file {idx}: {csv_str}")
+                    print(f"  Reason: {exc}")
+
+        pending = sorted(broken_pool_files)
+
+    if pending:
+        for idx, csv_str in pending:
+            failures.append((csv_str, "process pool repeatedly crashed during parallel retries"))
+            print(f"Failed file {idx}: {csv_str}")
+            print("  Reason: process pool repeatedly crashed during parallel retries")
 
     if failures:
         failure_text = "; ".join(f"{path}: {reason}" for path, reason in failures)
@@ -296,6 +363,7 @@ def _build_state(
     max_dof: int | None = None,
     max_Z: int | None = None,
     max_sim: float | None = None,
+    ase_logfile: str | None = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None:
@@ -342,6 +410,9 @@ def _build_state(
     if max_dof is not None: run_state["max_dof"] = int(max_dof)
     if max_Z is not None: run_state["max_Z"] = int(max_Z)
     if max_sim is not None: run_state["max_sim"] = float(max_sim)
+    if ase_logfile is not None:
+        text = str(ase_logfile).strip()
+        run_state["ase_logfile"] = text or None
     run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
 
     return run_state
@@ -369,4 +440,5 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         max_dof=args.max_dof,
         max_Z=args.max_z,
         max_sim=args.max_sim,
+        ase_logfile=args.ase_logfile,
         )

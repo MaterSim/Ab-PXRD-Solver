@@ -175,7 +175,7 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
     return x, ycalc
 
 def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
-                gpx_name=None, gsas_log=None, ax=None):
+                gpx_name=None, gsas_log=None, ax=None, plot=False):
     """
     Refine PXRD data using GSAS-II.
 
@@ -310,34 +310,35 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     # print(f"R2: {R2:.4f}")
     # print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
 
-    if ax is None:
+    if plot and ax is None:
         fig, ax = plt.subplots(figsize=(10, 4))
-    else:
-        fig = None
-    ax.plot(x, yobs, 'k.', markersize=2, label='Observed')
-    if ycalc is not None:
-        ax.plot(x, ycalc, 'r-', linewidth=0.5, alpha=0.7, label='Calculated')
-    if ybkg is not None:
-        ax.plot(x, ybkg, 'b--', linewidth=0.5, alpha=0.7, label='Background')
-    if ydiff is not None:
-        ax.plot(x, ydiff, 'g-', linewidth=0.3, alpha=0.7, label='Difference')
+ 
+    if ax is not None:
+    #    fig = None
+        ax.plot(x, yobs, 'k.', markersize=2, label='Observed')
+        if ycalc is not None:
+            ax.plot(x, ycalc, 'r-', linewidth=0.5, alpha=0.7, label='Calculated')
+        if ybkg is not None:
+            ax.plot(x, ybkg, 'b--', linewidth=0.5, alpha=0.7, label='Background')
+        if ydiff is not None:
+            ax.plot(x, ydiff, 'g-', linewidth=0.3, alpha=0.7, label='Difference')
 
-    ax.set_xlabel('2θ (degrees)')
-    ax.set_ylabel('Intensity (a.u.)')
-    title = 'PXRD Refinement Fit'
-    if wR is not None:
-        title += f" (Rwp={wR:.3f})"
-    if R2 is not None:
-        title += f"; R2={R2:.3f}"
-    ax.set_title(title)
-    ax.legend(loc='upper right', fontsize=8)
-    ax.set_xlim([x.min()-0.1, x.max()+0.1])
-    if fig is not None:
-        fig.tight_layout()
-        out_png = cif_file.replace('.cif', '_refinement.png')
-        fig.savefig(out_png, dpi=300)
-        plt.close(fig)
-    # print(f"Saved plot to {out_png}")
+        ax.set_xlabel('2θ (degrees)')
+        ax.set_ylabel('Intensity (a.u.)')
+        title = 'PXRD Refinement Fit'
+        if wR is not None:
+            title += f" (Rwp={wR:.3f})"
+        if R2 is not None:
+            title += f"; R2={R2:.3f}"
+        ax.set_title(title)
+        ax.legend(loc='upper right', fontsize=8)
+        ax.set_xlim([x.min()-0.1, x.max()+0.1])
+        #if fig is not None:
+        #    fig.tight_layout()
+        #    out_png = cif_file.replace('.cif', '_refinement.png')
+        #    fig.savefig(out_png, dpi=300)
+        #    plt.close(fig)
+        # print(f"Saved plot to {out_png}")
 
     return wR, R2, weighted_chi2, refined_cif
 
@@ -357,4 +358,4 @@ if __name__ == "__main__":
     match_cif = f'Results1/PXRD_TiCuSiAs_129.cif'
     match_cif = f'Results1/PXRD_TiCuSiAs_129_good.cif'
     #match_cif = f'Results/Match.cif'
-    wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE)
+    wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, plot=True)
