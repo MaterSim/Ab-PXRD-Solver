@@ -112,6 +112,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
     # --- Structure count ---
     structure_log = run_state.get("structure_log") or []
     n_struc = len(structure_log)
+    n_attempts = run_state.get("attempt_count", 0)
     n_est = run_state.get("Total_est", 0)
 
     # --- Best-structure metrics (only on success) ---
@@ -145,6 +146,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
         "csv_file_name": csv_file_name,
         "Runtime": runtime_str,
         "N_struc": str(n_struc),
+        "N_attempts": str(n_attempts),
         "N_est": str(n_est),
         "Status": status_label,
         "E": E,

@@ -82,7 +82,7 @@ def plot_energy_vs_r2(
         best_state['best_result']['xtal'].to_file(match_cif)
         wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, ax=ax2)
         spg = best_state['best_result']['spg']
-        wp_labels_text = best_state['wp_labels']
+        wp_labels_text = best_state['best_result'].get('wp_labels') or best_state.get('wp_labels') or "n/a"
         spg_str = f"SPG: {spg}" if spg else ""
         ax2.set_title(f"Best Fit: R²={r2:.3f}, Chi²={chi2:.3f} | {spg_str}: {wp_labels_text}")
         ax2.set_xlabel("2θ (deg)")

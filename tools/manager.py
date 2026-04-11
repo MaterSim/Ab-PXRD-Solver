@@ -605,8 +605,8 @@ class CellManager:
         kept_solutions = []
         indices_to_skip = set()
         match_cell = False
-
-        print(f"{'Status':<6} | SPG | {'Dims (Sorted)':<27}| {'Chi2':<6}| {'Missing':<8}| {'Volume':<8}| {'Errors':<20}")
+        if verbose:
+            print(f"{'Status':<6} | SPG | {'Dims (Sorted)':<27}| {'Chi2':<6}| {'Missing':<8}| {'Volume':<8}| {'Errors':<20}")
         for i in range(len(solutions)):
             if i in indices_to_skip: continue
             base = solutions[i]

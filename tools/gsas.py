@@ -197,8 +197,8 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
 
     tmp_root = os.path.join("tmp", "gsas_runs")
     os.makedirs(tmp_root, exist_ok=True)
-    run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}_{run_id}")
+    #run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}")#_{run_id}")
     if gpx_name is None:
         gpx_name = f"{default_base}.gpx"
     if gsas_log is None:

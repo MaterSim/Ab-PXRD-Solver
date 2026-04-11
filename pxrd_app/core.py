@@ -61,6 +61,17 @@ def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     token = "".join(cleaned).strip("_")
     return token or fallback
 
+
+def _get_global_best_energy(structure_log: list[dict] | None) -> float | None:
+    if not structure_log:
+        return None
+    energies = [
+        float(entry.get("eng"))
+        for entry in structure_log
+        if entry.get("eng") is not None
+    ]
+    return min(energies) if energies else None
+
 def attach_run_log(state: dict) -> logging.Handler | None:
     results_dir = state.get("results_dir", "Results")
     logs_dir = os.path.join(results_dir, "logs")
@@ -465,14 +476,26 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         # Accumulate struc_count with the number of new structures generated in this attempt
         if wr is None: continue
 
+        global_best_energy = _get_global_best_energy(all_structure_log)
+        if global_best_energy is None and eng_best is not None:
+            global_best_energy = float(eng_best)
+        if global_best_energy is not None:
+            eng_min = min(float(eng_min), float(global_best_energy))
+
+        candidate_selected_energy = float(selected_eng) if selected_eng is not None else None
+        candidate_eng_rel = None
+        if candidate_selected_energy is not None and global_best_energy is not None:
+            candidate_eng_rel = max(0.0, candidate_selected_energy - float(global_best_energy))
+
         candidate = {
             "wr": float(wr),
             "r2": float(r2),
             "chi2": float(chi2),
             "xtal": xtal,
-            "eng_best": float(eng_best),
-            "selected_energy": float(selected_eng) if selected_eng is not None else None,
-            "eng_rel": float(selected_eng_rel) if selected_eng_rel is not None else None,
+            "eng_best": float(global_best_energy) if global_best_energy is not None else float(eng_best),
+            "selected_energy": candidate_selected_energy,
+            "eng_rel": candidate_eng_rel,
+            "wp_labels": state.get("wp_labels"),
             "attempt": attempt_idx + 1,
             "seed": seed,
             "png": attempt_refinement_png,
@@ -853,6 +876,7 @@ def run_pipeline(state: dict) -> dict:
     terminate_pair = False
     structure_limit = state['min_structures_before_early_stop']
     N_cells = len(all_seed_cells)
+    attmept_count = 0
 
     for it in range(3):
         # Just in case some strctures failed very frequently
@@ -908,6 +932,7 @@ def run_pipeline(state: dict) -> dict:
                     trial_state["cells"] = copy.deepcopy([cell])
                     trial_state['wp_labels'] = wp_labels_text
                     trial_state["forced_wp_solution"] = sol[:8] if len(sol) >= 9 else sol
+                    attempt_count += 1
 
                     trial_message, trial_state = run_wyckoff_solver(trial_state, global_structure_log)
 
@@ -930,14 +955,9 @@ def run_pipeline(state: dict) -> dict:
                             r2_val >= 0.93 and chi2_val < 0.18
                         )
                         candidate_energy = trial_result.get("selected_energy")
-                        global_energy_values = [
-                            float(entry.get("eng"))
-                            for entry in global_structure_log
-                            if entry.get("eng") is not None
-                        ]
-                        global_best_energy = min(global_energy_values) if global_energy_values else None
-                        global_eng_rel = None
-                        if candidate_energy is not None and global_best_energy is not None:
+                        global_best_energy = _get_global_best_energy(global_structure_log)
+                        global_eng_rel = trial_result.get("eng_rel")
+                        if global_eng_rel is None and candidate_energy is not None and global_best_energy is not None:
                             global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
                         max_eng_rel_early_stop = max(0.0, float(state.get("max_eng_rel_early_stop") or state.get("max_eng_rel") or 0.20))
                         energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop)
@@ -993,6 +1013,7 @@ def run_pipeline(state: dict) -> dict:
         return state
 
     timing_breakdown = _timing_breakdown_seconds()
+    state["attempt_count"] = attempt_count
     if not any_seed_had_cells:
         logger.info("No inferred SG candidate produced valid cells.")
         state["msg"] = "No valid cells are found."

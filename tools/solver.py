@@ -1845,8 +1845,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                     #   2. eng_rel <= refine_eng_window: energy is within `refine_eng_window`
                     #      eV/atom of the best structure seen so far in this run.
                     if sim >= max(sim_max - refine_margin, 0.0) or (sim >= refine_sim_min and eng_rel <= refine_eng_window):
-                        title0 = title + f' {eng:.3f}/{eng_best:.3f}'
-                        plot_XRD(x1, y1, x2, y2, x1[peaks], y1[peaks], title0, match_png)
+                        #title0 = title + f' {eng:.3f}/{eng_best:.3f}'
+                        #plot_XRD(x1, y1, x2, y2, x1[peaks], y1[peaks], title0, match_png)
                         xtal.from_seed(atoms)
                         xtal.to_file(match_cif)
                         wr, r2, chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
