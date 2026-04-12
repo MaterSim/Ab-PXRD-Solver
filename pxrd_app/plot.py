@@ -81,7 +81,6 @@ def plot_energy_vs_r2(
         match_cif = f"tmp/{formula}_best_state.cif"
         best_state['best_result']['xtal'].to_file(match_cif)
         wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, ax=ax2, remove=True)
-        os.remove(match_cif)
         spg = best_state['best_result']['spg']
         wp_labels_text = best_state['best_result'].get('wp_labels') or best_state.get('wp_labels') or "n/a"
         spg_str = f"SPG: {spg}" if spg else ""
