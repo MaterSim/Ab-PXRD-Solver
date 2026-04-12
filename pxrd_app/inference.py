@@ -1,4 +1,6 @@
 from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
+
 import numpy as np
 
 from tools.peak_prediction import predict_peaks, predict_spacegroup
@@ -9,7 +11,7 @@ from pxrd_app.constants import DEFAULT_STATE, CRYSTAL_SYSTEM_PRIORITY
 SPG_INFER_BACKENDS = {"model", "smart-cell"}
 
 
-def infer_formula_spg(path: str) -> tuple[str | None, int | None]:
+def infer_formula_spg(path: str) -> Tuple[Optional[str], Optional[int]]:
     stem = Path(path).stem
     # Try underscore first
     tokens = stem.split("_")
@@ -26,7 +28,7 @@ def infer_formula_spg(path: str) -> tuple[str | None, int | None]:
         return formula_guess, spg_guess
     return None, None
 
-def symmetry_from_spg(spg: int | None) -> str | None:
+def symmetry_from_spg(spg: Optional[int]) -> Optional[str]:
     if spg is None:
         return None
     if 195 <= spg <= 230:
@@ -45,7 +47,7 @@ def symmetry_from_spg(spg: int | None) -> str | None:
         return "triclinic"
     return None
 
-def spg_to_crystal_system(spg: int) -> str | None:
+def spg_to_crystal_system(spg: int) -> Optional[str]:
     if 1 <= spg <= 2:
         return "triclinic"
     if 3 <= spg <= 15:
@@ -63,7 +65,7 @@ def spg_to_crystal_system(spg: int) -> str | None:
     return None
 
 
-def _smart_solution_metrics(sol: dict) -> dict | None:
+def _smart_solution_metrics(sol: dict) -> Optional[Dict[str, Any]]:
     spg = int(sol.get("spg", 0) or 0)
     if spg <= 0:
         return None
@@ -200,7 +202,7 @@ def infer_spg_from_backend(
     formula: str,
     spg_infer_backend: str,
     spg_top_k: int,
-    max_cell_volume: float | None,
+    max_cell_volume: Optional[float],
 ) -> dict:
     backend = str(spg_infer_backend or "model").strip().lower()
     if backend not in SPG_INFER_BACKENDS:

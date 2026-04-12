@@ -4,6 +4,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 from pathlib import Path
+from typing import Optional, List
 
 SPG_INFER_BACKENDS = {"smart-cell", "model"}
 COMMON_SPG_TOP_K_CHOICES = [3, 5, 10, 20, 25, 30, 50, 100]
@@ -204,7 +205,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_cli_symmetry(args: argparse.Namespace) -> str | None:
+def resolve_cli_symmetry(args: argparse.Namespace) -> Optional[str]:
     if args.symmetry is not None:
         return args.symmetry
     if args.infer_spg and args.spg_backend == "smart-cell":
@@ -212,7 +213,7 @@ def resolve_cli_symmetry(args: argparse.Namespace) -> str | None:
     return "auto" if args.infer_spg else None
 
 
-def collect_input_csv_files(input_csv: str, use_list: bool = False) -> list[Path]:
+def collect_input_csv_files(input_csv: str, use_list: bool = False) -> List[Path]:
     input_path = Path(input_csv)
     if use_list:
         if not input_path.is_file():
@@ -246,7 +247,7 @@ def collect_input_csv_files(input_csv: str, use_list: bool = False) -> list[Path
     raise FileNotFoundError(f"Input path does not exist: {input_path}")
 
 
-def resolve_parallel_workers(requested_workers: int | None, file_count: int) -> int:
+def resolve_parallel_workers(requested_workers: Optional[int], file_count: int) -> int:
     if file_count <= 1:
         return 1
     workers = 1 if requested_workers is None else max(1, int(requested_workers))
@@ -254,7 +255,7 @@ def resolve_parallel_workers(requested_workers: int | None, file_count: int) -> 
 
 
 def run_csv_batch(
-    csv_files: list[Path],
+    csv_files: List[Path],
     args: argparse.Namespace,
     run_one,
 ) -> None:
@@ -276,8 +277,8 @@ def run_csv_batch(
             run_one(csv_str, args)
         return
 
-    failures: list[tuple[str, str]] = []
-    pending: list[tuple[int, str]] = [
+    failures: List[tuple[str, str]] = []
+    pending: List[tuple[int, str]] = [
         (idx, str(csv_path))
         for idx, csv_path in enumerate(csv_files, start=1)
     ]
@@ -304,7 +305,7 @@ def run_csv_batch(
                 f"re-queueing {len(pending)} file(s) in parallel with {round_workers} worker(s)."
             )
 
-        broken_pool_files: list[tuple[int, str]] = []
+        broken_pool_files: List[tuple[int, str]] = []
         with ProcessPoolExecutor(max_workers=round_workers, mp_context=mp_context) as executor:
             future_map = {
                 executor.submit(run_one, csv_str, args): (idx, csv_str)
@@ -344,26 +345,26 @@ def _build_state(
     default_state: dict,
     logger,
     *,
-    state: dict | None = None,
-    pxrd_csv: str | None = None,
-    formula: str | None = None,
-    multi_attempts: int | None = None,
-    seed_base: int | None = None,
-    infer_spg_from_pxrd: bool | None = None,
-    spg_top_k: int | None = None,
-    spg_infer_backend: str | None = None,
-    lattice_symmetry: str | None = None,
-    max_local_perturbations: int | None = None,
-    perturb_displacement: float | None = None,
-    max_eng_rel: float | None = None,
-    max_cell_volume: float | None = None,
-    list_wp_only: bool | None = None,
-    results_dir: str | None = None,
-    max_wp: int | None = None,
-    max_dof: int | None = None,
-    max_Z: int | None = None,
-    max_sim: float | None = None,
-    ase_logfile: str | None = None,
+    state: Optional[dict] = None,
+    pxrd_csv: Optional[str] = None,
+    formula: Optional[str] = None,
+    multi_attempts: Optional[int] = None,
+    seed_base: Optional[int] = None,
+    infer_spg_from_pxrd: Optional[bool] = None,
+    spg_top_k: Optional[int] = None,
+    spg_infer_backend: Optional[str] = None,
+    lattice_symmetry: Optional[str] = None,
+    max_local_perturbations: Optional[int] = None,
+    perturb_displacement: Optional[float] = None,
+    max_eng_rel: Optional[float] = None,
+    max_cell_volume: Optional[float] = None,
+    list_wp_only: Optional[bool] = None,
+    results_dir: Optional[str] = None,
+    max_wp: Optional[int] = None,
+    max_dof: Optional[int] = None,
+    max_Z: Optional[int] = None,
+    max_sim: Optional[float] = None,
+    ase_logfile: Optional[str] = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None:

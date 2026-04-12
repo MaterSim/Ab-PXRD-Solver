@@ -2,7 +2,7 @@ from math import nan
 import sys
 from pathlib import Path
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import Any, Sequence, Tuple, Union, Optional
 
 # Add peak_finder to path
 peak_path = Path(__file__).parent / "peak_finder"
@@ -39,7 +39,7 @@ def _get_peak_model() -> tuple[PeakFinderCNN, int, torch.device]:
 def sliding_window_predict(model: torch.nn.Module,
                            xrd: np.ndarray,
                            window_size: int = 51,
-                           device: str | torch.device = 'cpu') -> np.ndarray:
+                           device: Union[str, torch.device] = 'cpu') -> np.ndarray:
     """
     Predict peak probabilities for the whole XRD using a sliding window.
 

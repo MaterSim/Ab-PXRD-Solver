@@ -4,6 +4,7 @@ Constants and default configuration for PXRD agent.
 """
 import os
 import re
+from typing import Optional
 
 CRYSTAL_SYSTEM_PRIORITY = {
     "cubic": 7,
@@ -40,7 +41,7 @@ WP_HEADER_RE = re.compile(
 TRIAL_LINE_RE = re.compile(r"^\*(?P<body>.*)$")
 FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
-def _env_int(name: str, default: int, min_value: int | None = None) -> int:
+def _env_int(name: str, default: int, min_value: Optional[int] = None) -> int:
     raw = os.getenv(name)
     if raw is None:
         value = default

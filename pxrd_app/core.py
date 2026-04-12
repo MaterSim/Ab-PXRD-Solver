@@ -4,7 +4,8 @@ import random
 import time
 import copy
 from pathlib import Path
-from uuid import uuid4
+#from typing import Sequence, Optional, List, Dict, Union, Any
+#from uuid import uuid4
 import pandas as pd
 import numpy as np
 
@@ -375,7 +376,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     os.makedirs(logs_dir, exist_ok=True)
     tmp_root = Path("tmp")
     tmp_root.mkdir(parents=True, exist_ok=True)
-    run_token = f"{_safe_name_token(Path(str(pxrd_csv or '')).stem)}_{os.getpid()}_{uuid4().hex[:8]}"
+    run_token = f"{_safe_name_token(Path(str(pxrd_csv or '')).stem)}"#_{os.getpid()}_{uuid4().hex[:8]}"
     run_tmp_dir = tmp_root / f"run_{run_token}"
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -429,12 +430,12 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         attempt_png = str(attempt_prefix.with_suffix(".png"))
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
         attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
-        logger.info(
-            f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, (N1={N1}, N2={N2}), "
-            f"Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
-            f"{struc_count} structures")
+        #logger.info(
+        #    f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, (N1={N1}, N2={N2}), "
+        #    f"Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
+        #    f"{struc_count} structures")
 
-        wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel, struc_count = search_solution(
+        wr, r2, chi2, xtal, eng_best, selected_eng, eng_rel, struc_count = search_solution(
             cells[:N1],
             spg,
             composition,
@@ -620,10 +621,6 @@ def run_pipeline(state: dict) -> dict:
         score = result.get("score")
         selected_energy = result.get("selected_energy")
         eng_rel = result.get("eng_rel")
-        attempt = result.get("attempt")
-        seed = result.get("seed")
-        cif = result.get("cif")
-        png = result.get("png")
 
         global global_structure_log
 
@@ -633,17 +630,11 @@ def run_pipeline(state: dict) -> dict:
         score_text = f"{float(score):.4f}" if score is not None else "n/a"
         energy_text = f"{float(selected_energy):.4f}" if selected_energy is not None else "n/a"
         eng_rel_text = f"{float(eng_rel):.4f}" if eng_rel is not None else "n/a"
-        attempt_text = str(attempt) if attempt is not None else "n/a"
-        seed_text = str(seed) if seed is not None else "n/a"
-        cif_text = str(cif) if cif else "n/a"
-        png_text = str(png) if png else "n/a"
 
         logger.info(
-            f"{prefix} details: spg={spg_value}, Wr={wr_text}, R2={r2_text}, "
+            f"{prefix}: spg={spg_value}, Wr={wr_text}, R2={r2_text}, "
             f"Chi2={chi2_text}, score={score_text}, E={energy_text}, dE={eng_rel_text}, "
-            f"attempt={attempt_text}, seed={seed_text}"
         )
-        logger.info(f"CIF={cif_text}, PNG={png_text}")
 
     pipeline_start_time = time.perf_counter()
     spg_cell_end_time: float | None = None
@@ -655,8 +646,6 @@ def run_pipeline(state: dict) -> dict:
     infer_spg = state["infer_spg_from_pxrd"]
     composition = state["composition"]
     density_min, density_max = state["density_min"], state["density_max"]
-
-
 
     wp_candidate_cache: dict[tuple, list] = {}
     wp_cost_cache: dict[tuple, tuple[int, int, int]] = {}
@@ -938,6 +927,7 @@ def run_pipeline(state: dict) -> dict:
 
                     # After running, update the main state's Struc_count by accumulating
                     state["Struc_count"] = trial_state.get("Struc_count")
+                    state["attempt_count"] = attempt_count
                     trial_result = trial_state.get("wyckoff_result") or {}
 
                     trial_score = trial_result.get("score")
@@ -1006,6 +996,7 @@ def run_pipeline(state: dict) -> dict:
     state["Total_est"] = total_count
     if list_wp_only:
         timing_breakdown = _timing_breakdown_seconds()
+        state["attempt_count"] = attempt_count
         state["timing_breakdown_seconds"] = timing_breakdown
         state["status"] = "WP-Only"
         state["msg"] = "Wyckoff combinations listed only; structure generation skipped."
@@ -1035,12 +1026,14 @@ def run_pipeline(state: dict) -> dict:
 
         if status == "Success":
             _emit_accepted_solution(best_trial_spg, best_trial_result,
-                                    prefix="Best accepted solution")
+                                    prefix="Best solution")
             logger.info(f"Return best result in spg={best_trial_spg}.")
         else:
             logger.info(f"No acceptance; return best result in spg={best_trial_spg}")
         logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
         state.update(best_trial_state)
+        # Keep the global WP-trial count from this pipeline run.
+        #state["attempt_count"] = attempt_count
         state["status"] = status
         state["msg"] = best_trial_message
         return state

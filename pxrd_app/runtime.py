@@ -1,12 +1,13 @@
 import csv
 import os
 from pathlib import Path
+from typing import Optional, Dict, List
 
 FAILURE_STATUSES = {"no_cells", "no_solution"}
 
 _DEFAULT_RESULTS_DIR = "Results"
 CSV_COLUMNS = [
-    "csv_file_name", "Runtime", "N_struc", "N_est",
+    "csv_file_name", "Runtime", "N_struc", "N_attempts", "N_est",
     "Status", "E", "dE", "R2", "Chi2", "SPG", "Wyckoff", "Cell",
 ]
 
@@ -20,47 +21,7 @@ def _format_scalar(value, decimals: int = 4) -> str:
     except Exception:
         return ""
 
-
-def _approx_equal(a: float, b: float, tol: float = 1e-3) -> bool:
-    return abs(float(a) - float(b)) <= tol
-
-
-def _format_cell_components(values: list[float], decimals: int = 4) -> str:
-    return "[" + ", ".join(_format_scalar(v, decimals) for v in values) + "]"
-
-
-def _compact_cell_from_para(para) -> str | None:
-    try:
-        a, b, c, alpha, beta, gamma = [float(x) for x in para]
-    except Exception:
-        return None
-
-    if (
-        _approx_equal(alpha, 90.0, 1e-2)
-        and _approx_equal(beta, 90.0, 1e-2)
-        and _approx_equal(gamma, 90.0, 1e-2)
-    ):
-        if _approx_equal(a, b) and _approx_equal(b, c):
-            return _format_cell_components([a])
-        if _approx_equal(a, b):
-            return _format_cell_components([a, c])
-        return _format_cell_components([a, b, c])
-
-    if (
-        _approx_equal(alpha, 90.0, 1e-2)
-        and _approx_equal(beta, 90.0, 1e-2)
-        and _approx_equal(gamma, 120.0, 1e-2)
-        and _approx_equal(a, b)
-    ):
-        return _format_cell_components([a, c])
-
-    if _approx_equal(alpha, 90.0, 1e-2) and _approx_equal(gamma, 90.0, 1e-2):
-        return _format_cell_components([a, b, c, beta], decimals=4)
-
-    return _format_cell_components([a, b, c, alpha, beta, gamma], decimals=4)
-
-
-def _extract_xtal_wyckoff(xtal) -> str | None:
+def _extract_xtal_wyckoff(xtal) -> Optional[str]:
     """Return Wyckoff labels as a compact string, e.g. '[6f], [1a]'."""
     if xtal is None:
         return None
@@ -96,7 +57,7 @@ def _extract_xtal_wyckoff(xtal) -> str | None:
         return None
 
 
-def write_results_csv(input_csv: str, run_state: dict | None) -> None:
+def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
     """Upsert one summary row in <results_dir>/summary.csv by csv_file_name."""
     # --- Status ---
     status_label = run_state.get("status")
@@ -148,7 +109,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
         "N_struc": str(n_struc),
         "N_attempts": str(n_attempts),
         "N_est": str(n_est),
-        "Status": status_label,
+        "Status": status_label if status_label is not None else "Unknown",
         "E": E,
         "dE": dE,
         "R2": R2,
@@ -160,7 +121,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
 
     results_csv = Path(run_state.get("results_dir") or _DEFAULT_RESULTS_DIR) / "summary.csv"
     results_csv.parent.mkdir(parents=True, exist_ok=True)
-    existing_rows: list[dict[str, str]] = []
+    existing_rows: List[Dict[str, str]] = []
     if results_csv.exists() and results_csv.stat().st_size > 0:
         with open(results_csv, "r", newline="") as fh:
             reader = csv.DictReader(fh)
@@ -169,7 +130,7 @@ def write_results_csv(input_csv: str, run_state: dict | None) -> None:
                     continue
                 existing_rows.append({col: row.get(col, "") for col in CSV_COLUMNS})
 
-    updated_rows: list[dict[str, str]] = []
+    updated_rows: List[Dict[str, str]] = []
     replaced = False
     for row in existing_rows:
         if row.get("csv_file_name") == csv_file_name:
@@ -205,7 +166,7 @@ def format_seconds(seconds: float) -> str:
     return f"{total_minutes}m {seconds_remain:04.1f}s"
 
 
-def emit_timing_summary(logger, run_state: dict | None) -> str | None:
+def emit_timing_summary(logger, run_state: Optional[dict]) -> Optional[str]:
     """Log and return a timing summary line for the run_state."""
     timing_breakdown = run_state.get("timing_breakdown_seconds") if isinstance(run_state, dict) else None
     if not isinstance(timing_breakdown, dict):

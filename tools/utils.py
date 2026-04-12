@@ -3,7 +3,7 @@ import matplotlib
 matplotlib.use("Agg")  # Non-GUI backend
 import re
 from pathlib import Path
-from typing import Mapping, Sequence, Any
+from typing import Mapping, Sequence, Any, Dict, Tuple, Union, Optional
 from .ase_opt import ASE_relax
 from pymatgen.core.periodic_table import Element
 from pyxtal.symmetry import Group
@@ -72,7 +72,7 @@ def get_volume_from_density(composition: Mapping[str, int], density: float) -> f
     min_volume = molecular_weight / density / N_A * 1e24  # in Å³
     return min_volume
 
-def relax_structure(atoms: Any, dof: int, ase_logfile: str | None = None) -> Any | None:
+def relax_structure(atoms: Any, dof: int, ase_logfile: Optional[str] = None) -> Optional[Any]:
     if dof > 0:
         atoms = ASE_relax(atoms, opt_lat=False, step=10 * dof, logfile=ase_logfile)
         final_step = 5 * dof

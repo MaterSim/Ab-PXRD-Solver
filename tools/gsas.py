@@ -175,7 +175,8 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
     return x, ycalc
 
 def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
-                gpx_name=None, gsas_log=None, ax=None, plot=False):
+                gpx_name=None, gsas_log=None, ax=None,
+                plot=False, remove=False):
     """
     Refine PXRD data using GSAS-II.
 
@@ -186,6 +187,8 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
         gpx_name: Output GSAS-II project file name
         gsas_log: Log file for GSAS-II output (redirects verbose G2sc messages)
         ax: Matplotlib axis for plotting (optional)
+        plot: If True, generate a plot of the fit
+        remove: If True, remove temporary files after plotting
 
     Returns:
         wR: Weighted R-factor after refinement
@@ -199,14 +202,11 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     os.makedirs(tmp_root, exist_ok=True)
     #run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
     default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}")#_{run_id}")
-    if gpx_name is None:
-        gpx_name = f"{default_base}.gpx"
-    if gsas_log is None:
-        gsas_log = f"{default_base}.log"
+    if gpx_name is None: gpx_name = f"{default_base}.gpx"
+    if gsas_log is None: gsas_log = f"{default_base}.log"
 
     gpx_dir = os.path.dirname(gpx_name)
-    if gpx_dir:
-        os.makedirs(gpx_dir, exist_ok=True)
+    if gpx_dir: os.makedirs(gpx_dir, exist_ok=True)
 
     try:
         with RedirectG2Output(gsas_log):
@@ -339,6 +339,13 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
         #    fig.savefig(out_png, dpi=300)
         #    plt.close(fig)
         # print(f"Saved plot to {out_png}")
+    if remove:
+        gpx_lst = f"{default_base}.lst"
+        gpx_bak0 = f"{default_base}.bak0.gpx"
+        if os.path.exists(gpx_name): os.remove(gpx_name)
+        if os.path.exists(gsas_log): os.remove(gsas_log)
+        if os.path.exists(gpx_bak0): os.remove(gpx_bak0)
+        if os.path.exists(gpx_lst): os.remove(gpx_lst)
 
     return wR, R2, weighted_chi2, refined_cif
 
