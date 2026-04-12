@@ -876,7 +876,7 @@ def run_pipeline(state: dict) -> dict:
     terminate_pair = False
     structure_limit = state['min_structures_before_early_stop']
     N_cells = len(all_seed_cells)
-    attmept_count = 0
+    attempt_count = 0
 
     for it in range(3):
         # Just in case some strctures failed very frequently
