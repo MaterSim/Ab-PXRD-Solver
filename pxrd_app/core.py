@@ -639,9 +639,11 @@ def run_pipeline(state: dict) -> dict:
         dims_sig = tuple(round(float(x), 3) for x in np.array(cell_obj.dims).tolist())
         return (int(spg_value), dims_sig)
 
-    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof) -> list:
+    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> list:
         key = _cell_cache_key(cell_obj, spg_value)
-        if key in wp_candidate_cache: return wp_candidate_cache[key]
+        if key in wp_candidate_cache:
+            return wp_candidate_cache[key]
+
         candidates = enumerate_wyckoff(
             cell_obj.dims,
             [spg_value],
@@ -649,16 +651,25 @@ def run_pipeline(state: dict) -> dict:
             max_wp, max_Z, max_dof,
             ref_den=(density_min, density_max),
             verbose=True,
+            max_samples=max_samples,
         )
-        #print(f"Enumerated {len(candidates)} Wyckoff candidates for cell {cell_obj.dims} under SPG {spg_value}.")
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof) -> tuple[int, int, int]:
+    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> tuple[int, int, int]:
         key = _cell_cache_key(cell_obj, spg_value)
-        if key in wp_cost_cache: return wp_cost_cache[key]
+        if key in wp_cost_cache: 
+            return wp_cost_cache[key]
 
-        candidates = _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof)
+        try:
+            candidates = _get_wp_candidates_for_pair(
+                cell_obj, spg_value, max_wp, max_Z, max_dof, 
+                max_samples=max_samples
+            )
+        except Exception as e:
+            logger.debug(f"Cost estimation failed for spg={spg_value}: {str(e)[:100]}")
+            raise
+        
         candidate_count = len(candidates)
 
         est_trials = 0
@@ -677,6 +688,9 @@ def run_pipeline(state: dict) -> dict:
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
+    max_enumeration_samples = state.get("max_enumeration_samples")  # Limit samples during cost estimation to avoid hang
+    max_trials = state.get("max_trials")
+
     state["attempt_count"] = 0
 
     if infer_spg:
@@ -749,16 +763,32 @@ def run_pipeline(state: dict) -> dict:
             all_seed_cells.append((float(getattr(cell, "size", 0.0)), cell, seed_spg))
 
     if all_seed_cells:
+        # Pre-sort seed cells before Phase 2 planning: smaller cell.missing 1st, smaller volume 2nd,
+        # then higher space group.
+        all_seed_cells.sort(key=lambda item: (int(item[1].missing), float(item[0]), -int(item[2])))
+
         # ── Phase 2: plan ALL (cell, spg) pairs with explicit cost estimates ─
         # For each (cell, spg) pair, estimate cost by Wyckoff candidate count and
         # estimated number of generated trials. Globally rank every pair by a balanced
         # score combining relative estimated trials and relative volume.
         total_count = 0
         planned_pairs = []
-
-        for _vol, _cell, _spg in all_seed_cells:
-            cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg, max_wp, max_Z, max_dof)
+        total_est_trials = 0
+        for pair_idx, (_vol, _cell, _spg) in enumerate(all_seed_cells, start=1):
+            try:
+                cand_count, est_wps, est_trials = _estimate_pair_cost(
+                    _cell, _spg, max_wp, max_Z, max_dof, max_samples=max_enumeration_samples
+                )
+                total_est_trials += est_trials
+            except Exception as e:
+                logger.info(f"Phase 2 — pair {pair_idx}/{len(all_seed_cells)}: spg={_spg} | Enumeration error (skipping): {str(e)[:100]}")
+                cand_count = 0
+            
             if cand_count == 0: continue
+            
+            # Skip pairs with excessively expensive searches
+            print(f"Phase 2 — pair {pair_idx}/{len(all_seed_cells)}/{_cell.missing}: spg={_spg} | Estimated candidates: {cand_count}/{est_trials}, ")
+
             total_count += cand_count
             planned_pairs.append(
                 {"vol": _vol,
@@ -768,10 +798,14 @@ def run_pipeline(state: dict) -> dict:
                  "est_wps": est_wps,
                  "est_trials": est_trials}
             )
+            if total_est_trials > max_trials and len(planned_pairs) >= min([int(len(all_seed_cells) * 0.2), 250]):
+                break
 
         if len(planned_pairs) == 0:
             logger.info("No viable (cell, SPG) pairs found; cannot proceed to structure generation.")
             return state
+        else:
+            logger.info(f"Phase 2 collected {len(planned_pairs)} pairs, {total_est_trials} estimated trials.")
 
         min_pair_trials = min(int(m["est_trials"]) for m in planned_pairs)
         min_pair_volume = min(float(m["vol"]) for m in planned_pairs)
@@ -991,6 +1025,7 @@ def run_pipeline(state: dict) -> dict:
         return state
 
     timing_breakdown = _timing_breakdown_seconds()
+    state["timing_breakdown_seconds"] = timing_breakdown
     if not any_seed_had_cells:
         logger.info("No inferred SG candidate produced valid cells.")
         state["msg"] = "No valid cells are found."
@@ -1001,7 +1036,6 @@ def run_pipeline(state: dict) -> dict:
         status = "Success" if best_trial_result.get("accepted") else "Failure"
 
         # End of all-pairs loop: emit global plot covering every structure tried
-        state["timing_breakdown_seconds"] = timing_breakdown
         #formula_str = state.get("formula", "unknown")
         tag = state['pxrd_csv'].split("/")[-1].split(".")[0]
         spg_str = f"SG{best_trial_spg}" if best_trial_spg is not None else "SG_unknown"

@@ -858,7 +858,7 @@ class WPManager:
                         #print("Added:", self.spg, comp, id)
             kept_this_z = len(sols) - sols_before_z
             if kept_this_z > 0:
-                print(f"Z={Z}: Kept {kept_this_z} Wyckoff position combinations.")
+                print(f"Z={Z}: Kept {kept_this_z} Wyckoff combinations in {self.spg}/{self.composition}.")
             # sort sols by DOF and number of WPs
             sols = sorted(sols, key=lambda x: (x[5], x[4]))
         #for sol in sols:
@@ -866,33 +866,51 @@ class WPManager:
         #    # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
-    def get_wyckoff_positions(self, verbose=True):
+    def get_wyckoff_positions(self, verbose=True, max_samples=None):
         """
         Infer possible Wyckoff position combinations based on the composition and Z range.
+
+        Args:
+            verbose: Print enumeration progress
+            max_samples: If set, limit total enumeration to this many samples (for cost estimation)
         """
         sols = []
+        enumeration_count = 0  # Track enumeration progress
+
         for Z in range(self.Zs[0], self.Zs[1]+1):
             sols_before_z = len(sols)
             df_z = self.df[self.df['n_atoms'] == Z * sum(self.comp)]
-            #print(df_z)
-            if len(df_z) == 0: continue
-            #print(f"Z={Z}: Found {len(df_z)} Wyckoff position combinations.")
+            if len(df_z) == 0:
+                continue
+
             comp = [n * Z for n in self.comp]
             wp_lists = []
+
             for _, row in df_z.iterrows():
-                #print(f"Processing row: {row['spg']} {row['wps']} {row['count']}")
+                # Early exit if we've exceeded max_samples during cost estimation
+                if max_samples is not None and enumeration_count >= max_samples:
+                    if verbose:
+                        print(f"Z={Z}: Enumeration limited to {max_samples} samples (cost estimation mode).")
+                    break
+
                 ids = [int(x) for x in row['wps'].split('-')]
                 count = row['count']
                 nums = [self.group[id].multiplicity for id in ids]
-                if len(ids) > self.max_wp: continue
+                if len(ids) > self.max_wp:
+                    continue
+
                 solutions = self.find_wp_assignments(comp, ids, nums)
-                #print(comp, ids, nums, solutions)#; import sys; sys.exit()
+
                 for sol in solutions:
+                    enumeration_count += 1
+                    if max_samples is not None and enumeration_count >= max_samples:
+                        break
+
                     dof = [self.group[w].get_dof() for wp in sol for w in wp]
-                    if sum(dof) > self.max_dof: continue
+                    if sum(dof) > self.max_dof:
+                        continue
 
                     duplicate = False
-                    #tmp = [len(self.group)-1-item for sublist in sol for item in sublist]
                     tmp_lists = [[] for _ in range(len(self.orders))]
 
                     for i, order in enumerate(self.orders):
@@ -901,22 +919,23 @@ class WPManager:
                             tmp = order[items]
                             tmp.sort()
                             tmp_lists[i].extend(tmp.tolist())
-                        #tmp_list = order[tmp].tolist()
-                        #print("Checking order:", wps[i], tmp, tmp_list)
-                        #if [self.group[w].get_label() for wp in sol for w in wp] == ['1d', '1c', '1a', '1b', '4i']:
-                        #    print(tmp_lists[i], wp_lists[-1])
+
                         if tmp_lists[i] in wp_lists:
                             duplicate = True
-                            #print([self.group[w].get_label() for wp in sol for w in wp], "is duplicate")
                             break
+
                     if not duplicate:
                         wp_lists.append(tmp_lists[0])
                         n_wps = sum(len(sub) for sub in sol)
                         sols.append((self.spg, comp, self.lattice, sol, n_wps, sum(dof), count, Z))
-                        #print("Added:", self.spg, tmp_lists[0], [self.group[w].get_label() for wp in sol for w in wp])
+
             kept_this_z = len(sols) - sols_before_z
             if kept_this_z > 0 and verbose:
                 print(f"Z={Z}: Kept {kept_this_z} Wyckoff position combinations.")
+
+            # Exit outer loop if we hit max_samples
+            if max_samples is not None and enumeration_count >= max_samples:
+                break
 
         # Sort the solutions by count and DOF
         sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))

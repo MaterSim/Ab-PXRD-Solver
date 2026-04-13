@@ -16,7 +16,7 @@ def _missing_gsas_refine_pxrd(*args, **kwargs):
 
 try:
     from .manager import RawDataManager, CellManager, WPManager, XtalManager
-    from .utils import plot_XRD, relax_structure
+    from .utils import relax_structure
     from .XRD import Similarity, XRD
     try:
         from .gsas import refine_pxrd
@@ -27,7 +27,7 @@ except ImportError:
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
     from tools.manager import RawDataManager, CellManager, WPManager, XtalManager
-    from tools.utils import plot_XRD, relax_structure
+    from tools.utils import relax_structure
     from tools.XRD import Similarity, XRD
     try:
         from tools.gsas import refine_pxrd
@@ -1480,7 +1480,7 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
 
 
 def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None,
-                       verbose=False):
+                       verbose=False, max_samples=None):
     """
     Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
 
@@ -1497,6 +1497,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
         max_Z: Maximum atomic number to consider
         ref_den: (density_min, density_max) tuple for density filtering
         verbose: Whether to print detailed information during enumeration
+        max_samples: If set, limit enumeration to this many samples per SPG (for cost estimation)
 
     Returns:
         List of consolidated Wyckoff candidates sorted by global priority:
@@ -1504,11 +1505,18 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
         Each tuple includes the original SPG for reference.
     """
     all_candidates = []
+    enumeration_count = 0  # Track total samples enumerated
 
     for spg in spg_list:
         wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z, max_dof=max_dof, ref_den=ref_den)
-        local_sols = wp_manager.get_wyckoff_positions(verbose)
-        #print(f'+++++++ {wp_manager.spg}: Z={wp_manager.Zs}: {len(local_sols)} candidates found. +++++++')
+        local_sols = wp_manager.get_wyckoff_positions(verbose, max_samples=max_samples)
+        enumeration_count += len(local_sols)
+        
+        # If we're in cost estimation mode and exceeded limit, stop early
+        if max_samples is not None and enumeration_count > max_samples:
+            if verbose:
+                print(f"WPManager for SPG {spg}: Enumeration limited to {max_samples} samples (cost estimation mode).")
+            break
 
         # Tag each solution with which SPG it came from
         for sol in local_sols:
@@ -1522,12 +1530,6 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
 
     # Sort by count (descending), then by DOF (ascending), then by num_wps, then by Z
     # This prioritizes high-count (real structure) assignments globally
-    all_candidates.sort(
-        key=lambda x: (-x[6], x[5], -x[4], x[7]),
-        reverse=False  # Lower values earlier except for count
-    )
-
-    # Actually, let's fix the sort: count is highest priority (descending), DOF second (ascending)
     all_candidates.sort(key=lambda x: (-x[6], x[5], -x[4], x[7]))
 
     return all_candidates

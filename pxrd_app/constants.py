@@ -112,6 +112,8 @@ DEFAULT_STATE = {
     "N1": 5, # top-N cells
     "N2": 40, # top-N wps per cell
     "max_attempt_count": 1000,
+    "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
+    "max_trials": 50000000,  # Limit estimated trials to avoid hang
 }
 
 VALID_LATTICE_SYMMETRIES = {
