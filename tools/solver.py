@@ -1718,33 +1718,35 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
 
 
-    def _finalize_result(result):
+    def _finalize_result(result, attempt_count=None):
         if result is None: return None
         wr, r2, chi2, xtal, _eng_best_at_sel, selected_eng, _selected_eng_rel, count = result
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
-        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count)
+        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count, attempt_count)
 
-    def _return_best_available(local_candidate, best_refined_result_energy_ok, struc_count=None):
+    def _return_best_available(local_candidate, best_refined_result_energy_ok,
+                               struc_count=None, attempt_count=None):
         if local_candidate is not None:
             if struc_count is not None:
                 # Replace the last item of local_candidate with struc_count
                 local_candidate = tuple(list(local_candidate[:-1]) + [struc_count])
-            return _finalize_result(local_candidate)
+            return _finalize_result(local_candidate, attempt_count=attempt_count)
 
         if best_refined_result_energy_ok is not None:
             if struc_count is not None:
                 best_refined_result_energy_ok = tuple(list(best_refined_result_energy_ok[:-1]) + [struc_count])
-            return _finalize_result(best_refined_result_energy_ok)
+            return _finalize_result(best_refined_result_energy_ok, attempt_count=attempt_count)
 
         if best_refined_result is not None:
             logger.info("No accepted candidate was found")
-            return (None, None, None, None, eng_best, None, None, struc_count)
+            return (None, None, None, None, eng_best, None, None, struc_count, attempt_count)
 
-        return (None, None, None, None, eng_best, None, None, struc_count)
+        return (None, None, None, None, eng_best, None, None, struc_count, attempt_count)
 
     #trial_cells = list(cells[:N1])
     early_stop = False
     local_accepted_result = None
+    attempt_count = 0
 
     # Track emitted structure IDs to avoid duplicates
     emitted_id_messages = set()
@@ -1787,6 +1789,7 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                 trial_idx = 0
                 while trial_idx < (N4 + 1 + extra_trials):
                     trial_idx += 1
+                    attempt_count += 1
                     if N_false > max([4, N4 // 2]):
                         logger.info("Too many invalid structures, skip....")
                         break
@@ -1959,11 +1962,11 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
                         logger.info(
                             f"Early stop triggered after {struc_count} structures; terminating search."
                         )
-                        return _finalize_result(local_accepted_result)
+                        return _finalize_result(local_accepted_result, attempt_count=attempt_count)
 
             prev_limit = limit
         # Correct the structure count in the final accepted result if it exists, to reflect the total number of structures generated so far.
-    return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count)
+    return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count, attempt_count=attempt_count)
 
 
 if __name__ == "__main__":

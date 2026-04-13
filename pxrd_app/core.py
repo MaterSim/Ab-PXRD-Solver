@@ -391,7 +391,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             stale_path.unlink()
         except FileNotFoundError:
             pass
-    attempts = max(1, int(state.get("multi_attempts", 3)))
+    attempts = state["multi_attempts"]
     seed_base = int(state.get("seed_base", 20260315))
 
     def _set_seed(seed: int) -> None:
@@ -430,12 +430,8 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         attempt_png = str(attempt_prefix.with_suffix(".png"))
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
         attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
-        #logger.info(
-        #    f"Attempt {attempt_idx + 1}/{attempts}: seed={seed}, (N1={N1}, N2={N2}), "
-        #    f"Perturb: {max_local_perturbations}/{perturb_displacement:.3f}, "
-        #    f"{struc_count} structures")
 
-        wr, r2, chi2, xtal, eng_best, selected_eng, eng_rel, struc_count = search_solution(
+        wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count = search_solution(
             cells[:N1],
             spg,
             composition,
@@ -473,7 +469,8 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             ase_logfile=state.get("ase_logfile"),
         )
 
-        print(f"{struc_count} new structure(s). Total structures: {len(all_structure_log)}.")
+        state["attempt_count"] += attempt_count
+        print(f"{struc_count} new structure(s). Total: {len(all_structure_log)}/{state['attempt_count']}.")
         # Accumulate struc_count with the number of new structures generated in this attempt
         if wr is None: continue
 
@@ -692,6 +689,7 @@ def run_pipeline(state: dict) -> dict:
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
+    state["attempt_count"] = 0
 
     if infer_spg:
         predicted_spgs = state["spg_predictions"][:state["spg_top_k"]]
@@ -921,15 +919,14 @@ def run_pipeline(state: dict) -> dict:
                     trial_state["cells"] = copy.deepcopy([cell])
                     trial_state['wp_labels'] = wp_labels_text
                     trial_state["forced_wp_solution"] = sol[:8] if len(sol) >= 9 else sol
-                    attempt_count += 1
 
                     trial_message, trial_state = run_wyckoff_solver(trial_state, global_structure_log)
 
                     # After running, update the main state's Struc_count by accumulating
                     state["Struc_count"] = trial_state.get("Struc_count")
-                    state["attempt_count"] = attempt_count
+                    state["attempt_count"] = trial_state["attempt_count"]
                     trial_result = trial_state.get("wyckoff_result") or {}
-
+                    #print("++++++++++++++++++ Debug attempt_count:", state["attempt_count"], "Struc_count:", state["Struc_count"])
                     trial_score = trial_result.get("score")
                     if trial_score is not None and trial_score > best_trial_score:
                         best_trial_score = trial_score
@@ -996,7 +993,6 @@ def run_pipeline(state: dict) -> dict:
     state["Total_est"] = total_count
     if list_wp_only:
         timing_breakdown = _timing_breakdown_seconds()
-        state["attempt_count"] = attempt_count
         state["timing_breakdown_seconds"] = timing_breakdown
         state["status"] = "WP-Only"
         state["msg"] = "Wyckoff combinations listed only; structure generation skipped."
@@ -1004,7 +1000,6 @@ def run_pipeline(state: dict) -> dict:
         return state
 
     timing_breakdown = _timing_breakdown_seconds()
-    state["attempt_count"] = attempt_count
     if not any_seed_had_cells:
         logger.info("No inferred SG candidate produced valid cells.")
         state["msg"] = "No valid cells are found."
@@ -1031,9 +1026,10 @@ def run_pipeline(state: dict) -> dict:
         else:
             logger.info(f"No acceptance; return best result in spg={best_trial_spg}")
         logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
+        count0 = state.get("attempt_count")
         state.update(best_trial_state)
+        state["attempt_count"] = count0
         # Keep the global WP-trial count from this pipeline run.
-        #state["attempt_count"] = attempt_count
         state["status"] = status
         state["msg"] = best_trial_message
         return state
