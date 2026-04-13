@@ -415,7 +415,6 @@ def _build_state(
         text = str(ase_logfile).strip()
         run_state["ase_logfile"] = text or None
     run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
-
     return run_state
 
 

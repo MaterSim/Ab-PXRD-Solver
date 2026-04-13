@@ -352,7 +352,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     ref_den = (density_min, density_max)
     x1 = np.array(state.get("x1"))
     y1 = np.array(state.get("y1"))
-    peaks = np.array(state.get("peaks"))
     forced_wp_solution = state.get("forced_wp_solution")
     if "forced_wp_solution" in state: state.pop("forced_wp_solution", None)
     min_r2 = state.get("min_r2")
@@ -380,11 +379,10 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     run_tmp_dir = tmp_root / f"run_{run_token}"
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    title = f'{formula} PXRD Prediction: Space Group {spg}'
-    match_cif = os.path.join(cifs_dir, f'Match_{formula}_{spg}.cif')
+    match_cif = os.path.join(cifs_dir, f'Match_{run_token}.cif')
     stale_result_cifs = [
-        *Path(cifs_dir).glob(f"Match_{formula}_{spg}_attempt*.cif"),
-        *Path(cifs_dir).glob(f"Match_{formula}_{spg}_attempt*_refined.cif"),
+        *Path(cifs_dir).glob(f"Match_{run_token}_attempt*.cif"),
+        *Path(cifs_dir).glob(f"Match_{run_token}_attempt*_refined.cif"),
     ]
     for stale_path in stale_result_cifs:
         try:
@@ -426,21 +424,16 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         seed = seed_base + 9973 * attempt_idx
         _set_seed(seed)
 
-        attempt_prefix = run_tmp_dir / f"Match_{formula}_{spg}_attempt{attempt_idx + 1}"
-        attempt_png = str(attempt_prefix.with_suffix(".png"))
+        attempt_prefix = run_tmp_dir / f"Match_{run_token}_attempt{attempt_idx + 1}"
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
-        attempt_refinement_png = str(attempt_prefix.with_name(f"{attempt_prefix.name}_refinement.png"))
 
         wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count = search_solution(
             cells[:N1],
             spg,
             composition,
             ref_den,
-            title,
-            attempt_png,
             attempt_cif,
             pxrd_csv,
-            peaks,
             x1,
             y1,
             eng_min,
@@ -496,7 +489,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             "wp_labels": state.get("wp_labels"),
             "attempt": attempt_idx + 1,
             "seed": seed,
-            "png": attempt_refinement_png,
             "cif": attempt_cif,
             "accepted": False,
         }
@@ -554,8 +546,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     r2 = state['best_result']["r2"]
     chi2 = state['best_result']["chi2"]
     logger.info(f"\nFinal refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}")
-    if os.path.exists(state['best_result']["png"]):
-        logger.info(f"Best refinement plot saved to {state['best_result']['png']}")
     logger.info(f"Best structure saved to {match_cif}")
     state['best_result']["spg"] = spg
     state['best_result']["score"] = state['best_score']
@@ -564,13 +554,11 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
 
     text = f"Wyckoff solving completed for formula {formula} in space group {spg}.\n"
     text += f"Adaptive attempts: {attempts}, seed_base: {seed_base}\n"
-    text += f"Best similarity: {sim_max:.3f}, Minimum energy per atom: {state['best_result']['eng_best']:.3f} eV\n"
+    text += f"Best similarity: {sim_max:.3f}, Min_energy/atom: {state['best_result']['eng_best']:.3f} eV\n"
     text += f"Final Rietveld refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}\n"
     text += f"Selected attempt: {state['best_result']['attempt']} \n"
     if not state['best_result']["accepted"]:
         text += "Best candidate did not meet the acceptance thresholds, but was kept as a fallback result.\n"
-    if os.path.exists(state['best_result']["png"]):
-        text += f"Best refinement plot saved to {state['best_result']['png']}\n"
     text += f"Best structure saved to {match_cif}\n"
     return text, state
 
@@ -709,7 +697,7 @@ def run_pipeline(state: dict) -> dict:
             )
             predicted_spgs = filtered_spgs
             if len(predicted_spgs) == 0:
-                logger.info(f"No SPG candidates after applying lattice symmetry filter '{target_system}'.")
+                logger.info(f"No SPG candidates after applying symmetry filter '{target_system}'.")
                 return state
     else:
         predicted_spgs = [state["spg"]]
@@ -863,7 +851,6 @@ def run_pipeline(state: dict) -> dict:
     terminate_pair = False
     structure_limit = state['min_structures_before_early_stop']
     N_cells = len(all_seed_cells)
-    attempt_count = 0
 
     for it in range(3):
         # Just in case some strctures failed very frequently
@@ -926,6 +913,10 @@ def run_pipeline(state: dict) -> dict:
                     state["Struc_count"] = trial_state.get("Struc_count")
                     state["attempt_count"] = trial_state["attempt_count"]
                     trial_result = trial_state.get("wyckoff_result") or {}
+                    if state["attempt_count"] >= state['max_attempt_count']:
+                        logger.info(f"Reached maximum attempt ({state['max_attempt_count']}); stopping further generation.")
+                        terminate_pair = True
+                        break
                     #print("++++++++++++++++++ Debug attempt_count:", state["attempt_count"], "Struc_count:", state["Struc_count"])
                     trial_score = trial_result.get("score")
                     if trial_score is not None and trial_score > best_trial_score:

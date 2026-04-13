@@ -111,6 +111,7 @@ DEFAULT_STATE = {
     "ase_logfile": None,
     "N1": 5, # top-N cells
     "N2": 40, # top-N wps per cell
+    "max_attempt_count": 1000,
 }
 
 VALID_LATTICE_SYMMETRIES = {

@@ -78,7 +78,9 @@ def plot_energy_vs_r2(
     if best_state is not None and best_state.get("best_result") is not None:
         pxrd_csv = best_state.get("pxrd_csv")
         INST_FILE = best_state.get("INST_FILE")
-        match_cif = f"tmp/{formula}_best_state.cif"
+        results_dir = best_state.get("results_dir", "Results")
+        cifs_dir = os.path.join(results_dir, "cifs")
+        match_cif = os.path.join(cifs_dir, f'{formula}_best_state.cif')
         best_state['best_result']['xtal'].to_file(match_cif)
         wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, ax=ax2, remove=True)
         spg = best_state['best_result']['spg']

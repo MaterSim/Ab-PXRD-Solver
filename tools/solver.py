@@ -1659,8 +1659,8 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
         "Z": int(Z),
     }
 
-def search_solution(cells, spg, composition, ref_den, title, match_png, match_cif,
-                    match_csv, peaks, x1, y1, eng_min, sim_max, N2, struc_count,
+def search_solution(cells, spg, composition, ref_den, match_cif,
+                    match_csv, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, max_wp, max_Z, max_dof, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
@@ -1675,11 +1675,8 @@ def search_solution(cells, spg, composition, ref_den, title, match_png, match_ci
         spg: Space group number.
         composition: Dictionary of element counts.
         ref_den: Tuple of (min_density, max_density).
-        title: Title for plots.
-        match_png: Path to save match plot.
         match_cif: Path to save match CIF.
         match_csv: Path to save match CSV.
-        peaks: Indices of peaks used for indexing.
         x1, y1: Simulated PXRD data arrays.
         eng_min: Current minimum energy.
         sim_max: Current maximum similarity.
