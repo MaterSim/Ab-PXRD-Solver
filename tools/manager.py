@@ -880,8 +880,7 @@ class WPManager:
         for Z in range(self.Zs[0], self.Zs[1]+1):
             sols_before_z = len(sols)
             df_z = self.df[self.df['n_atoms'] == Z * sum(self.comp)]
-            if len(df_z) == 0:
-                continue
+            if len(df_z) == 0: continue
 
             comp = [n * Z for n in self.comp]
             wp_lists = []
@@ -907,8 +906,7 @@ class WPManager:
                         break
 
                     dof = [self.group[w].get_dof() for wp in sol for w in wp]
-                    if sum(dof) > self.max_dof:
-                        continue
+                    if sum(dof) > self.max_dof: continue
 
                     duplicate = False
                     tmp_lists = [[] for _ in range(len(self.orders))]
@@ -929,9 +927,9 @@ class WPManager:
                         n_wps = sum(len(sub) for sub in sol)
                         sols.append((self.spg, comp, self.lattice, sol, n_wps, sum(dof), count, Z))
 
-            kept_this_z = len(sols) - sols_before_z
-            if kept_this_z > 0 and verbose:
-                print(f"Z={Z}: Kept {kept_this_z} Wyckoff position combinations.")
+            kept_z = len(sols) - sols_before_z
+            if kept_z > 0 and verbose:
+                print(f"Z={Z}: Kept {kept_z} Wyckoff position combinations.")
 
             # Exit outer loop if we hit max_samples
             if max_samples is not None and enumeration_count >= max_samples:
@@ -999,8 +997,24 @@ if __name__ == "__main__":
     #    comp, ids, nums, n = d
     #    sols = WPManager.find_wp_assignments(comp, ids, nums)
     #    print('input: ', d, '\n', sols)
-    wp = WPManager(164, [6.065, 17.283], {'Al': 13, 'Ba': 7}, max_wp=10, ref_den=(3.24, 4.44))
+    #wp = WPManager(164, [6.065, 17.283], {'Al': 13, 'Ba': 7}, max_wp=10, ref_den=(3.24, 4.44))
+    #sols = wp.get_wyckoff_positions()
+    #for sol in sols:
+    #    wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
+    #    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}")
+    from time import time
+    t0 = time()
+    wp = WPManager(63, [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, 
+                   max_wp=15, max_Z=24, max_dof=21, ref_den=(1.04, 3.80))
     sols = wp.get_wyckoff_positions()
     for sol in sols:
         wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
-        print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}")
+    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
+
+    t0 = time()
+    wp = WPManager(64, [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, 
+                   max_wp=15, max_Z=24, max_dof=21, ref_den=(1.04, 3.80))
+    sols = wp.get_wyckoff_positions()
+    for sol in sols:
+        wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
+    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
