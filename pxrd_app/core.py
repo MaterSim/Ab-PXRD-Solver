@@ -654,7 +654,7 @@ def run_pipeline(state: dict) -> dict:
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> tuple[int, int, int]
+    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> tuple[int, int, int]:
         key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_cost_cache: return wp_cost_cache[key]
 

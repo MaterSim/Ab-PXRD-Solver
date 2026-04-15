@@ -81,10 +81,10 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
     if status_label == "Success":
         wr = run_state.get("wyckoff_result") or {}
         xtal = wr.get("xtal")
-        E = _format_scalar(wr.get("selected_energy"), 6)
-        dE = _format_scalar(wr.get("eng_rel"), 6)
-        R2 = _format_scalar(wr.get("r2"), 6)
-        Chi2 = _format_scalar(wr.get("chi2"), 6)
+        E = _format_scalar(wr.get("selected_energy"), 4)
+        dE = _format_scalar(wr.get("eng_rel"), 4)
+        R2 = _format_scalar(wr.get("r2"), 4)
+        Chi2 = _format_scalar(wr.get("chi2"), 4)
         SPG = str(run_state.get("spg") or wr.get("spg") or "")
         Wyckoff = _extract_xtal_wyckoff(xtal) or ""
         Cell = xtal.lattice.encode()
