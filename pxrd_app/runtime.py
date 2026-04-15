@@ -87,7 +87,7 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
         Chi2 = _format_scalar(wr.get("chi2"), 4)
         SPG = str(run_state.get("spg") or wr.get("spg") or "")
         Wyckoff = _extract_xtal_wyckoff(xtal) or ""
-        Cell = xtal.lattice.encode()
+        Cell = str([_format_scalar(x, 4) for x in xtal.lattice.encode()])
 
     csv_file_name = os.path.basename(input_csv)
     is_placeholder_failure = (

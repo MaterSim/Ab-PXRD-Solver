@@ -1762,7 +1762,11 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
             logger.info(f"No Wyckoff candidates satisfy DOF <= {max_dof} for cell {cell.dims}.")
             continue
 
-        wp_limits = get_adaptive_wp_limits(len(ranked_sols), N2)
+        if forced_wp_solution is not None:
+            # Forced mode already narrows to a single WP candidate.
+            wp_limits = [len(ranked_sols)]
+        else:
+            wp_limits = get_adaptive_wp_limits(len(ranked_sols), N2)
 
         prev_limit = 0
         for limit in wp_limits:

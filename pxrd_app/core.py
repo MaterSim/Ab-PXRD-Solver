@@ -367,6 +367,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
+    max_wp_choices = state.get("max_wp_choices")
 
     results_dir = state.get("results_dir", "Results")
     cifs_dir = os.path.join(results_dir, "cifs")
@@ -418,8 +419,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         return bool(r2 >= min_r2 and chi2 <= max_chi2)
 
     struc_count = state.get("Struc_count") or 0
-    N1 = state.get("N1")
-    N2 = state.get("N2")
 
     for attempt_idx in range(attempts):
         seed = seed_base + 9973 * attempt_idx
@@ -429,7 +428,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
 
         wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count = search_solution(
-            cells[:N1],
+            cells,
             spg,
             composition,
             ref_den,
@@ -439,7 +438,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             y1,
             eng_min,
             sim_max,
-            N2,
+            max_wp_choices,
             struc_count if structure_id_counter is None else structure_id_counter,
             max_force,
             max_stress,
@@ -865,6 +864,7 @@ def run_pipeline(state: dict) -> dict:
     structure_start_time = spg_cell_end_time
     terminate_pair = False
     structure_limit = state['min_structures_before_early_stop']
+    max_wp_choices = state.get("max_wp_choices")
     N_cells = len(all_seed_cells)
 
     for it in range(3):
@@ -886,7 +886,7 @@ def run_pipeline(state: dict) -> dict:
             vol_str = f"vol={vol:.1f} Å³"
             logger.info(f"\n[{pair_str}] {vol_str}, spg={seed_spg}, dims={dim_str}: {N_wps} WP choices.")
 
-            wp_limits = get_adaptive_wp_limits(len(consolidated_wp), 20)
+            wp_limits = get_adaptive_wp_limits(len(consolidated_wp), max_wp_choices)
             prev_limit = 0
             wp_attempted = 0
             trial_state = copy.deepcopy(state)

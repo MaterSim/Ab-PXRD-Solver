@@ -109,12 +109,11 @@ DEFAULT_STATE = {
     "max_eng_rel": 0.025,
     "min_structures_before_early_stop": 10,
     "ase_logfile": None,
-    "N1": 5, # top-N cells
-    "N2": 40, # top-N wps per cell
     "max_attempt_count": 1000,
     "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
+    "max_wp_choices": 20,  # Limit number of WP choices per cell to avoid combinatorial explosion
 }
 
 VALID_LATTICE_SYMMETRIES = {

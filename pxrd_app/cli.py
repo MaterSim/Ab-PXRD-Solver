@@ -150,7 +150,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-cell-volume",
         type=float,
-        default=2500.0,
+        default=1500.0,
         help="Maximum allowed unit-cell volume (A^3) for cell solutions. Larger cells are discarded.",
     )
     parser.add_argument(
