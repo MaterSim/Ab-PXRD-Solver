@@ -691,82 +691,88 @@ class WPManager:
                   of lists, where each inner list contains the WP IDs for an element.
         """
 
-        # Pair IDs with their multiplicities and indices for unique tracking
-        wp_info = list(zip(ids, nums, range(len(ids))))
-        #print(f"WP info (ID, multiplicity, index): {comp}, {ids}, {nums} -> {wp_info}")
+        # Group identical WPs by (id, multiplicity) to avoid combinatorial
+        # explosion from choosing k-of-n identical items.  Instead of enumerating
+        # C(n,k) index-permutations, we just decide "pick k from this group".
+        from collections import Counter
+        group_counts = Counter(zip(ids, nums))
+        # Sorted descending by multiplicity for early pruning
+        groups = sorted(
+            [(wp_id, mult, count) for (wp_id, mult), count in group_counts.items()],
+            key=lambda x: x[1], reverse=True,
+        )
 
-        # --- Helper function to find all subsets that sum to a target ---
-        def find_subsets(target, available_wps, start_index=0, current_subset=[]):
-            if target == 0:
-                yield current_subset
-                return
-            if target < 0 or start_index == len(available_wps):
-                return
+        def find_subsets_grouped(target, grps):
+            """All distinct multi-sets of WP types whose multiplicities sum to target.
+            grps: list of (wp_id, mult, available_count), sorted desc by mult.
+            Returns list of lists of (group_index, n_picked).
+            """
+            n = len(grps)
+            # Suffix max-sum for pruning
+            max_sum = [0] * (n + 1)
+            for i in range(n - 1, -1, -1):
+                max_sum[i] = max_sum[i + 1] + grps[i][1] * grps[i][2]
 
-            for i in range(start_index, len(available_wps)):
-                wp_id, wp_num, original_index = available_wps[i]
+            results = []
+            current = []
 
-                # Recurse with the current element included
-                yield from find_subsets(
-                    target - wp_num,
-                    available_wps,
-                    i + 1,
-                    current_subset + [available_wps[i]]
-                )
+            def _inner(remaining, start):
+                if remaining == 0:
+                    results.append(current[:])
+                    return
+                if start >= n or max_sum[start] < remaining:
+                    return
+                _wp_id, mult, count = grps[start]
+                max_pick = min(count, remaining // mult) if mult <= remaining else 0
+                # k = 0 (skip this group)
+                _inner(remaining, start + 1)
+                # k = 1..max_pick
+                for k in range(1, max_pick + 1):
+                    current.append((start, k))
+                    _inner(remaining - k * mult, start + 1)
+                    current.pop()
 
-        # --- Main backtracking solver ---
-        solutions = []
+            _inner(target, 0)
+            return results
 
-        def solve(comp_targets, current_assignment, available_wps):
-            if not comp_targets:
-                # Sort the assignment by the original index before storing
-                sorted_assignment = sorted(current_assignment, key=lambda x: x[0])
-                # Extract just the WP lists in the correct order
-                final_solution = [part for index, part in sorted_assignment]
-                solutions.append(final_solution)
-                return
+        sorted_indexed_comp = sorted(enumerate(comp), key=lambda x: x[1], reverse=True)
 
-            original_index, target_comp = comp_targets[0]
-            remaining_comp = comp_targets[1:]
-
-            # Find all possible ways to form the target composition number
-            possible_subsets = list(find_subsets(target_comp, available_wps))
-
-            for subset in possible_subsets:
-                # For each valid subset, create a new assignment
-                new_assignment_part = [wp[0] for wp in subset] # Get just the IDs
-
-                # Determine the remaining available WPs for the next recursive call
-                used_indices = {wp[2] for wp in subset}
-                next_available_wps = [wp for wp in available_wps if wp[2] not in used_indices]
-
-                # Recurse, adding the original index along with the assignment part
-                solve(remaining_comp, current_assignment + [(original_index, new_assignment_part)], next_available_wps)
-
-        # Pair composition values with their original indices
-        indexed_comp = list(enumerate(comp))
-        # Sort by composition value (descending) to prune search space faster
-        sorted_indexed_comp = sorted(indexed_comp, key=lambda x: x[1], reverse=True)
-
-        solve(sorted_indexed_comp, [], wp_info)
-
-        # --- Remove duplicate solutions ---
-        # The backtracking algorithm can produce solutions that are identical in content
-        # but were arrived at through different paths (e.g., choosing identical
-        # input WPs in a different order). We remove these duplicates here.
-        #print(f"Found {len(solutions)} raw solutions before deduplication.")
-        #print(solutions)
-        unique_solutions = []
         seen = set()
-        for sol in solutions:
-            # Convert the solution to a canonical, hashable representation
-            # by sorting each inner list and converting the whole structure to tuples.
-            canonical_sol = tuple(tuple(sorted(part)) for part in sol)
-            if canonical_sol not in seen:
-                seen.add(canonical_sol)
-                unique_solutions.append(sol)
+        solutions = []
+        stack = []
 
-        return unique_solutions
+        def solve(comp_targets, grps):
+            if not comp_targets:
+                sorted_stack = sorted(stack, key=lambda x: x[0])
+                canonical = tuple(tuple(sorted(part)) for _, part in sorted_stack)
+                if canonical not in seen:
+                    seen.add(canonical)
+                    solutions.append([list(part) for _, part in sorted_stack])
+                return
+
+            orig_idx, target = comp_targets[0]
+            rest = comp_targets[1:]
+
+            for picks in find_subsets_grouped(target, grps):
+                # Build id list for this element
+                part = []
+                for gi, n_picked in picks:
+                    part.extend([grps[gi][0]] * n_picked)
+
+                # Reduce consumed counts, drop empty groups
+                picks_dict = dict(picks)
+                new_grps = []
+                for i, (wp_id, mult, count) in enumerate(grps):
+                    rem = count - picks_dict.get(i, 0)
+                    if rem > 0:
+                        new_grps.append((wp_id, mult, rem))
+
+                stack.append((orig_idx, part))
+                solve(rest, new_grps)
+                stack.pop()
+
+        solve(sorted_indexed_comp, groups)
+        return solutions
 
     def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10,
                  ref_den=None):
@@ -866,14 +872,16 @@ class WPManager:
         #    # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
-    def get_wyckoff_positions(self, verbose=True, max_samples=None):
+    def get_wyckoff_positions(self, verbose=True, max_samples=None, timing=False):
         """
         Infer possible Wyckoff position combinations based on the composition and Z range.
 
         Args:
             verbose: Print enumeration progress
             max_samples: If set, limit total enumeration to this many samples (for cost estimation)
+            timing: If True, print per-Z timing breakdown for each step
         """
+        from time import time as _time
         sols = []
         enumeration_count = 0  # Track enumeration progress
 
@@ -884,6 +892,10 @@ class WPManager:
 
             comp = [n * Z for n in self.comp]
             wp_lists = []
+
+            t_assign = 0.0
+            t_dup = 0.0
+            n_raw_sols = 0
 
             for _, row in df_z.iterrows():
                 # Early exit if we've exceeded max_samples during cost estimation
@@ -898,19 +910,27 @@ class WPManager:
                 if len(ids) > self.max_wp:
                     continue
 
+                # Pre-filter: every solution from a row has the same total DOF
+                # (all WPs are always fully assigned), so skip the whole row early.
+                total_dof = sum(self.group[id].get_dof() for id in ids)
+                if total_dof > self.max_dof:
+                    continue
+                n_wps = len(ids)  # also constant per row
+
+                if timing: _t0 = _time()
                 solutions = self.find_wp_assignments(comp, ids, nums)
+                if timing: t_assign += _time() - _t0
+                n_raw_sols += len(solutions)
 
                 for sol in solutions:
                     enumeration_count += 1
                     if max_samples is not None and enumeration_count >= max_samples:
                         break
 
-                    dof = [self.group[w].get_dof() for wp in sol for w in wp]
-                    if sum(dof) > self.max_dof: continue
-
                     duplicate = False
                     tmp_lists = [[] for _ in range(len(self.orders))]
 
+                    if timing: _t1 = _time()
                     for i, order in enumerate(self.orders):
                         for sublist in sol:
                             items = [len(self.group)-1-item for item in sublist]
@@ -921,15 +941,18 @@ class WPManager:
                         if tmp_lists[i] in wp_lists:
                             duplicate = True
                             break
+                    if timing: t_dup += _time() - _t1
 
                     if not duplicate:
                         wp_lists.append(tmp_lists[0])
-                        n_wps = sum(len(sub) for sub in sol)
-                        sols.append((self.spg, comp, self.lattice, sol, n_wps, sum(dof), count, Z))
+                        sols.append((self.spg, comp, self.lattice, sol, n_wps, total_dof, count, Z))
 
             kept_z = len(sols) - sols_before_z
             if kept_z > 0 and verbose:
                 print(f"Z={Z}: Kept {kept_z} Wyckoff position combinations.")
+            if timing:
+                print(f"  Z={Z}: rows={len(df_z)}, raw_sols={n_raw_sols}, kept={kept_z} "
+                      f"| t_assign={t_assign:.4f}s  t_dup={t_dup:.4f}s")
 
             # Exit outer loop if we hit max_samples
             if max_samples is not None and enumeration_count >= max_samples:
@@ -1003,18 +1026,17 @@ if __name__ == "__main__":
     #    wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
     #    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}")
     from time import time
-    t0 = time()
-    wp = WPManager(63, [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, 
-                   max_wp=15, max_Z=24, max_dof=21, ref_den=(1.04, 3.80))
-    sols = wp.get_wyckoff_positions()
-    for sol in sols:
-        wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
-    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
-
-    t0 = time()
-    wp = WPManager(64, [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, 
-                   max_wp=15, max_Z=24, max_dof=21, ref_den=(1.04, 3.80))
-    sols = wp.get_wyckoff_positions()
-    for sol in sols:
-        wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
-    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
+    for spg in [63, 64]:
+        print(f"\n--- SPG {spg} ---")
+        t0 = time()
+        wp = WPManager(spg, [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2},
+                       max_wp=15, max_Z=24, max_dof=21, ref_den=(1.04, 3.80))
+        t_init = time() - t0
+        print(f"  Init: {t_init:.4f}s")
+        t1 = time()
+        sols = wp.get_wyckoff_positions(timing=True)
+        t_wp = time() - t1
+        print(f"  get_wyckoff_positions total: {t_wp:.4f}s")
+        for sol in sols:
+            wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
+        print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
