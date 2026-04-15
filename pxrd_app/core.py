@@ -639,7 +639,7 @@ def run_pipeline(state: dict) -> dict:
         dims_sig = tuple(round(float(x), 3) for x in np.array(cell_obj.dims).tolist())
         return (int(spg_value), dims_sig)
 
-    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof) -> list:
+    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> list:
         key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_candidate_cache: return wp_candidate_cache[key]
         candidates = enumerate_wyckoff(
@@ -649,6 +649,7 @@ def run_pipeline(state: dict) -> dict:
             max_wp, max_Z, max_dof,
             ref_den=(density_min, density_max),
             verbose=True,
+            max_samples=max_samples,
         )
         #print(f"Enumerated {len(candidates)} Wyckoff candidates for cell {cell_obj.dims} under SPG {spg_value}.")
         wp_candidate_cache[key] = candidates
@@ -675,7 +676,7 @@ def run_pipeline(state: dict) -> dict:
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
-    max_enumeration_samples = state.get("max_enumeration_samples")
+    max_samples = state.get("max_enumeration_samples")
     max_trials = state.get("max_trials")
     state["attempt_count"] = 0
 
@@ -761,8 +762,8 @@ def run_pipeline(state: dict) -> dict:
         num_cells = len(all_seed_cells)
 
         for _vol, _cell, _spg in all_seed_cells:
-            cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg, 
-                    max_wp, max_Z, max_dof, max_samples=max_enumeration_samples)
+            cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg,
+                    max_wp, max_Z, max_dof, max_samples=max_samples)
             if cand_count == 0: continue
             total_count += cand_count
             total_est_trials += est_trials

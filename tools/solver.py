@@ -1264,7 +1264,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             # then use those solutions to determine the centering and possible space groups.
             # This way we can significantly reduce the number of space groups we need to check in the later steps,
             # and also increase the chances of finding the correct solution by starting with a more accurate initial guess.
-            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=solver_hkl_max, 
+            solver = CellSolver(spg=spgs[0], thetas=thetas, hkl_max=solver_hkl_max,
                                 N_add=N_add, max_mismatch=max_mismatch, max_chi2=max_chi2,
                                 max_square=solver_max_square, total_square=solver_total_square,
                                 min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
@@ -1511,7 +1511,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
         wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z, max_dof=max_dof, ref_den=ref_den)
         local_sols = wp_manager.get_wyckoff_positions(verbose, max_samples=max_samples)
         enumeration_count += len(local_sols)
-        
+
         # If we're in cost estimation mode and exceeded limit, stop early
         if max_samples is not None and enumeration_count > max_samples:
             if verbose:
