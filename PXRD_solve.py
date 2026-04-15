@@ -7,6 +7,10 @@ from pxrd_app.constants import DEFAULT_STATE as default_state
 from pxrd_app.core import attach_run_log, detach_run_log, run_pipeline, logger
 
 def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
+    tmp_root = os.path.join(args.output, "tmp")
+    os.makedirs(tmp_root, exist_ok=True)
+    os.environ["PXRD_TMP_ROOT"] = tmp_root
+
     run_state = build_run_state(default_state, logger, args, csv_path)
     system_log_handler = attach_run_log(run_state)
 
@@ -37,6 +41,7 @@ def main() -> None:
     try:
         os.makedirs(args.output + "/cifs", exist_ok=True)
         os.makedirs(args.output + "/logs", exist_ok=True)
+        os.makedirs(args.output + "/tmp", exist_ok=True)
         run_csv_batch(csv_files, args, run_deterministic)
     except RuntimeError as exc:
         print(str(exc))

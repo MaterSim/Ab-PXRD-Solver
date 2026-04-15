@@ -114,6 +114,7 @@ DEFAULT_STATE = {
     "max_attempt_count": 1000,
     "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
+    "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
 }
 
 VALID_LATTICE_SYMMETRIES = {

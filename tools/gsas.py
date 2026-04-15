@@ -16,6 +16,10 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 import matplotlib.pyplot as plt
 
 
+def _get_tmp_root() -> str:
+    return os.getenv("PXRD_TMP_ROOT", "tmp")
+
+
 def _load_gsas_scriptable():
     """Load GSAS-II scriptable API from common import locations."""
     gsas_candidates = []
@@ -112,8 +116,9 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
     G2sc = _load_gsas_scriptable()
 
     # Create project and add phase
-    os.makedirs('tmp', exist_ok=True)
-    gpx = G2sc.G2Project(newgpx='tmp/simulation.gpx')
+    tmp_root = _get_tmp_root()
+    os.makedirs(tmp_root, exist_ok=True)
+    gpx = G2sc.G2Project(newgpx=os.path.join(tmp_root, 'simulation.gpx'))
     phase = gpx.add_phase(cif_file, phasename='MyPhase')
 
     # Create simulated histogram
@@ -198,7 +203,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
 
     G2sc = _load_gsas_scriptable()
 
-    tmp_root = os.path.join("tmp", "gsas_runs")
+    tmp_root = os.path.join(_get_tmp_root(), "gsas_runs")
     os.makedirs(tmp_root, exist_ok=True)
     #run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
     default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}")#_{run_id}")

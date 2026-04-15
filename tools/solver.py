@@ -1955,11 +1955,12 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         if should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
                             early_stop = True
                             logger.info(
-                                f"***Excellent fit (r2={r2:.3f}, chi2={chi2:.3f}) with energy (eng_rel={eng_rel:.3f} eV/atom); "
+                                f"***Excellent fit within current WP trial (r2={r2:.3f}, chi2={chi2:.3f}) "
+                                f"with energy (eng_rel={eng_rel:.3f} eV/atom); "
                             )
                     if struc_count >= min_structures_before_early_stop and early_stop:
                         logger.info(
-                            f"Early stop triggered after {struc_count} structures; terminating search."
+                            f"Early stop triggered after {struc_count} structures; terminating current WP search."
                         )
                         return _finalize_result(local_accepted_result, attempt_count=attempt_count)
 

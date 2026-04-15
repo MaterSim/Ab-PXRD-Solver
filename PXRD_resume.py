@@ -367,21 +367,21 @@ def _restore_artifacts(snapshot: dict[str, str]) -> None:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, target_path)
 
-def _artifact_paths(formula: str | None, spg: int | None) -> list[Path]:
+def _artifact_paths(formula: str | None, spg: int | None, results_dir: str) -> list[Path]:
     if not formula or not spg:
         return []
     return [
-        Path("Results") / f"Match_{formula}_{spg}.cif",
-        Path("Results") / f"EnergyR2_{formula}_{spg}.png",
+        Path(results_dir) / f"Match_{formula}_{spg}.cif",
+        Path(results_dir) / f"EnergyR2_{formula}_{spg}.png",
     ]
 
-def _snapshot_artifacts(formula: str | None, spg: int | None, label: str) -> dict[str, str]:
+def _snapshot_artifacts(formula: str | None, spg: int | None, label: str, results_dir: str) -> dict[str, str]:
     snapshot: dict[str, str] = {}
     if not formula or not spg:
         return snapshot
-    snapshot_dir = Path("tmp") / "snapshots"
+    snapshot_dir = Path(results_dir) / "tmp" / "snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    for artifact in _artifact_paths(formula, spg):
+    for artifact in _artifact_paths(formula, spg, results_dir):
         if not artifact.exists():
             continue
         snapshot_path = snapshot_dir / f"{label}_{artifact.name}"
@@ -556,6 +556,10 @@ def _resolve_failure_csvs(summary_csv: str, examples_dir: str, symmetry: str = "
     return failures
 
 def run_resume(csv_path, args):
+    tmp_root = os.path.join(args.output, "tmp")
+    os.makedirs(tmp_root, exist_ok=True)
+    os.environ["PXRD_TMP_ROOT"] = tmp_root
+
     structure_log = []
     # Build run state
     run_state = build_run_state(DEFAULT_STATE, logger, args, csv_path)
@@ -594,7 +598,9 @@ def run_resume(csv_path, args):
 
     # Start timing for structure inference
     _start_time = time.time()
-    winner_snapshot = _snapshot_artifacts(winner_outcome["formula"], winner_outcome["spg"], "resume_winner")
+    winner_snapshot = _snapshot_artifacts(
+        winner_outcome["formula"], winner_outcome["spg"], "resume_winner", args.output
+    )
     ranked_trials = _build_resume_trials(parsed_log)
     logger.info(
         f"Parsed {len(parsed_log.get('pairs') or [])} Phase 2 pair(s) and selected "
@@ -614,8 +620,9 @@ def run_resume(csv_path, args):
             if _is_better_outcome(trial_outcome, winner_outcome):
                 winner_state = trial_state
                 winner_outcome = trial_outcome
-                winner_snapshot = _snapshot_artifacts(winner_outcome["formula"], winner_outcome["spg"],
-                    "resume_winner")
+                winner_snapshot = _snapshot_artifacts(
+                    winner_outcome["formula"], winner_outcome["spg"], "resume_winner", args.output
+                )
             else:
                 _restore_artifacts(winner_snapshot)
 
@@ -739,6 +746,7 @@ if __name__ == "__main__":
 
     os.makedirs(args.output + "/cifs", exist_ok=True)
     os.makedirs(args.output + "/logs", exist_ok=True)
+    os.makedirs(args.output + "/tmp", exist_ok=True)
     if len(csv_paths) > 1 and args.workers > 1:
         run_csv_batch([Path(p) for p in csv_paths], args, run_resume)
     else:
