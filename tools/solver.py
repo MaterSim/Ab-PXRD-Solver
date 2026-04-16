@@ -1664,7 +1664,7 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
 def search_solution(cells, spg, composition, ref_den, match_cif,
                     match_csv, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
-                    INST_FILE, logger, max_wp, max_Z, max_dof, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
+                    INST_FILE, logger, max_wp, max_Z, max_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
@@ -1697,7 +1697,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
         max_wp: Maximum number of Wyckoff positions to consider.
         max_Z: Maximum atomic number to consider.
         max_dof: Maximum degrees of freedom to consider.
-
+        max_atoms: Maximum number of atoms in the unit cell to consider.
     Returns:
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
@@ -1719,7 +1719,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
 
     def _finalize_result(result, attempt_count=None):
         if result is None: return None
-        wr, r2, chi2, xtal, _eng_best_at_sel, selected_eng, _selected_eng_rel, count = result
+        wr, r2, chi2, xtal, _eng_best, selected_eng, _sel_eng, count = result
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
         return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count, attempt_count)
 
@@ -1755,7 +1755,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
             normalized_forced_wp = forced_wp_solution[:8] if len(forced_wp_solution) >= 9 else forced_wp_solution
             ranked_sols = [normalized_forced_wp] if normalized_forced_wp[5] <= max_dof else []
         else:
-            wp_manager = WPManager(spg, cell.dims, composition, max_wp, max_Z, max_dof, ref_den=ref_den)
+            wp_manager = WPManager(spg, cell.dims, composition, max_wp, max_Z, max_dof, max_atoms, ref_den)
             ranked_sols = wp_manager.get_wyckoff_positions()
             ranked_sols = sorted(ranked_sols, key=lambda sol: score_wp_candidate(sol), reverse=True)
         if len(ranked_sols) == 0:

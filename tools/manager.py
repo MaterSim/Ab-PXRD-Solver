@@ -774,7 +774,7 @@ class WPManager:
         solve(sorted_indexed_comp, groups)
         return solutions
 
-    def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10,
+    def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10, max_atoms=200,
                  ref_den=None):
         """
         WP Manager is used to infer likely Wyckoff positions from the given space group,
@@ -787,6 +787,7 @@ class WPManager:
             max_wp (int): Maximum number of Wyckoff positions to consider
             max_Z (int): Maximum Z value to consider for volume estimation
             max_dof (int): Maximum degrees of freedom to consider
+            max_atoms (int): Maximum number of atoms in the unit cell to consider
             ref_den (float): Reference density to use for Z estimation (optional)
         """
         df = read_csv(rf("pyxtal", "database/spg_num_wps_mp.csv"))
@@ -800,6 +801,7 @@ class WPManager:
         self.lattice = Lattice.from_1d_representation(cell, self.group.lattice_type)
         self.max_wp = max_wp
         self.max_dof = max_dof
+        self.max_atoms = max_atoms
         volume = self.lattice.volume
 
         # Calculate total number of atoms in formula unit
@@ -824,6 +826,9 @@ class WPManager:
                 vol[0] += composition[el] * vol1
                 vol[1] += composition[el] * vol2
         self.Zs = (int(np.ceil(volume/vol[1])), int(np.floor(volume/vol[0])))
+        # Adjust Z range based on max_atoms constraint
+        if self.Zs[1] * sum(self.comp) > self.max_atoms:
+            self.Zs = (self.Zs[0], self.max_atoms // sum(self.comp))
         if self.Zs[1] > max_Z:
             self.Zs = (self.Zs[0], max_Z)
         if self.Zs[0] - self.Zs[1] == 1:

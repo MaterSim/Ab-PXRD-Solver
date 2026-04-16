@@ -363,6 +363,7 @@ def _build_state(
     max_wp: Optional[int] = None,
     max_dof: Optional[int] = None,
     max_Z: Optional[int] = None,
+    max_atoms: Optional[int] = None,
     max_sim: Optional[float] = None,
     ase_logfile: Optional[str] = None,
 ) -> dict:
@@ -410,6 +411,7 @@ def _build_state(
     if max_wp is not None: run_state["max_wp"] = int(max_wp)
     if max_dof is not None: run_state["max_dof"] = int(max_dof)
     if max_Z is not None: run_state["max_Z"] = int(max_Z)
+    if max_atoms is not None: run_state["max_atoms"] = int(max_atoms)
     if max_sim is not None: run_state["max_sim"] = float(max_sim)
     if ase_logfile is not None:
         text = str(ase_logfile).strip()

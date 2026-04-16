@@ -381,7 +381,8 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     run_tmp_dir = tmp_root / f"run_{run_token}"
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    match_cif = os.path.join(cifs_dir, f'Match_{run_token}.cif')
+    title = f'{formula} PXRD Prediction: Space Group {spg}'
+    match_cif = os.path.join(cifs_dir, f'Match_{formula}_{spg}.cif')
     stale_result_cifs = [
         *Path(cifs_dir).glob(f"Match_{run_token}_attempt*.cif"),
         *Path(cifs_dir).glob(f"Match_{run_token}_attempt*_refined.cif"),
@@ -1007,6 +1008,7 @@ def run_pipeline(state: dict) -> dict:
         return state
 
     timing_breakdown = _timing_breakdown_seconds()
+    state["timing_breakdown_seconds"] = timing_breakdown
     state["structure_log"] = global_structure_log
     if not any_seed_had_cells:
         logger.info("No inferred SG candidate produced valid cells.")
@@ -1018,8 +1020,6 @@ def run_pipeline(state: dict) -> dict:
         status = "Success" if best_trial_result.get("accepted") else "Failure"
 
         # End of all-pairs loop: emit global plot covering every structure tried
-        state["timing_breakdown_seconds"] = timing_breakdown
-        #formula_str = state.get("formula", "unknown")
         tag = state['pxrd_csv'].split("/")[-1].split(".")[0]
         spg_str = f"SG{best_trial_spg}" if best_trial_spg is not None else "SG_unknown"
         results_dir = state.get("results_dir", "Results")
