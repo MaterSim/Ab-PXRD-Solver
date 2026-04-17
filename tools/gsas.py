@@ -3,10 +3,19 @@ Simulate and refine PXRD patterns using GSAS-II.
 """
 import os
 import sys
+import json
+import atexit
 import warnings
 import uuid
+import glob
+import queue as _queue_mod
 import numpy as np
 from importlib import import_module
+from multiprocessing import Process, Queue, get_context
+
+# Use 'spawn' so each subprocess gets a fresh Python interpreter
+# (fork would inherit the corrupted GSAS-II module state).
+_mp_ctx = get_context("spawn")
 
 # Suppress GSAS-II and pydantic warnings
 warnings.filterwarnings("ignore", message=".*Importing GSASIIscriptable as a top level module is deprecated.*")
@@ -179,34 +188,23 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
     ycalc = ycalc / ycalc.max() * 100
     return x, ycalc
 
-def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
-                gpx_name=None, gsas_log=None, ax=None,
-                plot=False, remove=False):
+def _refine_pxrd_impl(pxrd_file, cif_file, instprm="INST_XRY.PRM",
+                gpx_name=None, gsas_log=None):
     """
-    Refine PXRD data using GSAS-II.
-
-    Args:
-        pxrd_file: Path to PXRD data file (CSV with 2Theta, Intensity)
-        cif_file: Path to CIF file for initial structure
-        instprm: Instrument parameter file
-        gpx_name: Output GSAS-II project file name
-        gsas_log: Log file for GSAS-II output (redirects verbose G2sc messages)
-        ax: Matplotlib axis for plotting (optional)
-        plot: If True, generate a plot of the fit
-        remove: If True, remove temporary files after plotting
+    Core GSAS-II refinement logic.  Runs inside a subprocess to guarantee
+    a clean GSAS-II module state on every call.
 
     Returns:
-        wR: Weighted R-factor after refinement
-        R2: Coefficient of determination between observed and calculated
-        weighted_chi2: Weighted chi² value
+        (wR, R2, weighted_chi2, refined_cif)  on success
+        (None, None, None, None)               on failure
     """
 
     G2sc = _load_gsas_scriptable()
 
     tmp_root = os.path.join(_get_tmp_root(), "gsas_runs")
     os.makedirs(tmp_root, exist_ok=True)
-    #run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}")#_{run_id}")
+    run_id = f"{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    default_base = os.path.join(tmp_root, f"{os.path.splitext(os.path.basename(cif_file))[0]}_{run_id}")
     if gpx_name is None: gpx_name = f"{default_base}.gpx"
     if gsas_log is None: gsas_log = f"{default_base}.log"
 
@@ -278,6 +276,9 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
                 return None, None, None, None
 
             wR = hist.get_wR()
+            if wR is None:
+                print("GSAS refinement produced no wR (residuals missing).")
+                return None, None, None, None
             print(f"wR: {wR:.3f}")
 
             # Plot the final fit using GSAS-II powder histogram arrays
@@ -288,7 +289,6 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
             wt = arrays[2] if len(arrays) > 2 else None
             ycalc = arrays[3] if len(arrays) > 3 else None
             ybkg = arrays[4] if len(arrays) > 4 else None
-            ydiff = yobs - ycalc if ycalc is not None else None
 
             # Compute R^2 between observed and calculated
             R2 = None
@@ -309,25 +309,151 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     except Exception as e:
         print(f"GSAS refinement failed for {os.path.basename(cif_file)}: {e}")
         return None, None, None, None
+    finally:
+        # Clean up GSAS temp files to avoid stale state
+        for suffix in ('.gpx', '.log', '.lst', '.bak0.gpx'):
+            p = f"{default_base}{suffix}"
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
-    # Outside the context manager - these prints go to normal stdout
-    # print(f"wR: {wR:.3f}")
-    # print(f"R2: {R2:.4f}")
-    # print(f"Weighted chi² (manual): {weighted_chi2:.3f}")
+    return wR, R2, weighted_chi2, refined_cif
 
+
+# ---------------------------------------------------------------------------
+# Persistent GSAS-II worker subprocess
+# ---------------------------------------------------------------------------
+# Instead of spawning a fresh process for every refinement call (expensive
+# due to GSAS-II reimport), we keep a long-lived worker subprocess that
+# processes requests in a loop.  The worker is killed and restarted only
+# when a refinement *fails* (wR is None), because that is when GSAS-II
+# module-level state may be corrupted.
+# ---------------------------------------------------------------------------
+
+def _worker_loop(request_q, result_q):
+    """Persistent GSAS-II worker: process refinement requests until shutdown."""
+    while True:
+        request = request_q.get()
+        if request is None:          # shutdown sentinel
+            break
+        try:
+            result = _refine_pxrd_impl(*request)
+        except Exception:
+            result = (None, None, None, None)
+        result_q.put(result)
+
+
+class _PersistentWorker:
+    """Manages a persistent GSAS-II subprocess, restarting only after failures."""
+
+    def __init__(self):
+        self._proc = None
+        self._req_q = None
+        self._res_q = None
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def _start(self):
+        self._req_q = _mp_ctx.Queue()
+        self._res_q = _mp_ctx.Queue()
+        self._proc = _mp_ctx.Process(
+            target=_worker_loop,
+            args=(self._req_q, self._res_q),
+            daemon=True,
+        )
+        self._proc.start()
+
+    def _kill(self):
+        if self._proc is not None:
+            if self._proc.is_alive():
+                self._proc.kill()
+                self._proc.join(timeout=5)
+            self._proc = None
+            self._req_q = None
+            self._res_q = None
+
+    def shutdown(self):
+        """Gracefully shut down the worker (called via atexit)."""
+        if self._proc is not None and self._proc.is_alive():
+            try:
+                self._req_q.put(None)       # tell loop to exit
+                self._proc.join(timeout=10)
+            except Exception:
+                pass
+            if self._proc is not None and self._proc.is_alive():
+                self._proc.kill()
+                self._proc.join(timeout=5)
+        self._proc = None
+
+    # -- public API --------------------------------------------------------
+
+    def call(self, pxrd_file, cif_file, instprm):
+        """Run one refinement, reusing the subprocess when healthy."""
+        if self._proc is None or not self._proc.is_alive():
+            self._start()
+
+        self._req_q.put((pxrd_file, cif_file, instprm))
+
+        try:
+            result = self._res_q.get(timeout=300)
+        except _queue_mod.Empty:
+            self._kill()
+            return None, None, None, None
+
+        # If the worker died while computing, discard it for next call.
+        if not self._proc.is_alive():
+            self._proc = None
+
+        # After any failure, kill the worker so the next call gets a fresh
+        # GSAS-II interpreter (avoids the cascading-corruption bug).
+        if result[0] is None:
+            self._kill()
+
+        return result
+
+
+_gsas_worker = _PersistentWorker()
+atexit.register(_gsas_worker.shutdown)
+
+
+def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
+                gpx_name=None, gsas_log=None, ax=None,
+                plot=False, remove=False):
+    """
+    Refine PXRD data using GSAS-II in an isolated subprocess.
+
+    A persistent worker subprocess is reused across consecutive successful
+    calls. After any failure the worker is killed and a fresh one is
+    spawned on the next call (prevents the GSAS-II state-corruption bug).
+
+    Returns:
+        (wR, R2, weighted_chi2, refined_cif) or (None, None, None, None)
+    """
+    # Convert to absolute paths so the subprocess can find them
+    pxrd_file = os.path.abspath(pxrd_file)
+    cif_file = os.path.abspath(cif_file)
+    instprm = os.path.abspath(instprm)
+
+    wR, R2, weighted_chi2, refined_cif = _gsas_worker.call(
+        pxrd_file, cif_file, instprm,
+    )
+
+    if wR is None:
+        return None, None, None, None
+
+    # ---- Optional plotting (runs in the parent process) ----
     if plot and ax is None:
         fig, ax = plt.subplots(figsize=(10, 4))
- 
-    if ax is not None:
-    #    fig = None
-        ax.plot(x, yobs, 'k.', markersize=2, label='Observed')
-        if ycalc is not None:
-            ax.plot(x, ycalc, 'r-', linewidth=0.5, alpha=0.7, label='Calculated')
-        if ybkg is not None:
-            ax.plot(x, ybkg, 'b--', linewidth=0.5, alpha=0.7, label='Background')
-        if ydiff is not None:
-            ax.plot(x, ydiff, 'g-', linewidth=0.3, alpha=0.7, label='Difference')
 
+    if ax is not None:
+        # Re-read the PXRD CSV to get observed data for plotting
+        import pandas as pd
+        df = pd.read_csv(pxrd_file)
+        x_obs = df.iloc[:, 0].values
+        y_obs = df.iloc[:, 1].values
+        ax.plot(x_obs, y_obs, 'k.', markersize=2, label='Observed')
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('Intensity (a.u.)')
         title = 'PXRD Refinement Fit'
@@ -337,20 +463,6 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
             title += f"; R2={R2:.3f}"
         ax.set_title(title)
         ax.legend(loc='upper right', fontsize=8)
-        ax.set_xlim([x.min()-0.1, x.max()+0.1])
-        #if fig is not None:
-        #    fig.tight_layout()
-        #    out_png = cif_file.replace('.cif', '_refinement.png')
-        #    fig.savefig(out_png, dpi=300)
-        #    plt.close(fig)
-        # print(f"Saved plot to {out_png}")
-    if remove:
-        gpx_lst = f"{default_base}.lst"
-        gpx_bak0 = f"{default_base}.bak0.gpx"
-        if os.path.exists(gpx_name): os.remove(gpx_name)
-        if os.path.exists(gsas_log): os.remove(gsas_log)
-        if os.path.exists(gpx_bak0): os.remove(gpx_bak0)
-        if os.path.exists(gpx_lst): os.remove(gpx_lst)
 
     return wR, R2, weighted_chi2, refined_cif
 
@@ -366,8 +478,7 @@ if __name__ == "__main__":
     # --------------------------------------------------
     INST_FILE = "tools/INST_XRY.PRM"
     pxrd_csv = "Examples/PXRD_TiCuSiAs_129.csv"
-    #pxrd_csv = "Examples/PXRD_CoO2_12.csv"
-    match_cif = f'Results1/PXRD_TiCuSiAs_129.cif'
-    match_cif = f'Results1/PXRD_TiCuSiAs_129_good.cif'
-    #match_cif = f'Results/Match.cif'
-    wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, plot=True)
+    pxrd_csv = "GSAS_PXRD/BeH2_72.csv"
+    for match_cif in ['Fails/failed_ID100.cif', 'Fails/failed_ID77.cif']:
+        wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, plot=True)
+        print(match_cif, wr, r2, chi2)

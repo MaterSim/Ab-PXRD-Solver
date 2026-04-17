@@ -1,5 +1,6 @@
 import argparse
 import copy
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
@@ -254,6 +255,23 @@ def resolve_parallel_workers(requested_workers: Optional[int], file_count: int) 
     return min(workers, file_count)
 
 
+def _isolated_run_one(run_one, csv_str, args):
+    """Run a single CSV job in an isolated subprocess.
+
+    If the child segfaults (e.g. spglib), only this subprocess dies —
+    the parent pool worker survives and reports the failure.
+    """
+    ctx = get_context("spawn")
+    proc = ctx.Process(target=run_one, args=(csv_str, args))
+    proc.start()
+    proc.join()
+    if proc.exitcode != 0:
+        sig = -proc.exitcode if proc.exitcode < 0 else proc.exitcode
+        raise RuntimeError(
+            f"Subprocess exited with code {proc.exitcode} (signal {sig})"
+        )
+
+
 def run_csv_batch(
     csv_files: List[Path],
     args: argparse.Namespace,
@@ -308,7 +326,7 @@ def run_csv_batch(
         broken_pool_files: List[tuple[int, str]] = []
         with ProcessPoolExecutor(max_workers=round_workers, mp_context=mp_context) as executor:
             future_map = {
-                executor.submit(run_one, csv_str, args): (idx, csv_str)
+                executor.submit(_isolated_run_one, run_one, csv_str, args): (idx, csv_str)
                 for idx, csv_str in pending
             }
             for future in as_completed(future_map):

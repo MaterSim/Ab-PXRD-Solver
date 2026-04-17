@@ -368,6 +368,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
     max_wp_choices = state.get("max_wp_choices")
+    max_atoms = state.get("max_atoms")
 
     results_dir = state.get("results_dir", "Results")
     cifs_dir = os.path.join(results_dir, "cifs")
@@ -381,7 +382,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     run_tmp_dir = tmp_root / f"run_{run_token}"
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    title = f'{formula} PXRD Prediction: Space Group {spg}'
     match_cif = os.path.join(cifs_dir, f'Match_{formula}_{spg}.cif')
     stale_result_cifs = [
         *Path(cifs_dir).glob(f"Match_{run_token}_attempt*.cif"),
@@ -452,6 +452,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             max_wp,
             max_Z,
             max_dof,
+            max_atoms,
             min_r2,
             max_chi2,
             max_local_perturbations=max_local_perturbations,

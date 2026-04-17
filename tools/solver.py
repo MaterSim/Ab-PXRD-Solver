@@ -3,6 +3,7 @@ Module for PXRD indexing and lattice parameter estimation.
 """
 import os
 import sys
+import shutil
 import numpy as np
 from itertools import combinations
 from pyxtal.symmetry import Group
@@ -1857,6 +1858,16 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         xtal.to_file(match_cif)
                         wr, r2, chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
 
+                        if wr is None:
+                            # Save a copy of the failed CIF for debugging
+                            _fail_dir = os.path.join(os.getenv("PXRD_TMP_ROOT", "tmp"), "gsas_runs")
+                            os.makedirs(_fail_dir, exist_ok=True)
+                            _fail_dst = os.path.join(_fail_dir, f"failed_ID{struc_count}.cif")
+                            try:
+                                shutil.copy2(match_cif, _fail_dst)
+                            except Exception:
+                                pass
+
                         if wr is not None:
                             refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
                             if refined_score > best_refined_score:
@@ -1915,6 +1926,14 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                                         xtal.from_seed(perturbed_atoms)
                                         xtal.to_file(match_cif)
                                         p_wr, p_r2, p_chi2, _ = refine_pxrd(match_csv, match_cif, INST_FILE)
+                                        if p_wr is None:
+                                            _fail_dir = os.path.join(os.getenv("PXRD_TMP_ROOT", "tmp"), "gsas_runs")
+                                            os.makedirs(_fail_dir, exist_ok=True)
+                                            _fail_dst = os.path.join(_fail_dir, f"failed_ID{struc_count}_perturb{perturb_idx}.cif")
+                                            try:
+                                                shutil.copy2(match_cif, _fail_dst)
+                                            except Exception:
+                                                pass
                                         if p_wr is not None and p_r2 is not None and p_chi2 is not None:
                                             if p_r2 > r2 and p_chi2 < chi2:
                                                 wr, r2, chi2 = p_wr, p_r2, p_chi2
