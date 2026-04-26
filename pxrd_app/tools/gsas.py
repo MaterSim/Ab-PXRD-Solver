@@ -257,10 +257,9 @@ def _refine_pxrd_impl(pxrd_file, cif_file, instprm="INST_XRY.PRM",
 
             # Early exit: if the fit is already hopeless after profile+cell,
             # skip the expensive atom/Mustrain steps entirely.
-            _r2_check = hist.get_R2()
-            if _r2_check is not None and _r2_check < _get_early_exit_r2():
-                print(f"Early exit: R2={_r2_check:.2f} < threshold; skipping atom refinement.")
-                R2 = _r2_check
+            _wr_check = hist.get_wR()
+            if _wr_check is not None and _wr_check > _get_early_exit_wr():
+                print(f"Early exit: wR={_wr_check:.2f}% > threshold; skipping atom refinement.")
                 data = hist.data.get('data')
                 arrays = data[1]
                 x = arrays[0]
@@ -277,7 +276,7 @@ def _refine_pxrd_impl(pxrd_file, cif_file, instprm="INST_XRY.PRM",
                 refined_cif = cif_file
                 x_calc = x.tolist()
                 y_calc = ycalc.tolist() if ycalc is not None else None
-                return wR, R2, weighted_chi2, refined_cif, x_calc, y_calc
+                return _wr_check, R2, weighted_chi2, refined_cif, x_calc, y_calc
 
             # 4) atomic positions (all atoms)
             try:
@@ -386,7 +385,7 @@ def _worker_loop(request_q, result_q):
 _DEFAULT_REFINE_TIMEOUT = 60
 _DEFAULT_MAX_CALLS_PER_WORKER = 30
 _DEFAULT_MAX_CYC = 20
-_DEFAULT_EARLY_EXIT_R2 = 0.6
+_DEFAULT_EARLY_EXIT_WR = 30.0
 
 
 def _get_refine_timeout() -> int:
@@ -413,12 +412,12 @@ def _get_max_cyc() -> int:
         return _DEFAULT_MAX_CYC
 
 
-def _get_early_exit_r2() -> float:
-    """Return the R2 threshold above which atom/Mustrain steps are skipped."""
+def _get_early_exit_wr() -> float:
+    """Return the wR% threshold above which atom/Mustrain steps are skipped."""
     try:
-        return max(0.0, float(os.getenv("GSAS_EARLY_EXIT_R2", str(_DEFAULT_EARLY_EXIT_R2))))
+        return max(0.0, float(os.getenv("GSAS_EARLY_EXIT_WR", str(_DEFAULT_EARLY_EXIT_WR))))
     except (ValueError, TypeError):
-        return _DEFAULT_EARLY_EXIT_R2
+        return _DEFAULT_EARLY_EXIT_WR
 
 
 class _PersistentWorker:
@@ -534,8 +533,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM", ax=None, plot=False
     _elapsed = _time.perf_counter() - _t0
     #print(f"[refine_pxrd] elapsed: {_elapsed:.2f}s  wR={wR}  R2={R2}")
 
-    if wR is None:
-        return None, None, None, None, None, None
+    if wR is None: return None, None, None, None, None
 
     # ---- Optional plotting (runs in the parent process) ----
     if plot and ax is None:
@@ -579,5 +577,5 @@ if __name__ == "__main__":
     match_cif = "Results/tmp/run_PXRD_ErB4Rh4_142/Match_PXRD_ErB4Rh4_142_attempt1.cif"
     #pxrd_csv = "GSAS_PXRD/BeH2_72.csv"
     #for match_cif in ['Fails/failed_ID100.cif', 'Fails/failed_ID77.cif']:
-    wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE)#, plot=True)
-    print(match_cif, wr, r2, chi2)
+    wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE)#, plot=True)
+    print(match_cif, wr, r2, chi2, elapsed)

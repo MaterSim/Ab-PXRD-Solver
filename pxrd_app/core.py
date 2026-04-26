@@ -479,7 +479,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         )
 
         state["attempt_count"] += attempt_count
-        print(f"{struc_count} new structure(s). Total: {len(all_structure_log)}/{state['attempt_count']}.")
+        #print(f"{struc_count} new structure(s). Total: {len(all_structure_log)}/{state['attempt_count']}.")
         # Accumulate struc_count with the number of new structures generated in this attempt
         if wr is None: continue
 
@@ -646,6 +646,7 @@ def run_pipeline(state: dict) -> dict:
     infer_spg = state["infer_spg_from_pxrd"]
     composition = state["composition"]
     density_min, density_max = state["density_min"], state["density_max"]
+    csv_path = state.get("wp_csv_path")
 
     wp_candidate_cache: dict[tuple, list] = {}
     wp_cost_cache: dict[tuple, tuple[int, int, int]] = {}
@@ -654,7 +655,7 @@ def run_pipeline(state: dict) -> dict:
         dims_sig = tuple(round(float(x), 3) for x in np.array(cell_obj.dims).tolist())
         return (int(spg_value), dims_sig)
 
-    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> list:
+    def _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None, csv_path=None) -> list:
         key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_candidate_cache: return wp_candidate_cache[key]
         candidates = enumerate_wyckoff(
@@ -665,17 +666,19 @@ def run_pipeline(state: dict) -> dict:
             ref_den=(density_min, density_max),
             verbose=True,
             max_samples=max_samples,
+            csv_path=csv_path,
         )
         #print(f"Enumerated {len(candidates)} Wyckoff candidates for cell {cell_obj.dims} under SPG {spg_value}.")
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, max_samples=None) -> tuple[int, int, int]:
+    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, csv_path, max_samples=None) -> tuple[int, int, int]:
         key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_cost_cache: return wp_cost_cache[key]
 
         candidates = _get_wp_candidates_for_pair(cell_obj, spg_value, max_wp, max_Z, max_dof,
-                                                 max_samples=max_samples)
+                                                 max_samples=max_samples, csv_path=csv_path)
+        #print(f"Estimated cell {cell_obj.dims} under SPG {spg_value}: {len(candidates)} Wyckoffs.")
         candidate_count = len(candidates)
 
         est_trials = 0
@@ -779,7 +782,7 @@ def run_pipeline(state: dict) -> dict:
 
         for _vol, _cell, _spg in all_seed_cells:
             cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg,
-                    max_wp, max_Z, max_dof, max_samples=max_samples)
+                    max_wp, max_Z, max_dof, csv_path, max_samples=max_samples)
             if cand_count == 0: continue
             total_count += cand_count
             total_est_trials += est_trials

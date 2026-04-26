@@ -775,7 +775,7 @@ class WPManager:
         return solutions
 
     def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10, max_atoms=200,
-                 ref_den=None):
+                 ref_den=None, csv='database/spg_num_wps_mp.csv'):
         """
         WP Manager is used to infer likely Wyckoff positions from the given space group,
         cell, composition, and density constraint.
@@ -789,8 +789,9 @@ class WPManager:
             max_dof (int): Maximum degrees of freedom to consider
             max_atoms (int): Maximum number of atoms in the unit cell to consider
             ref_den (float): Reference density to use for Z estimation (optional)
+            csv (str): Path to the CSV file containing Wyckoff position data
         """
-        df = read_csv(rf("pyxtal", "database/spg_num_wps_mp.csv"))
+        df = read_csv(rf("pyxtal", csv))
         self.spg = spg
         self.df = df[df['spg'] == self.spg]
         self.cell = cell
@@ -889,7 +890,7 @@ class WPManager:
         from time import time as _time
         sols = []
         enumeration_count = 0  # Track enumeration progress
-
+        #print(f"Enumerating Wyckoff position combinations for {self.spg}/{self.composition} with Z in {self.Zs}...")
         for Z in range(self.Zs[0], self.Zs[1]+1):
             sols_before_z = len(sols)
             df_z = self.df[self.df['n_atoms'] == Z * sum(self.comp)]
@@ -1031,11 +1032,13 @@ if __name__ == "__main__":
     #    wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
     #    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}")
     from time import time
-    for spg in [63, 64]:
+    spgs, cell, comp, ref_den = [63, 64], [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, (1.04, 3.80)
+    spgs, cell, comp, ref_den = [142], [7.53540996, 14.84882202], {'Er': 1, 'B': 4, 'Rh': 4}, (9.13, 10.33)
+    for spg in spgs:
         print(f"\n--- SPG {spg} ---")
         t0 = time()
-        wp = WPManager(spg, [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2},
-                       max_wp=15, max_Z=24, max_dof=21, ref_den=(1.04, 3.80))
+        wp = WPManager(spg, cell, comp, max_wp=15, max_Z=36, max_dof=21, ref_den=ref_den,
+                       csv='database/spg_num_wps_raw.csv')
         t_init = time() - t0
         print(f"  Init: {t_init:.4f}s")
         t1 = time()
@@ -1044,4 +1047,7 @@ if __name__ == "__main__":
         print(f"  get_wyckoff_positions total: {t_wp:.4f}s")
         for sol in sols:
             wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
-        print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
+        if len(sols) > 0:
+            print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
+        else:   
+            print(f"SPG: {spg}, No Wyckoff solutions found for the given composition and cell.")

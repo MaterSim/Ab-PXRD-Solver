@@ -1470,7 +1470,7 @@ def check_space_group(spg, matched_hkls, unmatched_hkls, axis_order):
 
 
 def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, ref_den=None,
-                       verbose=False, max_samples=None):
+                       verbose=False, max_samples=None, csv_path=None):
     """
     Enumerate Wyckoff position combinations for a SINGLE CELL across MULTIPLE space groups.
 
@@ -1488,6 +1488,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
         ref_den: (density_min, density_max) tuple for density filtering
         verbose: Whether to print detailed information during enumeration
         max_samples: If set, limit enumeration to this many samples per SPG (for cost estimation)
+        csv_path: the reference csv file path from pyxtal for counting occurrences of Wyckoff combinations in known structures (optional)
 
     Returns:
         List of consolidated Wyckoff candidates sorted by global priority:
@@ -1498,8 +1499,10 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
     enumeration_count = 0  # Track total samples enumerated
 
     for spg in spg_list:
-        wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z, max_dof=max_dof, ref_den=ref_den)
+        wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z,
+                               max_dof=max_dof, ref_den=ref_den, csv=csv_path)
         local_sols = wp_manager.get_wyckoff_positions(verbose, max_samples=max_samples)
+        print(f"Enumerated {len(local_sols)} Wyckoff position combinations for SPG {spg} {ref_den}.")
         enumeration_count += len(local_sols)
 
         # If we're in cost estimation mode and exceeded limit, stop early

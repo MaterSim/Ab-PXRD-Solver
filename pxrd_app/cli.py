@@ -384,6 +384,7 @@ def _build_state(
     max_atoms: Optional[int] = None,
     max_sim: Optional[float] = None,
     ase_logfile: Optional[str] = None,
+    csv_path: Optional[str] = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None:
@@ -425,7 +426,7 @@ def _build_state(
         run_state["list_wp_only"] = bool(list_wp_only)
     if results_dir is not None:
         run_state["results_dir"] = str(results_dir)
-
+    if csv_path is not None: run_state["csv_path"] = str(csv_path)
     if max_wp is not None: run_state["max_wp"] = int(max_wp)
     if max_dof is not None: run_state["max_dof"] = int(max_dof)
     if max_Z is not None: run_state["max_Z"] = int(max_Z)

@@ -15,8 +15,8 @@ from pxrd_app.runtime import write_results_csv
 from pxrd_app.plot import plot_energy_vs_r2
 from pxrd_app.core import run_data_preprocessor, run_wyckoff_solver, logger
 from pxrd_app.inference import infer_formula_spg, symmetry_from_spg
-from tools.manager import CellManager
-from tools.utils import format_wyckoff_labels
+from pxrd_app.tools.manager import CellManager
+from pxrd_app.tools.utils import format_wyckoff_labels
 
 def _extract_outcome(label: str, state: dict, result: dict | None) -> dict:
     wyckoff_result = state.get("wyckoff_result") or {}

@@ -89,7 +89,7 @@ DEFAULT_STATE = {
     "gsas_refine_timeout": 60,  # per-refinement wall-time limit in seconds
     "gsas_max_calls_per_worker": 30,  # recycle GSAS-II subprocess after N refinements to prevent memory leaks
     "gsas_max_cyc": 20,  # max Levenberg-Marquardt cycles per do_refinements() call
-    "gsas_early_exit_r2": 0.6,  # skip atom/Mustrain refinement if R2 is below this after profile+cell steps
+    "gsas_early_exit_wr": 50.0,  # skip atom/Mustrain refinement if wR% exceeds this after profile+cell steps
     "SCALED_INTENSITY_TOL": 0.01,
     "thetas": [10, 80],
     "resolution": 0.02,
@@ -118,6 +118,7 @@ DEFAULT_STATE = {
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
     "max_wp_choices": 20,  # Limit number of WP choices per cell to avoid combinatorial explosion
+    "wp_csv_path": "database/spg_num_wps_mp.csv",
 }
 
 VALID_LATTICE_SYMMETRIES = {
