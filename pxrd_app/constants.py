@@ -85,7 +85,11 @@ DEFAULT_STATE = {
     # Structure generation cap
     # Track total number of generated structures
     "Struc_count": 0,
-    "INST_FILE": "tools/INST_XRY.PRM",
+    "INST_FILE": "pxrd_app/tools/INST_XRY.PRM",
+    "gsas_refine_timeout": 60,  # per-refinement wall-time limit in seconds
+    "gsas_max_calls_per_worker": 30,  # recycle GSAS-II subprocess after N refinements to prevent memory leaks
+    "gsas_max_cyc": 20,  # max Levenberg-Marquardt cycles per do_refinements() call
+    "gsas_early_exit_r2": 0.6,  # skip atom/Mustrain refinement if R2 is below this after profile+cell steps
     "SCALED_INTENSITY_TOL": 0.01,
     "thetas": [10, 80],
     "resolution": 0.02,

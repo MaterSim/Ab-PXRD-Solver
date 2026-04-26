@@ -12,10 +12,10 @@ import numpy as np
 from pxrd_app.constants import VALID_LATTICE_SYMMETRIES, CRYSTAL_SYSTEM_PRIORITY
 from pxrd_app.inference import infer_formula_spg, infer_spg_from_backend, spg_to_crystal_system
 from pxrd_app.plot import plot_energy_vs_r2
-from tools.utils import parse_formula, get_volume_from_density, format_wyckoff_labels
-from tools.manager import RawDataManager, CellManager
-from tools.density import predict_density_ensemble
-from tools.solver import CellSolver, search_solution, enumerate_wyckoff, get_adaptive_wp_limits
+from pxrd_app.tools.utils import parse_formula, get_volume_from_density, format_wyckoff_labels
+from pxrd_app.tools.manager import RawDataManager, CellManager
+from pxrd_app.tools.density import predict_density_ensemble
+from pxrd_app.tools.solver import CellSolver, search_solution, enumerate_wyckoff, get_adaptive_wp_limits
 
 # Configure logging with both file and console handlers, avoiding duplicate handlers
 logger = logging.getLogger("pxrd_agent")
@@ -336,7 +336,8 @@ def run_cell_solver(state: dict) -> dict:
         }
 
 
-def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counter=None) -> str:
+def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counter=None,
+                       global_accepted: bool = False) -> str:
     spg = state.get("spg")
     formula = state.get("formula")
     cells = state.get("cells")
@@ -378,6 +379,18 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     tmp_root = Path(results_dir) / "tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
     os.environ["PXRD_TMP_ROOT"] = str(tmp_root)
+    gsas_timeout = state.get("gsas_refine_timeout")
+    if gsas_timeout is not None:
+        os.environ["GSAS_REFINE_TIMEOUT"] = str(int(gsas_timeout))
+    gsas_max_calls = state.get("gsas_max_calls_per_worker")
+    if gsas_max_calls is not None:
+        os.environ["GSAS_MAX_CALLS_PER_WORKER"] = str(int(gsas_max_calls))
+    gsas_max_cyc = state.get("gsas_max_cyc")
+    if gsas_max_cyc is not None:
+        os.environ["GSAS_MAX_CYC"] = str(int(gsas_max_cyc))
+    gsas_early_exit_wr = state.get("gsas_early_exit_wr")
+    if gsas_early_exit_wr is not None:
+        os.environ["GSAS_EARLY_EXIT_WR"] = str(float(gsas_early_exit_wr))
     run_token = f"{_safe_name_token(Path(str(pxrd_csv or '')).stem)}"#_{os.getpid()}_{uuid4().hex[:8]}"
     run_tmp_dir = tmp_root / f"run_{run_token}"
     run_tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -462,6 +475,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
             ase_logfile=state.get("ase_logfile"),
+            global_accepted=global_accepted,
         )
 
         state["attempt_count"] += attempt_count
@@ -711,6 +725,7 @@ def run_pipeline(state: dict) -> dict:
     best_trial_state = None
     best_trial_message = None
     best_trial_score = -1e9
+    global_accepted_exists = False  # tracks whether any pair has produced an accepted solution
 
     # key = (seed_spg, dims_sig) — same dims under different SPGs kept separately
     any_seed_had_cells = False
@@ -924,7 +939,10 @@ def run_pipeline(state: dict) -> dict:
                     trial_state['wp_labels'] = wp_labels_text
                     trial_state["forced_wp_solution"] = sol[:8] if len(sol) >= 9 else sol
 
-                    trial_message, trial_state = run_wyckoff_solver(trial_state, global_structure_log)
+                    trial_message, trial_state = run_wyckoff_solver(
+                        trial_state, global_structure_log,
+                        global_accepted=global_accepted_exists,
+                    )
 
                     # After running, update the main state's Struc_count by accumulating
                     state["Struc_count"] = trial_state.get("Struc_count")
@@ -942,6 +960,7 @@ def run_pipeline(state: dict) -> dict:
                         best_trial_message = trial_message
 
                     if trial_result.get("accepted"):
+                        global_accepted_exists = True
                         _emit_accepted_solution(spg_val, trial_result)
                         # For inferred-SPG early exit, require stricter criteria: R² > 0.93 AND χ² < 0.18
                         r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
@@ -981,12 +1000,12 @@ def run_pipeline(state: dict) -> dict:
                                     terminate_pair = True
                                     break
 
-                    # If we already have an accepted solution, stop once the
-                    # minimum-structures exploration budget is reached.
+                    # If a globally-accepted solution already exists (from any
+                    # previous WP/pair) and the minimum-structures budget is
+                    # reached, stop all further exploration.
                     if (
                         len(global_structure_log) >= structure_limit
-                        and best_trial_state is not None
-                        and (best_trial_state.get("best_result") or {}).get("accepted")
+                        and global_accepted_exists
                     ):
                         logger.info(
                             f"Accepted solution found and structure budget reached "
@@ -1029,6 +1048,14 @@ def run_pipeline(state: dict) -> dict:
         plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
 
         if status == "Success":
+            # Recompute dE against the global energy minimum from ALL explored
+            # structures (pairs explored after the accepted solution may have
+            # lower energies, making the earlier dE=0.000 stale).
+            final_global_best_energy = _get_global_best_energy(global_structure_log)
+            if final_global_best_energy is not None and best_trial_result.get("selected_energy") is not None:
+                best_trial_result["eng_rel"] = max(
+                    0.0, float(best_trial_result["selected_energy"]) - float(final_global_best_energy)
+                )
             _emit_accepted_solution(best_trial_spg, best_trial_result,
                                     prefix="Best solution")
             logger.info(f"Return best result in spg={best_trial_spg}.")

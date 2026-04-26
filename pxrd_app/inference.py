@@ -3,9 +3,9 @@ from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
 
-from tools.peak_prediction import predict_peaks, predict_spacegroup
-from tools.solver import SmartCellSolver
-from tools.XRD import Profile
+from pxrd_app.tools.peak_prediction import predict_peaks, predict_spacegroup
+from pxrd_app.tools.solver import SmartCellSolver
+from pxrd_app.tools.XRD import Profile
 from pxrd_app.constants import DEFAULT_STATE, CRYSTAL_SYSTEM_PRIORITY
 
 SPG_INFER_BACKENDS = {"model", "smart-cell"}

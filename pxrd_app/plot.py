@@ -1,7 +1,7 @@
 import matplotlib, os
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from tools.gsas import refine_pxrd
+from pxrd_app.tools.gsas import refine_pxrd
 
 def plot_energy_vs_r2(
     structure_log: list,
@@ -82,11 +82,11 @@ def plot_energy_vs_r2(
         cifs_dir = os.path.join(results_dir, "cifs")
         match_cif = os.path.join(cifs_dir, f'{formula}_best_state.cif')
         best_state['best_result']['xtal'].to_file(match_cif)
-        wr, r2, chi2, cif = refine_pxrd(pxrd_csv, match_cif, INST_FILE, ax=ax2, remove=True)
+        wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE, ax=ax2)
         spg = best_state['best_result']['spg']
         wp_labels_text = best_state['best_result'].get('wp_labels') or best_state.get('wp_labels') or "n/a"
         spg_str = f"SPG: {spg}" if spg else ""
-        ax2.set_title(f"Best Fit: R²={r2:.3f}, Chi²={chi2:.3f} | {spg_str}: {wp_labels_text}")
+        ax2.set_title(f"Best Fit: R²={r2:.3f}, Chi²={chi2:.3f}, Rwp={wr:.3f} | {spg_str}: {wp_labels_text}")
         ax2.set_xlabel("2θ (deg)")
         ax2.set_ylabel("Intensity (a.u.)")
         ax2.legend()
