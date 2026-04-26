@@ -273,12 +273,12 @@ def _refine_pxrd_impl(pxrd_file, cif_file, instprm="INST_XRY.PRM",
 
             except Exception as e:
                 print("Failed to refine atomic positions or HStrain:", e)
-                return None, None, None, None
+                return None, None, None, None, None, None
 
             wR = hist.get_wR()
             if wR is None:
                 print("GSAS refinement produced no wR (residuals missing).")
-                return None, None, None, None
+                return None, None, None, None, None, None
             print(f"wR: {wR:.3f}")
 
             # Plot the final fit using GSAS-II powder histogram arrays
@@ -308,7 +308,7 @@ def _refine_pxrd_impl(pxrd_file, cif_file, instprm="INST_XRY.PRM",
             refined_cif = cif_file
     except Exception as e:
         print(f"GSAS refinement failed for {os.path.basename(cif_file)}: {e}")
-        return None, None, None, None
+        return None, None, None, None, None, None
     finally:
         # Clean up GSAS temp files to avoid stale state
         for suffix in ('.gpx', '.log', '.lst', '.bak0.gpx'):
@@ -319,7 +319,11 @@ def _refine_pxrd_impl(pxrd_file, cif_file, instprm="INST_XRY.PRM",
                 except OSError:
                     pass
 
-    return wR, R2, weighted_chi2, refined_cif
+    # Convert arrays to lists for pickling across process boundary
+    x_calc = x.tolist() if x is not None else None
+    y_calc = ycalc.tolist() if ycalc is not None else None
+
+    return wR, R2, weighted_chi2, refined_cif, x_calc, y_calc
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +345,7 @@ def _worker_loop(request_q, result_q):
         try:
             result = _refine_pxrd_impl(*request)
         except Exception:
-            result = (None, None, None, None)
+            result = (None, None, None, None, None, None)
         result_q.put(result)
 
 
@@ -400,7 +404,7 @@ class _PersistentWorker:
             result = self._res_q.get(timeout=300)
         except _queue_mod.Empty:
             self._kill()
-            return None, None, None, None
+            return None, None, None, None, None, None
 
         # If the worker died while computing, discard it for next call.
         if not self._proc.is_alive():
@@ -411,6 +415,10 @@ class _PersistentWorker:
         if result[0] is None:
             self._kill()
 
+        # Pad old-format 4-tuples for backwards compatibility
+        if len(result) == 4:
+            result = result + (None, None)
+
         return result
 
 
@@ -419,8 +427,7 @@ atexit.register(_gsas_worker.shutdown)
 
 
 def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
-                gpx_name=None, gsas_log=None, ax=None,
-                plot=False, remove=False):
+                ax=None, plot=False, remove=False):
     """
     Refine PXRD data using GSAS-II in an isolated subprocess.
 
@@ -436,7 +443,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
     cif_file = os.path.abspath(cif_file)
     instprm = os.path.abspath(instprm)
 
-    wR, R2, weighted_chi2, refined_cif = _gsas_worker.call(
+    wR, R2, weighted_chi2, refined_cif, x_calc, y_calc = _gsas_worker.call(
         pxrd_file, cif_file, instprm,
     )
 
@@ -454,13 +461,14 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM",
         x_obs = df.iloc[:, 0].values
         y_obs = df.iloc[:, 1].values
         ax.plot(x_obs, y_obs, 'k.', markersize=2, label='Observed')
+        # Overlay the simulated (calculated) pattern from refinement
+        if x_calc is not None and y_calc is not None:
+            ax.plot(x_calc, y_calc, 'r-', linewidth=0.8, label='Calculated')
         ax.set_xlabel('2θ (degrees)')
         ax.set_ylabel('Intensity (a.u.)')
         title = 'PXRD Refinement Fit'
-        if wR is not None:
-            title += f" (Rwp={wR:.3f})"
-        if R2 is not None:
-            title += f"; R2={R2:.3f}"
+        if wR is not None: title += f" (Rwp={wR:.3f})"
+        if R2 is not None: title += f"; R2={R2:.3f}"
         ax.set_title(title)
         ax.legend(loc='upper right', fontsize=8)
 

@@ -877,7 +877,7 @@ class WPManager:
         #    # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
-    def get_wyckoff_positions(self, verbose=True, max_samples=None, timing=False):
+    def get_wyckoff_positions(self, verbose=False, max_samples=None, timing=False):
         """
         Infer possible Wyckoff position combinations based on the composition and Z range.
 
