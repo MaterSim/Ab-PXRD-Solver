@@ -869,9 +869,9 @@ class WPManager:
                         wp_lists.append(tmp)
                         sols.append((self.spg, comp, self.lattice, id, len(tmp), sum(dof)))
                         #print("Added:", self.spg, comp, id)
-            kept_this_z = len(sols) - sols_before_z
-            if kept_this_z > 0:
-                print(f"Z={Z}: Kept {kept_this_z} Wyckoff combinations in {self.spg}/{self.composition}.")
+            #kept_this_z = len(sols) - sols_before_z
+            #if kept_this_z > 0:
+            #    print(f"Z={Z}: Kept {kept_this_z} Wyckoff combinations in {self.spg}/{self.composition}.")
             # sort sols by DOF and number of WPs
             sols = sorted(sols, key=lambda x: (x[5], x[4]))
         #for sol in sols:
@@ -1003,8 +1003,9 @@ class XtalManager:
         self.elements_flat = elements_flat
         if use_seeds:
             _sampler = Halton(d=max(dof, 1), scramble=False)
-            self.seeds = _sampler.random(n=5*dof+2)  # shape (50, dof), deterministic
-            print(f"  Using {len(self.seeds)} seed structures for generation.")
+            self.seeds = _sampler.random(n=7*dof+2)  # shape (50, dof), deterministic
+            self.skips = 0
+            #print(f"Using {len(self.seeds)} seed structures for generation.")
         else:
             self.seeds = None
 
@@ -1018,11 +1019,18 @@ class XtalManager:
         """
         xtal = pyxtal()
         if self.seeds is not None:
-            x = self.cell.encode()
-            if self.dof > 0: x += self.seeds[idx].tolist()
-            #print(f"Generating: {idx}, {x}, {self.spg.number}")
-            xtal.from_spg_wps_rep(self.spg.number, self.sites_flat, x, self.elements_flat)
-            #print(xtal)
+            skips = self.skips
+            for id in range(idx + skips, len(self.seeds)):
+                if self.dof > 0:
+                    x = self.cell.encode() + self.seeds[id].tolist()
+                else:
+                    x = self.cell.encode()
+                #print(f"Generating: {idx}, {x}, {self.spg.number}")
+                xtal.from_spg_wps_rep(self.spg.number, self.sites_flat, x, self.elements_flat)
+                if len(xtal.check_short_distances(r=0.75)) > 0:
+                    self.skips += 1
+                else:
+                    break
         else:
             xtal.from_random(3, self.spg, self.species, self.numIons,
                          lattice=self.cell, sites=self.sites,
@@ -1064,5 +1072,5 @@ if __name__ == "__main__":
             wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
         if len(sols) > 0:
             print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
-        else:   
+        else:
             print(f"SPG: {spg}, No Wyckoff solutions found for the given composition and cell.")

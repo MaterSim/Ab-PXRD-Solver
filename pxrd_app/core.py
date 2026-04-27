@@ -46,7 +46,7 @@ def get_pair_priority(
     ref_volume = max(1e-6, float(min_volume))
     trial_ratio = safe_trials / ref_trials
     volume_ratio = safe_volume / ref_volume
-    missing_score = (missing_peaks + 1) / (max_missing + 1)
+    missing_score = (missing_peaks + 1) / (max_missing + 1) ** 1.5
     return (trial_ratio ** trial_weight) * (volume_ratio ** volume_weight) * missing_score
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
@@ -537,7 +537,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     state["Struc_count"] = struc_count
 
     if state['best_result'] is None: #and len(all_structure_log) >= min_structures_before_early_stop:
-        logger.info("No satisfactory solution found across all attempts.")
+        #logger.info("No satisfactory solution found across all attempts.")
         state["wyckoff_result"] = {
             "spg": spg,
             "accepted": False,

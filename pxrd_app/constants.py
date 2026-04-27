@@ -88,7 +88,7 @@ DEFAULT_STATE = {
     "INST_FILE": "pxrd_app/tools/INST_XRY.PRM",
     "gsas_refine_timeout": 60,  # per-refinement wall-time limit in seconds
     "gsas_max_calls_per_worker": 30,  # recycle GSAS-II subprocess after N refinements to prevent memory leaks
-    "gsas_max_cyc": 20,  # max Levenberg-Marquardt cycles per do_refinements() call
+    "gsas_max_cyc": 10,  # max Levenberg-Marquardt cycles per do_refinements() call
     "gsas_early_exit_wr": 50.0,  # skip atom/Mustrain refinement if wR% exceeds this after profile+cell steps
     "SCALED_INTENSITY_TOL": 0.01,
     "thetas": [10, 80],

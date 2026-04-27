@@ -936,7 +936,7 @@ class CellSolver:
             print(f"Refinement: {cell_init}  {chi2_init:.4f} -> {cell_refined} {chi2_final:.4f}")
         return cell_refined, chi2_final, chi2_half
 
-    def solve(self, max_solutions=10, max_count=50):
+    def solve(self, max_solutions=20, max_count=100):
         """
         Solve for possible cell parameters based on the provided 2theta values.
 
@@ -1502,7 +1502,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
         wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z,
                                max_dof=max_dof, ref_den=ref_den, csv=csv_path)
         local_sols = wp_manager.get_wyckoff_positions(verbose, max_samples=max_samples)
-        print(f"Enumerated {len(local_sols)} Wyckoff position combinations for SPG {spg} {ref_den}.")
+        #print(f"Enumerated {len(local_sols)} Wyckoff position combinations for SPG {spg} {ref_den}.")
         enumeration_count += len(local_sols)
 
         # If we're in cost estimation mode and exceeded limit, stop early
@@ -1789,9 +1789,10 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     trial_idx += 1
                     attempt_count += 1
                     if N_false > max([4, N4 // 2]):
-                        logger.info("Too many invalid structures, skip....")
+                        #logger.info("Too many invalid structures, skip....")
                         break
                     xtal = xm.generate_structure(trial_idx)
+                    actual_idx = trial_idx + xm.skips
                     if not xtal.valid:
                         N_false += 1
                         continue
@@ -1837,7 +1838,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     struc_count += 1
                     cell_volume = getattr(cell, 'size', None)
                     volume_str = f" vol={cell_volume:.1f} Å³" if cell_volume is not None else ""
-                    msg = f"ID{struc_count: 3d}: {xtal.get_xtal_string()}, {volume_str}"
+                    msg = f"ID{struc_count: 3d}-{actual_idx:2d}: {xtal.get_xtal_string()}, {volume_str}"
                     # Do not emit here; emission is handled after refinement/perturbation with duplicate suppression
                     refined_score = None
 
