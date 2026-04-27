@@ -54,6 +54,13 @@ def _env_int(name: str, default: int, min_value: Optional[int] = None) -> int:
         value = max(min_value, value)
     return value
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
 DEFAULT_STATE = {
     # Raw inputs
     "pxrd_csv": "Examples/PXRD_PrYMg2_123.csv",
@@ -87,9 +94,9 @@ DEFAULT_STATE = {
     "Struc_count": 0,
     "INST_FILE": "pxrd_app/tools/INST_XRY.PRM",
     "gsas_refine_timeout": 60,  # per-refinement wall-time limit in seconds
-    "gsas_max_calls_per_worker": 30,  # recycle GSAS-II subprocess after N refinements to prevent memory leaks
+    "gsas_max_calls_per_worker": 30,  # recycle GSAS-II after N refinements to prevent memory leaks
     "gsas_max_cyc": 10,  # max Levenberg-Marquardt cycles per do_refinements() call
-    "gsas_early_exit_wr": 50.0,  # skip atom/Mustrain refinement if wR% exceeds this after profile+cell steps
+    "gsas_early_exit_wr": 50.0,  # skip atom/Mustrain refinement if wR exceeds this
     "SCALED_INTENSITY_TOL": 0.01,
     "thetas": [10, 80],
     "resolution": 0.02,
@@ -113,8 +120,8 @@ DEFAULT_STATE = {
     "max_eng_rel": 0.025,
     "min_structures_before_early_stop": 10,
     "ase_logfile": None,
-    "max_attempt_count": 5000,
-    "max_relax_count": 250,  # Limit total relaxations to avoid hang
+    "max_attempt_count": 800,
+    "max_relax_count": 1000,  # Limit total relaxations to avoid hang
     "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
@@ -122,6 +129,7 @@ DEFAULT_STATE = {
     "wp_csv_path": "database/spg_num_wps_mp.csv",
     "use_qrs": False,  # Whether to use Quasi-Random Sampling for structure generation
     "qrs_method": "sobol",  # Quasi-random sampler used when use_qrs is enabled
+    "suppress_torch_load_futurewarning": _env_flag("PXRD_SUPPRESS_TORCH_LOAD_FUTUREWARNING", True),
 }
 
 VALID_LATTICE_SYMMETRIES = {

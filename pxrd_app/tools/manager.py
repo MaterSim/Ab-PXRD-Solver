@@ -1042,6 +1042,7 @@ class XtalManager:
                 if len(xtal.check_short_distances(r=0.75)) > 0:
                     self.skips += 1
                 else:
+                    #xtal.to_file(f"debug.cif", fmt='cif')
                     break
         else:
             xtal.from_random(3, self.spg, self.species, self.numIons,

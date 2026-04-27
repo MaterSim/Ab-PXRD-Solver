@@ -1,10 +1,13 @@
 import argparse
 import os
 import sys
+import faulthandler
 from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv_files, run_csv_batch
 from pxrd_app.runtime import emit_timing_summary, write_results_csv
 from pxrd_app.constants import DEFAULT_STATE as default_state
 from pxrd_app.core import attach_run_log, detach_run_log, run_pipeline, logger
+
+faulthandler.enable(all_threads=True)
 
 def run_deterministic(csv_path: str, args: argparse.Namespace) -> dict | None:
     tmp_root = os.path.join(args.output, "tmp")

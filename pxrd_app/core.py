@@ -902,6 +902,7 @@ def run_pipeline(state: dict) -> dict:
             break
 
         for rank_idx, (vol, cell, seed_spg) in enumerate(all_seed_cells, start=1):
+            #if rank_idx <= 3: continue  # skip the top 3 pairs in the first iteration to allow quick initial results and early exit if good solutions are found
             consolidated_wp = _get_wp_candidates_for_pair(cell, seed_spg, max_wp, max_Z, max_dof)
             N_wps = len(consolidated_wp)
             if not consolidated_wp: continue

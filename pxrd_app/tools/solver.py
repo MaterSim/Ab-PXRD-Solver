@@ -1205,7 +1205,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
         }
         solutions = []
         for _id, (bra_type, bra_index, ideal_mismatch, spgs) in enumerate(bra_list):
-            print(f"Trying {bra_type} ...")
+            #print(f"Trying {bra_type} ...")
             branch_rescue_stats = {
                 "triggered": 0,
                 "accepted": 0,
@@ -1248,7 +1248,6 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             if bra_index in [15, 14, 8, 7]: # orthorhombic
                 solver_max_square = max(int(max_square), 35)
                 solver_total_square = max(int(total_square), 35)
-
 
             # use very strict criteria to get initial cell solutions for each space group,
             # then use those solutions to determine the centering and possible space groups.
@@ -1325,9 +1324,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                         use_axis_permutation = 15 < spg < 75
                         candidate_cell = permuted_cell if use_axis_permutation else base_cell
 
-                        match, unmatch = check_space_group(spg, matched_hkls,
-                                                           base_mismatch,
-                                                           axis_order)
+                        match, unmatch = check_space_group(spg, matched_hkls, base_mismatch, axis_order)
                         #print(f"Checking SPG {spg} for {bra_type} with axis order {axis_order}: match={match}, unmatch={len(unmatch)}")
                         #import sys; sys.exit()
                         use_direct_rescue = False
@@ -1380,17 +1377,16 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                             min_mismatch = min(min_mismatch, len(unmatch))
                             count += 1
 
-            if branch_rescue_stats["triggered"] > 0:
-                print(
-                    f"Direct SG rescue stats ({bra_type}): "
-                    f"triggered={branch_rescue_stats['triggered']}, "
-                    f"accepted={branch_rescue_stats['accepted']}, "
-                    f"cache_hits={branch_rescue_stats['cache_hits']}, "
-                    f"solver_checks={branch_rescue_stats['solver_checks']}, "
-                )
+            #if branch_rescue_stats["triggered"] > 0:
+            #    print(
+            #        f"Direct SG rescue stats ({bra_type}): "
+            #        f"triggered={branch_rescue_stats['triggered']}, "
+            #        f"accepted={branch_rescue_stats['accepted']}, "
+            #        f"cache_hits={branch_rescue_stats['cache_hits']}, "
+            #        f"solver_checks={branch_rescue_stats['solver_checks']}, "
+            #    )
             # Early stop with high confidence
-            if count > 0 and min_mismatch <= ideal_mismatch:
-                early_stop = True
+            if count > 0 and min_mismatch <= ideal_mismatch: early_stop = True
 
             if early_stop and bra_index not in [11, 12, 15]: # For higher symmetry branches, we can be more confident about early stopping.
                 print(
@@ -1742,6 +1738,11 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
     early_stop = False
     local_accepted_result = None
     attempt_count = 0
+    native_debug = str(os.getenv("PXRD_NATIVE_DEBUG", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+    def _dbg(msg):
+        if native_debug:
+            logger.info(msg)
 
     # Track emitted structure IDs to avoid duplicates
     emitted_id_messages = set()
@@ -1800,19 +1801,28 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     if N_false > max([4, N4 // 2]):
                         #logger.info("Too many invalid structures, skip....")
                         break
+                    _dbg(
+                        f"[NDBG] pre-generate spg={spg_sol} wp#{num_wps} dof={xm.dof} "
+                        f"trial={trial_idx} skips={xm.skips}"
+                    )
                     xtal = xm.generate_structure(trial_idx)
                     actual_idx = trial_idx + xm.skips
+                    _dbg(f"[NDBG] post-generate valid={xtal.valid} actual_idx={actual_idx}")
                     if not xtal.valid:
                         N_false += 1
                         continue
+                    _dbg("[NDBG] pre-relax")
                     atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
+                    _dbg(f"[NDBG] post-relax atoms_is_none={atoms is None}")
                     if atoms is None:
                         N_false += 1
                         continue
 
+                    _dbg("[NDBG] pre-energy-stress")
                     eng = atoms.get_potential_energy() / len(atoms)
                     stress = abs(atoms.get_stress()[:3].mean())
                     fmax = abs(atoms.get_forces()).max()
+                    _dbg(f"[NDBG] post-energy-stress eng={eng:.4f} stress={stress:.4f} fmax={fmax:.4f}")
                     if stress > max_stress or fmax > max_force:
                         N_false += 1
                         continue
@@ -1820,16 +1830,19 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     next_eng_best = min(prev_eng_best, eng)
                     eng_rel = max(0.0, eng - next_eng_best)
                     is_new_best_energy = eng < prev_eng_best
-                    if is_new_best_energy:
-                        eng_best = eng
-
+                    if is_new_best_energy:  eng_best = eng
+                    #print(atoms); atoms.write('a.cif')  # Save the relaxed structure for debugging
+                    _dbg("[NDBG] pre-xrd")
                     xrd = XRD(atoms, wavelength=wavelength, thetas=thetas,
                               res=resolution, SCALED_INTENSITY_TOL=SCALED_INTENSITY_TOL)
+                    _dbg("[NDBG] post-xrd pre-plot-gsas2")
                     x2, y2 = xrd.get_plot_gsas2(U=0.1, V=-0.1, W=0.5, X=0.1, Y=0.1,
                                                 bg_ratio=0.0, mix_ratio=0.0)
+                    _dbg("[NDBG] post-plot-gsas2 pre-similarity")
 
                     y2 = RawDataManager(x2, y2, bg_subtract=False).y
                     sim = Similarity((x1, y1), (x2, y2)).value
+                    _dbg(f"[NDBG] post-similarity sim={sim:.4f}")
                     valid_trials_in_wpset += 1
                     if sim > best_sim_in_wpset: best_sim_in_wpset = sim
                     # Early exit: if after the warm-up window the WP set has never reached

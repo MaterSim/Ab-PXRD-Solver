@@ -13,6 +13,16 @@ import io
 import contextlib
 import numpy as np
 
+# Suppress the torch.load FutureWarning emitted by e3nn at module-import time.
+# This must be at module level so it is in place in spawned child processes
+# before any function is called (function-level filters are too late because
+# warnings.catch_warnings() in get_calculator saves/restores the filter list).
+warnings.filterwarnings(
+    "ignore",
+    message=r".*torch\.load.*weights_only=False.*",
+    category=FutureWarning,
+)
+
 # --- Limit threads per worker BEFORE importing PyTorch/MACE ---
 # Without this, each worker defaults to using ALL available CPU cores.
 # With 48 parallel workers on a 48-core node that means 48×48 = 2304 threads.
@@ -55,6 +65,10 @@ def _default_isolate_fix_symmetry(calculator=None) -> bool:
 
 def _silence_mace_output() -> bool:
     return _env_flag("PXRD_SILENCE_MACE", default=True)
+
+
+def _suppress_torch_load_futurewarning() -> bool:
+    return _env_flag("PXRD_SUPPRESS_TORCH_LOAD_FUTUREWARNING", default=True)
 
 
 @contextlib.contextmanager
@@ -190,6 +204,16 @@ def _ase_relax_impl(
 
 
 def _ase_relax_worker(conn, atoms, kwargs):
+    # Redirect child-process stderr to /dev/null at the OS fd level so that
+    # CPython's built-in crash reporter ("Fatal Python error: Segmentation fault"
+    # + "Extension modules: ...") is silently discarded when spglib segfaults.
+    # All meaningful error information is sent back to the parent via the Pipe.
+    try:
+        _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(_devnull_fd, 2)  # replace fd 2 (stderr) with /dev/null
+        os.close(_devnull_fd)
+    except OSError:
+        pass
     try:
         result = _ase_relax_impl(atoms, **kwargs)
         conn.send(("ok", _strip_atoms_for_ipc(result)))
@@ -229,10 +253,27 @@ def get_calculator(calculator):
             if _cached_mace is None:
                 import torch
                 torch.set_num_threads(_threads_per_worker)
-                # Suppress MACE warnings about float32 and torch.load
+                # Keep suppression tightly scoped to MACE import/init only.
                 with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", message=".*float32.*")
-                    warnings.filterwarnings("ignore", category=FutureWarning)
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r".*float32.*",
+                        category=UserWarning,
+                        module=r"(mace|e3nn)(\.|$)",
+                    )
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r".*float32.*",
+                        category=FutureWarning,
+                        module=r"(mace|e3nn)(\.|$)",
+                    )
+                    if _suppress_torch_load_futurewarning():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message=r".*torch\.load.*weights_only=False.*",
+                            category=FutureWarning,
+                            module=r"e3nn\.o3\._wigner",
+                        )
                     if _silence_mace_output():
                         with _silence_external_output(True):
                             from mace.calculators import mace_mp
@@ -295,7 +336,7 @@ def ASE_relax(
 
     isolate_fix_symmetry = _env_flag(
         "PXRD_ISOLATE_FIX_SYMMETRY",
-        default=_default_isolate_fix_symmetry(calculator),
+        default=True,
     )
     if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
         context = mp.get_context("spawn")
@@ -345,13 +386,25 @@ def ASE_relax(
         if process.exitcode not in (0, None):
             logger.warning(
                 f"Warning {label} isolated relaxation process crashed (exitcode={process.exitcode}); "
-                "skipping this structure."
+                "retrying without FixSymmetry."
             )
             try:
                 parent_conn.close()
             except Exception:
                 pass
-            return None
+            # spglib/FixSymmetry can segfault on some structures; fall back to
+            # unconstrained relaxation instead of dropping the candidate.
+            return _ase_relax_impl(
+                atoms,
+                calculator=calculator,
+                opt_lat=opt_lat,
+                step=step,
+                fmax=fmax,
+                logfile=logfile,
+                max_time=max_time,
+                label=f"{label}-nosym",
+                use_fix_symmetry=False,
+            )
 
         try:
             if status == "ok":

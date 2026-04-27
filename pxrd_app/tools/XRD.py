@@ -334,15 +334,15 @@ class XRD:
         N*6 arrays, Angle, d_hkl, h, k, l, intensity
         """
         rank = range(len(self.theta2))  # np.argsort(self.theta2)
-        PL = []
+        rows = []
         last = 0
         for i in rank:
             if self.xrd_intensity[i] > 0.01:
                 angle = self.theta2[i]
                 if abs(angle - last) < 1e-4:
-                    PL[-1][-1] += self.xrd_intensity[i]
+                    rows[-1][-1] += self.xrd_intensity[i]
                 else:
-                    PL.append(
+                    rows.append(
                         [
                             angle,
                             self.d_hkls[i],
@@ -354,9 +354,13 @@ class XRD:
                     )
                 last = angle
 
-        PL = np.array(PL)
-        PL[:, -1] = PL[:, -1] / max(PL[:, -1])
-        self.pxrd = PL
+        if len(rows) == 0:
+            self.pxrd = np.empty((0, 6), dtype=float)
+            return
+
+        pxrd = np.array(rows, dtype=float)
+        pxrd[:, -1] = pxrd[:, -1] / max(pxrd[:, -1])
+        self.pxrd = pxrd
 
     def get_unique_families(self, hkls, verbose=False):
         """
