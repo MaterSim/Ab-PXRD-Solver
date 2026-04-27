@@ -121,6 +121,7 @@ DEFAULT_STATE = {
     "max_wp_choices": 20,  # Limit number of WP choices per cell to avoid combinatorial explosion
     "wp_csv_path": "database/spg_num_wps_mp.csv",
     "use_qrs": False,  # Whether to use Quasi-Random Sampling for structure generation
+    "qrs_method": "sobol",  # Quasi-random sampler used when use_qrs is enabled
 }
 
 VALID_LATTICE_SYMMETRIES = {

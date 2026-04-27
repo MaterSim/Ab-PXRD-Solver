@@ -216,9 +216,15 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         "--use-qrs",
         action="store_true",
         help=(
-            "Use Quasi-Random Sampling (Halton sequences) for structure generation instead of purely random sampling. "
+            "Use Quasi-Random Sampling for structure generation instead of purely random sampling. "
             "This can improve coverage and convergence when max_local_perturbations > 0."
         ),
+    )
+    parser.add_argument(
+        "--qrs-method",
+        choices=("sobol", "halton"),
+        default="sobol",
+        help="Quasi-random sampler to use with --use-qrs. Defaults to sobol.",
     )
     return parser
 
@@ -403,6 +409,7 @@ def _build_state(
     ase_logfile: Optional[str] = None,
     wp_csv_path: Optional[str] = None,
     use_qrs: Optional[bool] = None,
+    qrs_method: Optional[str] = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None: run_state["pxrd_csv"] = pxrd_csv
@@ -448,6 +455,9 @@ def _build_state(
         text = str(ase_logfile).strip()
         run_state["ase_logfile"] = text or None
     if use_qrs is not None: run_state["use_qrs"] = bool(use_qrs)
+    if qrs_method is not None:
+        method = str(qrs_method).strip().lower()
+        run_state["qrs_method"] = method if method in ("sobol", "halton") else "sobol"
     run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
     return run_state
 
@@ -477,4 +487,5 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         ase_logfile=args.ase_logfile,
         wp_csv_path=args.wp_csv_path,
         use_qrs=args.use_qrs,
+        qrs_method=args.qrs_method,
         )

@@ -1662,7 +1662,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     perturb_displacement=0.06, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
                     forced_wp_solution=None, ase_logfile=None, global_accepted=False,
-                    use_qrs=False):
+                    use_qrs=False, qrs_method='sobol'):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1693,6 +1693,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
         max_dof: Maximum degrees of freedom to consider.
         max_atoms: Maximum number of atoms in the unit cell to consider.
         use_qrs: Whether to use quasirandom sampling for generating trial structures.
+        qrs_method: Quasi-random sampler name ('sobol' or 'halton').
     Returns:
         Tuple of (wr, r2, chi2, xtal, eng_best, selected_eng, selected_eng_rel)
     """
@@ -1767,7 +1768,15 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
         for limit in wp_limits:
             for sol in ranked_sols[prev_limit:limit]:
                 (spg_sol, comp, lattice, wp_ids, num_wps, dof, count, Z) = sol
-                xm = XtalManager(spg_sol, composition.keys(), comp, lattice, wp_ids, use_seeds=use_qrs)
+                xm = XtalManager(
+                    spg_sol,
+                    composition.keys(),
+                    comp,
+                    lattice,
+                    wp_ids,
+                    use_seeds=use_qrs,
+                    qrs_method=qrs_method,
+                )
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )

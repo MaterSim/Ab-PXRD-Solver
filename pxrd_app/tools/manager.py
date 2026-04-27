@@ -9,7 +9,7 @@ from typing import Sequence
 import numpy as np
 from pandas import read_csv
 from scipy.signal import find_peaks, savgol_filter
-from scipy.stats.qmc import Halton
+from scipy.stats.qmc import Halton, Sobol
 import matplotlib.pyplot as plt
 from pyxtal import pyxtal
 from pyxtal.lattice import Lattice
@@ -970,7 +970,8 @@ class WPManager:
         return sols
 
 class XtalManager:
-    def __init__(self, spg, species, numIons, cell, WPs, use_seeds=False):
+    def __init__(self, spg, species, numIons, cell, WPs, use_seeds=False,
+                 qrs_method='sobol'):
         """
         Crystal Manager is used to handle crystal structure related operations.
 
@@ -981,6 +982,7 @@ class XtalManager:
             cell (list): Cell parameters
             WPs (list): Wyckoff positions
             use_seeds (bool): Whether to use seed structures for generation
+            qrs_method (str): Quasi-random sampler to use when seed structures are enabled.
         """
         self.spg = Group(spg)
         self.WPs = WPs
@@ -1002,8 +1004,18 @@ class XtalManager:
         self.sites_flat = sites_flat
         self.elements_flat = elements_flat
         if use_seeds:
-            _sampler = Halton(d=max(dof, 1), scramble=False)
-            self.seeds = _sampler.random(n=7*dof+2)  # shape (50, dof), deterministic
+            n_seeds = 7 * dof + 2
+            method = str(qrs_method).strip().lower()
+            if method == 'halton':
+                _sampler = Halton(d=max(dof, 1), scramble=False)
+                self.seeds = _sampler.random(n=n_seeds)
+            elif method == 'sobol':
+                _sampler = Sobol(d=max(dof, 1), scramble=False)
+                # Sobol balance properties require a power-of-two sample count.
+                m = int(np.ceil(np.log2(max(n_seeds, 1))))
+                self.seeds = _sampler.random_base2(m=m)[:n_seeds]
+            else:
+                raise ValueError(f"Unsupported qrs_method={qrs_method!r}; expected 'sobol' or 'halton'.")
             self.skips = 0
             #print(f"Using {len(self.seeds)} seed structures for generation.")
         else:
