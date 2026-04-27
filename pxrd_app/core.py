@@ -956,6 +956,10 @@ def run_pipeline(state: dict) -> dict:
                         logger.info(f"Reached maximum attempt ({state['max_attempt_count']}); stopping further generation.")
                         terminate_pair = True
                         break
+                    if state["Struc_count"] >= state['max_relax_count']:
+                        logger.info(f"Reached maximum relaxation count ({state['max_relax_count']}); stopping further generation.")
+                        terminate_pair = True
+                        break
                     #print("++++++++++++++++++ Debug attempt_count:", state["attempt_count"], "Struc_count:", state["Struc_count"])
                     trial_score = trial_result.get("score")
                     if trial_score is not None and trial_score > best_trial_score:
