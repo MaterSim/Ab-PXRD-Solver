@@ -339,7 +339,10 @@ def ASE_relax(
         default=True,
     )
     if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
-        context = mp.get_context("spawn")
+        # Use fork on Linux (near-zero overhead: child inherits loaded MACE/e3nn).
+        # Must keep spawn on macOS: fork after threading is unsafe there.
+        _start_method = "fork" if sys.platform.startswith("linux") else "spawn"
+        context = mp.get_context(_start_method)
         parent_conn, child_conn = context.Pipe(duplex=False)
         kwargs = {
             "calculator": calculator,
