@@ -1732,7 +1732,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
             return _finalize_result(best_refined_result_energy_ok, attempt_count=attempt_count)
 
         if best_refined_result is not None:
-            logger.info("No accepted candidate was found")
+            #logger.info("No accepted candidate was found")
             return (None, None, None, None, eng_best, None, None, struc_count, attempt_count)
 
         return (None, None, None, None, eng_best, None, None, struc_count, attempt_count)
@@ -1838,7 +1838,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     struc_count += 1
                     cell_volume = getattr(cell, 'size', None)
                     volume_str = f" vol={cell_volume:.1f} Å³" if cell_volume is not None else ""
-                    msg = f"ID{struc_count: 3d}-{actual_idx:2d}: {xtal.get_xtal_string()}, {volume_str}"
+                    msg = f"ID{struc_count: 3d}-{actual_idx}: {xtal.get_xtal_string()}, {volume_str}"
                     # Do not emit here; emission is handled after refinement/perturbation with duplicate suppression
                     refined_score = None
 

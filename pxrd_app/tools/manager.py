@@ -954,9 +954,9 @@ class WPManager:
                         wp_lists.append(tmp_lists[0])
                         sols.append((self.spg, comp, self.lattice, sol, n_wps, total_dof, count, Z))
 
-            kept_z = len(sols) - sols_before_z
-            if kept_z > 0 and verbose:
-                print(f"Z={Z}: Kept {kept_z} Wyckoff position combinations.")
+            #kept_z = len(sols) - sols_before_z
+            #if kept_z > 0 and verbose:
+            #    print(f"Z={Z}: Kept {kept_z} Wyckoff position combinations.")
             if timing:
                 print(f"  Z={Z}: rows={len(df_z)}, raw_sols={n_raw_sols}, kept={kept_z} "
                       f"| t_assign={t_assign:.4f}s  t_dup={t_dup:.4f}s")

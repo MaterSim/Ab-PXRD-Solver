@@ -46,8 +46,8 @@ def get_pair_priority(
     ref_volume = max(1e-6, float(min_volume))
     trial_ratio = safe_trials / ref_trials
     volume_ratio = safe_volume / ref_volume
-    missing_score = (missing_peaks + 1) / (max_missing + 1) ** 1.5
-    return (trial_ratio ** trial_weight) * (volume_ratio ** volume_weight) * missing_score
+    missing_score = (missing_peaks + 1) / (max_missing + 1)
+    return (trial_ratio ** trial_weight) * (volume_ratio ** volume_weight) * (missing_score ** 0.5)
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
@@ -433,6 +433,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         return bool(r2 >= min_r2 and chi2 <= max_chi2)
 
     struc_count = state.get("Struc_count") or 0
+    update_best = False
 
     for attempt_idx in range(attempts):
         seed = seed_base + 9973 * attempt_idx
@@ -524,6 +525,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         if score > state.get('best_score', -1e9):
             state['best_score'] = score
             state['best_result'] = candidate
+            update_best = True
 
         # Early stop: excellent solution found
         if state['best_result']["accepted"] and len(all_structure_log) >= min_structures_before_early_stop and (
@@ -562,8 +564,9 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     wr = state['best_result']["wr"]
     r2 = state['best_result']["r2"]
     chi2 = state['best_result']["chi2"]
-    logger.info(f"\nFinal refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}")
-    logger.info(f"Best structure saved to {match_cif}")
+    if update_best:
+        logger.info(f"\nFinal refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}")
+        logger.info(f"Best structure saved to {match_cif}")
     state['best_result']["spg"] = spg
     state['best_result']["score"] = state['best_score']
     state['best_result']["Struc_count"] = struc_count
