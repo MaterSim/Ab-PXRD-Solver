@@ -203,6 +203,23 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         default="Results",
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
+    parser.add_argument(
+        "--wp-csv-path",
+        type=str,
+        default="database/spg_num_wps_mp.csv",
+        help=(
+            "Path to CSV file containing number of Wyckoff positions per space group, used for "
+            "estimating enumeration cost and guiding search. Defaults to 'database/spg_num_wps_mp.csv'."
+        ),
+    )
+    parser.add_argument(
+        "--use-qrs",
+        action="store_true",
+        help=(
+            "Use Quasi-Random Sampling (Halton sequences) for structure generation instead of purely random sampling. "
+            "This can improve coverage and convergence when max_local_perturbations > 0."
+        ),
+    )
     return parser
 
 
@@ -384,21 +401,16 @@ def _build_state(
     max_atoms: Optional[int] = None,
     max_sim: Optional[float] = None,
     ase_logfile: Optional[str] = None,
-    csv_path: Optional[str] = None,
+    wp_csv_path: Optional[str] = None,
+    use_qrs: Optional[bool] = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
-    if pxrd_csv is not None:
-        run_state["pxrd_csv"] = pxrd_csv
-    if formula is not None:
-        run_state["formula"] = formula
-    if multi_attempts is not None:
-        run_state["multi_attempts"] = max(1, int(multi_attempts))
-    if seed_base is not None:
-        run_state["seed_base"] = int(seed_base)
-    if infer_spg_from_pxrd is not None:
-        run_state["infer_spg_from_pxrd"] = bool(infer_spg_from_pxrd)
-    if spg_top_k is not None:
-        run_state["spg_top_k"] = int(spg_top_k)
+    if pxrd_csv is not None: run_state["pxrd_csv"] = pxrd_csv
+    if formula is not None: run_state["formula"] = formula
+    if multi_attempts is not None: run_state["multi_attempts"] = max(1, int(multi_attempts))
+    if seed_base is not None: run_state["seed_base"] = int(seed_base)
+    if infer_spg_from_pxrd is not None: run_state["infer_spg_from_pxrd"] = bool(infer_spg_from_pxrd)
+    if spg_top_k is not None: run_state["spg_top_k"] = int(spg_top_k)
     if spg_infer_backend is not None:
         backend = str(spg_infer_backend).strip().lower()
         if backend in SPG_INFER_BACKENDS:
@@ -426,7 +438,7 @@ def _build_state(
         run_state["list_wp_only"] = bool(list_wp_only)
     if results_dir is not None:
         run_state["results_dir"] = str(results_dir)
-    if csv_path is not None: run_state["csv_path"] = str(csv_path)
+    if wp_csv_path is not None: run_state["wp_csv_path"] = str(wp_csv_path)
     if max_wp is not None: run_state["max_wp"] = int(max_wp)
     if max_dof is not None: run_state["max_dof"] = int(max_dof)
     if max_Z is not None: run_state["max_Z"] = int(max_Z)
@@ -435,6 +447,7 @@ def _build_state(
     if ase_logfile is not None:
         text = str(ase_logfile).strip()
         run_state["ase_logfile"] = text or None
+    if use_qrs is not None: run_state["use_qrs"] = bool(use_qrs)
     run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
     return run_state
 
@@ -462,4 +475,6 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         max_Z=args.max_z,
         max_sim=args.max_sim,
         ase_logfile=args.ase_logfile,
+        wp_csv_path=args.wp_csv_path,
+        use_qrs=args.use_qrs,
         )

@@ -476,6 +476,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             forced_wp_solution=forced_wp_solution,
             ase_logfile=state.get("ase_logfile"),
             global_accepted=global_accepted,
+            use_qrs=state.get("use_qrs"),
         )
 
         state["attempt_count"] += attempt_count

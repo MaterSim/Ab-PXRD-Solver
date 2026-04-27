@@ -9,6 +9,7 @@ from typing import Sequence
 import numpy as np
 from pandas import read_csv
 from scipy.signal import find_peaks, savgol_filter
+from scipy.stats.qmc import Halton
 import matplotlib.pyplot as plt
 from pyxtal import pyxtal
 from pyxtal.lattice import Lattice
@@ -969,7 +970,7 @@ class WPManager:
         return sols
 
 class XtalManager:
-    def __init__(self, spg, species, numIons, cell, WPs, count=None, emit_summary=True):
+    def __init__(self, spg, species, numIons, cell, WPs, use_seeds=False):
         """
         Crystal Manager is used to handle crystal structure related operations.
 
@@ -979,28 +980,35 @@ class XtalManager:
             numIons (list): Number of ions for each species
             cell (list): Cell parameters
             WPs (list): Wyckoff positions
-            count (int, optional): Number of known structures with this WP combination
+            use_seeds (bool): Whether to use seed structures for generation
         """
         self.spg = Group(spg)
         self.WPs = WPs
         self.cell = cell
-        self.species = species
+        self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
         dof = 0
         sites = [[] for _ in range(len(species))]
+        sites_flat = []
+        elements_flat = []
         for i, wp in enumerate(WPs):
             for _wp in wp:
                 dof += self.spg[_wp].get_dof()
                 sites[i].append(self.spg[_wp].get_label())
+                sites_flat.append(self.spg[_wp].get_label())
+                elements_flat.append(list(species)[i])
         self.dof = dof
         self.sites = sites
-        volume = self.cell.volume if hasattr(self.cell, 'volume') else None
-        vol_str = f", Volume: {volume:.2f}" if volume is not None else ""
-        count_str = f", Count: {count}" if count is not None else ""
-        if emit_summary:
-            print(f"Space group: {spg}, Wyckoff positions: {sites}, DOF: {dof}{vol_str}{count_str}")
+        self.sites_flat = sites_flat
+        self.elements_flat = elements_flat
+        if use_seeds:
+            _sampler = Halton(d=max(dof, 1), scramble=False)
+            self.seeds = _sampler.random(n=5*dof+2)  # shape (50, dof), deterministic
+            print(f"  Using {len(self.seeds)} seed structures for generation.")
+        else:
+            self.seeds = None
 
-    def generate_structure(self, use_asu=False):
+    def generate_structure(self, idx=0):
         """
         Generate the crystal structure from the Wyckoff positions and cell parameters.
 
@@ -1009,10 +1017,17 @@ class XtalManager:
             use_asu (bool): Whether to use asymmetric unit for generation
         """
         xtal = pyxtal()
-        xtal.from_random(3, self.spg, self.species, self.numIons,
+        if self.seeds is not None:
+            x = self.cell.encode()
+            if self.dof > 0: x += self.seeds[idx].tolist()
+            #print(f"Generating: {idx}, {x}, {self.spg.number}")
+            xtal.from_spg_wps_rep(self.spg.number, self.sites_flat, x, self.elements_flat)
+            #print(xtal)
+        else:
+            xtal.from_random(3, self.spg, self.species, self.numIons,
                          lattice=self.cell, sites=self.sites,
                          force_pass=True,
-                         use_asu=use_asu,
+                         #use_asu=use_asu,
                          t_factor=0.8,
                          )
         return xtal

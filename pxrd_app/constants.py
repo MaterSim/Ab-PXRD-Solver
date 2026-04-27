@@ -119,6 +119,7 @@ DEFAULT_STATE = {
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
     "max_wp_choices": 20,  # Limit number of WP choices per cell to avoid combinatorial explosion
     "wp_csv_path": "database/spg_num_wps_mp.csv",
+    "use_qrs": False,  # Whether to use Quasi-Random Sampling for structure generation
 }
 
 VALID_LATTICE_SYMMETRIES = {
