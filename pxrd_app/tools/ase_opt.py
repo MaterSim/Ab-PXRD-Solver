@@ -3,6 +3,8 @@ from torch.serialization import add_safe_globals
 add_safe_globals([slice])
 # ------------------------------------------------------------------------
 
+import atexit
+import queue as _queue_mod
 import signal
 import warnings
 import os
@@ -203,30 +205,123 @@ def _ase_relax_impl(
     return atoms
 
 
-def _ase_relax_worker(conn, atoms, kwargs):
-    # Redirect child-process stderr to /dev/null at the OS fd level so that
-    # CPython's built-in crash reporter ("Fatal Python error: Segmentation fault"
-    # + "Extension modules: ...") is silently discarded when spglib segfaults.
-    # All meaningful error information is sent back to the parent via the Pipe.
+def _ase_worker_loop(req_q, res_q):
+    """Event loop running inside the persistent ASE worker subprocess.
+
+    Loads the MACE calculator once (on the first request via ``_ase_relax_impl``
+    → ``get_calculator``) and then handles an unlimited stream of relaxation
+    requests.  This avoids the per-call spawn + MACE-reload overhead that the
+    old Pipe-based approach incurred on macOS.
+    """
+    # Silence CPython crash reports (spglib segfaults) at the OS fd level.
     try:
         _devnull_fd = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(_devnull_fd, 2)  # replace fd 2 (stderr) with /dev/null
+        os.dup2(_devnull_fd, 2)
         os.close(_devnull_fd)
     except OSError:
         pass
-    try:
-        result = _ase_relax_impl(atoms, **kwargs)
-        conn.send(("ok", _strip_atoms_for_ipc(result)))
-    except Exception as exc:
+
+    while True:
+        item = req_q.get()
+        if item is None:          # graceful shutdown sentinel
+            break
+        atoms, kwargs = item
         try:
-            conn.send(("error", f"{type(exc).__name__}: {exc}"))
-        except Exception:
-            pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+            result = _ase_relax_impl(atoms, **kwargs)
+            res_q.put(("ok", _strip_atoms_for_ipc(result)))
+        except Exception as exc:
+            try:
+                res_q.put(("error", f"{type(exc).__name__}: {exc}"))
+            except Exception:
+                pass
+
+
+class _PersistentAseWorker:
+    """Persistent subprocess for ASE relaxations.
+
+    MACE (or any calculator) is loaded once when the worker starts, then
+    reused for every subsequent call.  On macOS (spawn start method) this
+    eliminates the ~2–5 s per-call MACE reload that the old per-Pipe approach
+    suffered.  On Linux (fork) the difference is small but the worker also
+    avoids repeated fork overhead.
+
+    Crash recovery: if spglib segfaults and kills the worker, the next
+    ``call()`` detects the dead process, restarts it, and returns ``"crash"``
+    so the caller can retry without FixSymmetry.
+    """
+
+    def __init__(self):
+        self._proc = None
+        self._req_q = None
+        self._res_q = None
+        _start_method = "fork" if sys.platform.startswith("linux") else "spawn"
+        self._ctx = mp.get_context(_start_method)
+
+    def _start(self):
+        self._req_q = self._ctx.Queue()
+        self._res_q = self._ctx.Queue()
+        self._proc = self._ctx.Process(
+            target=_ase_worker_loop,
+            args=(self._req_q, self._res_q),
+            daemon=True,
+        )
+        self._proc.start()
+
+    def _kill(self):
+        if self._proc is not None:
+            if self._proc.is_alive():
+                self._proc.kill()
+                self._proc.join(timeout=5)
+            self._proc = None
+            self._req_q = None
+            self._res_q = None
+
+    def shutdown(self):
+        """Graceful shutdown (registered with atexit)."""
+        if self._proc is not None and self._proc.is_alive():
+            try:
+                self._req_q.put(None)
+                self._proc.join(timeout=10)
+            except Exception:
+                pass
+        self._kill()
+
+    def call(self, atoms, kwargs):
+        """Submit one relaxation request and block until result or crash/timeout.
+
+        Returns ``(status, payload)`` where *status* is one of:
+        ``"ok"`` – payload is the relaxed Atoms (or None on convergence failure),
+        ``"crash"`` – worker process died (spglib segfault),
+        ``"timeout"`` – wall-time limit exceeded,
+        ``"error"`` – Python exception in worker.
+        """
+        if self._proc is None or not self._proc.is_alive():
+            self._start()
+
+        self._req_q.put((atoms, kwargs))
+        wait_s = max(10, int(kwargs.get("max_time", 15.0) * 60) + 20)
+
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                result = self._res_q.get(timeout=min(1.0, remaining))
+                # Worker may have crashed after sending; clear dead ref.
+                if not self._proc.is_alive():
+                    self._proc = None
+                return result
+            except _queue_mod.Empty:
+                if not self._proc.is_alive():
+                    self._kill()
+                    return ("crash", None)
+
+        # Deadline exceeded — kill the hung worker.
+        self._kill()
+        return ("timeout", None)
+
+
+_ase_worker = _PersistentAseWorker()
+atexit.register(_ase_worker.shutdown)
 
 def get_calculator(calculator):
     """
@@ -339,11 +434,8 @@ def ASE_relax(
         default=True,
     )
     if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
-        # Use fork on Linux (near-zero overhead: child inherits loaded MACE/e3nn).
-        # Must keep spawn on macOS: fork after threading is unsafe there.
-        _start_method = "fork" if sys.platform.startswith("linux") else "spawn"
-        context = mp.get_context(_start_method)
-        parent_conn, child_conn = context.Pipe(duplex=False)
+        # Delegate to the persistent worker subprocess.  MACE is loaded once
+        # in that process and reused across calls — no per-call spawn + reload.
         kwargs = {
             "calculator": calculator,
             "opt_lat": opt_lat,
@@ -354,49 +446,15 @@ def ASE_relax(
             "label": label,
             "use_fix_symmetry": use_fix_symmetry,
         }
-        process = context.Process(target=_ase_relax_worker, args=(child_conn, atoms, kwargs))
-        process.start()
-        child_conn.close()
-        wait_seconds = max(10, int(max_time * 60) + 20)
+        status, payload = _ase_worker.call(atoms, kwargs)
 
-        status = None
-        payload = None
-        deadline = time.monotonic() + wait_seconds
-        try:
-            while time.monotonic() < deadline:
-                remaining = max(0.0, deadline - time.monotonic())
-                if parent_conn.poll(min(1.0, remaining)):
-                    status, payload = parent_conn.recv()
-                    break
-                if not process.is_alive():
-                    break
-        except (EOFError, OSError):
-            status = None
-            payload = None
-
-        process.join(timeout=1)
-
-        if process.is_alive():
-            process.terminate()
-            process.join(timeout=5)
-            logger.warning(f"Warning {label} timed out in isolated relaxation process.")
-            try:
-                parent_conn.close()
-            except Exception:
-                pass
-            return None
-
-        if process.exitcode not in (0, None):
+        if status == "ok":
+            return _restore_atoms_from_ipc(payload, calculator)
+        if status == "crash":
             logger.warning(
-                f"Warning {label} isolated relaxation process crashed (exitcode={process.exitcode}); "
+                f"Warning {label} isolated relaxation process crashed; "
                 "retrying without FixSymmetry."
             )
-            try:
-                parent_conn.close()
-            except Exception:
-                pass
-            # spglib/FixSymmetry can segfault on some structures; fall back to
-            # unconstrained relaxation instead of dropping the candidate.
             return _ase_relax_impl(
                 atoms,
                 calculator=calculator,
@@ -408,20 +466,11 @@ def ASE_relax(
                 label=f"{label}-nosym",
                 use_fix_symmetry=False,
             )
-
-        try:
-            if status == "ok":
-                return _restore_atoms_from_ipc(payload, calculator)
-            if status is not None:
-                logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
-                return None
-        finally:
-            try:
-                parent_conn.close()
-            except Exception:
-                pass
-
-        logger.warning(f"Warning {label} isolated relaxation returned no result; skipping structure.")
+        if status == "timeout":
+            logger.warning(f"Warning {label} timed out in isolated relaxation process.")
+            return None
+        # status == "error" or unexpected
+        logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
         return None
 
     return _ase_relax_impl(

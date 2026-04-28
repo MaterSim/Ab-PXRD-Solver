@@ -1,7 +1,7 @@
 import matplotlib, os
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from pxrd_app.tools.gsas import refine_pxrd
+import numpy as np
 
 def plot_energy_vs_r2(
     structure_log: list,
@@ -74,19 +74,56 @@ def plot_energy_vs_r2(
     ax1.grid(True, alpha=0.3)
 
     # --- Lower plot: Best fit PXRD ---
-    # plot best fit from best state if available, otherwise show placeholder text
+    # Plot observed data vs simulated pattern from the best CIF.
+    # We do NOT re-run GSAS here (too slow); instead we use the XRD simulator
+    # and the stored metrics from the search refinement.
     if best_state is not None and best_state.get("best_result") is not None:
-        pxrd_csv = best_state.get("pxrd_csv")
-        INST_FILE = best_state.get("INST_FILE")
-        results_dir = best_state.get("results_dir", "Results")
-        cifs_dir = os.path.join(results_dir, "cifs")
-        match_cif = os.path.join(cifs_dir, f'{formula}_best_state.cif')
-        best_state['best_result']['xtal'].to_file(match_cif)
-        wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE, ax=ax2)
-        spg = best_state['best_result']['spg']
-        wp_labels_text = best_state['best_result'].get('wp_labels') or best_state.get('wp_labels') or "n/a"
+        best_result = best_state['best_result']
+        wr   = best_result.get('wr')
+        r2   = best_result.get('r2')
+        chi2 = best_result.get('chi2')
+        spg  = best_result.get('spg')
+        wp_labels_text = best_result.get('wp_labels') or best_state.get('wp_labels') or "n/a"
         spg_str = f"SPG: {spg}" if spg else ""
-        ax2.set_title(f"Best Fit: R²={r2:.3f}, Chi²={chi2:.3f}, Rwp={wr:.3f} | {spg_str}: {wp_labels_text}")
+
+        # Plot observed pattern
+        pxrd_csv = best_state.get("pxrd_csv")
+        try:
+            import pandas as _pd
+            _df = _pd.read_csv(pxrd_csv)
+            x_obs = _df.iloc[:, 0].values
+            y_obs = _df.iloc[:, 1].values
+            ax2.plot(x_obs, y_obs, 'k.', markersize=2, label='Observed')
+        except Exception:
+            pass
+
+        # Plot simulated pattern from best xtal using XRD simulator (no GSAS)
+        try:
+            from pxrd_app.tools.XRD import XRD
+            _xtal = best_result.get('xtal')
+            if _xtal is not None:
+                _atoms = _xtal.to_ase(resort=False) if hasattr(_xtal, 'to_ase') else None
+                if _atoms is not None:
+                    _wavelength = best_state.get('wavelength', 1.54184)
+                    _thetas = best_state.get('thetas', [10, 80])
+                    _res = best_state.get('resolution', 0.02)
+                    _tol = best_state.get('SCALED_INTENSITY_TOL', 0.01)
+                    _xrd = XRD(_atoms, wavelength=_wavelength, thetas=_thetas,
+                               res=_res, SCALED_INTENSITY_TOL=_tol)
+                    x_calc, y_calc = _xrd.get_plot_gsas2(
+                        U=0.1, V=-0.1, W=0.5, X=0.1, Y=0.1,
+                        bg_ratio=0.0, mix_ratio=0.0)
+                    # Normalise to observed peak
+                    if y_obs is not None and len(y_obs) > 0 and max(y_calc) > 0:
+                        y_calc = np.array(y_calc) / max(y_calc) * max(y_obs)
+                    ax2.plot(x_calc, y_calc, 'r-', linewidth=0.8, label='Calculated')
+        except Exception:
+            pass
+
+        r2_str   = f"{r2:.3f}"   if r2   is not None else "n/a"
+        chi2_str = f"{chi2:.3f}" if chi2 is not None else "n/a"
+        wr_str   = f"{wr:.3f}"   if wr   is not None else "n/a"
+        ax2.set_title(f"Best Fit: R²={r2_str}, Chi²={chi2_str}, Rwp={wr_str} | {spg_str}: {wp_labels_text}")
         ax2.set_xlabel("2θ (deg)")
         ax2.set_ylabel("Intensity (a.u.)")
         ax2.legend()
