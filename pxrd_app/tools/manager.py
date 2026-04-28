@@ -792,6 +792,7 @@ class WPManager:
             ref_den (float): Reference density to use for Z estimation (optional)
             csv (str): Path to the CSV file containing Wyckoff position data
         """
+        #print(ref_den)
         df = read_csv(rf("pyxtal", csv))
         self.spg = spg
         self.df = df[df['spg'] == self.spg]
@@ -920,8 +921,7 @@ class WPManager:
                 # Pre-filter: every solution from a row has the same total DOF
                 # (all WPs are always fully assigned), so skip the whole row early.
                 total_dof = sum(self.group[id].get_dof() for id in ids)
-                if total_dof > self.max_dof:
-                    continue
+                if total_dof > self.max_dof: continue
                 n_wps = len(ids)  # also constant per row
 
                 if timing: _t0 = _time()
@@ -930,6 +930,9 @@ class WPManager:
                 n_raw_sols += len(solutions)
 
                 for sol in solutions:
+                    #wp_labels = [[self.group[w].get_label() for w in _wp] for _wp in sol]
+                    #print(f"Checking SPG: {self.group.number}, WPs: {wp_labels}")
+
                     enumeration_count += 1
                     if max_samples is not None and enumeration_count >= max_samples:
                         break
@@ -947,6 +950,7 @@ class WPManager:
 
                         if tmp_lists[i] in wp_lists:
                             duplicate = True
+                            print(f"Z={Z}: Found duplicate solution, skipping. {tmp_lists[i]}")
                             break
                     if timing: t_dup += _time() - _t1
 
@@ -954,7 +958,7 @@ class WPManager:
                         wp_lists.append(tmp_lists[0])
                         sols.append((self.spg, comp, self.lattice, sol, n_wps, total_dof, count, Z))
 
-            #kept_z = len(sols) - sols_before_z
+            kept_z = len(sols) - sols_before_z
             #if kept_z > 0 and verbose:
             #    print(f"Z={Z}: Kept {kept_z} Wyckoff position combinations.")
             if timing:
@@ -970,7 +974,7 @@ class WPManager:
         return sols
 
 class XtalManager:
-    def __init__(self, spg, species, numIons, cell, WPs, use_seeds=False,
+    def __init__(self, spg, species, numIons, cell, WPs, per_dof, use_seeds=False,
                  qrs_method='sobol'):
         """
         Crystal Manager is used to handle crystal structure related operations.
@@ -981,11 +985,13 @@ class XtalManager:
             numIons (list): Number of ions for each species
             cell (list): Cell parameters
             WPs (list): Wyckoff positions
+            per_dof (int): Number of parameters per degree of freedom
             use_seeds (bool): Whether to use seed structures for generation
             qrs_method (str): Quasi-random sampler to use when seed structures are enabled.
         """
         self.spg = Group(spg)
         self.WPs = WPs
+        self.per_dof = per_dof
         self.cell = cell
         self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
@@ -1004,7 +1010,7 @@ class XtalManager:
         self.sites_flat = sites_flat
         self.elements_flat = elements_flat
         if use_seeds:
-            n_seeds = 7 * dof + 2
+            n_seeds = (self.per_dof + 4) * dof + 2
             method = str(qrs_method).strip().lower()
             if method == 'halton':
                 _sampler = Halton(d=max(dof, 1), scramble=False)
@@ -1070,6 +1076,7 @@ if __name__ == "__main__":
     from time import time
     spgs, cell, comp, ref_den = [63, 64], [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, (1.04, 3.80)
     spgs, cell, comp, ref_den = [142], [7.53540996, 14.84882202], {'Er': 1, 'B': 4, 'Rh': 4}, (9.13, 10.33)
+    spgs, cell, comp, ref_den = [216], [10.029], {'As': 5, 'Re': 4, 'S': 4}, (6.84, 12.89)
     for spg in spgs:
         print(f"\n--- SPG {spg} ---")
         t0 = time()
@@ -1080,10 +1087,9 @@ if __name__ == "__main__":
         t1 = time()
         sols = wp.get_wyckoff_positions(timing=True)
         t_wp = time() - t1
-        print(f"  get_wyckoff_positions total: {t_wp:.4f}s")
+        print(f"  get_wyckoff_positions total: {t_wp:.4f}s {len(sols)}")
         for sol in sols:
             wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
-        if len(sols) > 0:
             print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
-        else:
+        if len(sols) == 0:
             print(f"SPG: {spg}, No Wyckoff solutions found for the given composition and cell.")

@@ -368,6 +368,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
+    per_dof = state.get("per_dof")
     max_wp_choices = state.get("max_wp_choices")
     max_atoms = state.get("max_atoms")
 
@@ -466,6 +467,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             max_wp,
             max_Z,
             max_dof,
+            per_dof,
             max_atoms,
             min_r2,
             max_chi2,
@@ -677,7 +679,7 @@ def run_pipeline(state: dict) -> dict:
         wp_candidate_cache[key] = candidates
         return candidates
 
-    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, csv_path, max_samples=None) -> tuple[int, int, int]:
+    def _estimate_pair_cost(cell_obj, spg_value, max_wp, max_Z, max_dof, per_dof, csv_path, max_samples=None) -> tuple[int, int, int]:
         key = _cell_cache_key(cell_obj, spg_value)
         if key in wp_cost_cache: return wp_cost_cache[key]
 
@@ -689,7 +691,7 @@ def run_pipeline(state: dict) -> dict:
         est_trials = 0
         for candidate in candidates:
             dof = int(candidate[5])
-            n4 = dof * 3 if dof != 1 else 4
+            n4 = dof * per_dof if dof != 1 else 4
             est_trials += (n4 + 1)
 
         out = (candidate_count, candidate_count, est_trials)
@@ -699,6 +701,7 @@ def run_pipeline(state: dict) -> dict:
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
+    per_dof = state.get("per_dof")
     max_samples = state.get("max_enumeration_samples")
     max_trials = state.get("max_trials")
     state["attempt_count"] = 0
@@ -790,7 +793,7 @@ def run_pipeline(state: dict) -> dict:
 
         for _vol, _cell, _spg in all_seed_cells:
             cand_count, est_wps, est_trials = _estimate_pair_cost(_cell, _spg,
-                    max_wp, max_Z, max_dof, csv_path, max_samples=max_samples)
+                    max_wp, max_Z, max_dof, per_dof, csv_path, max_samples=max_samples)
             if cand_count == 0: continue
             total_count += cand_count
             total_est_trials += est_trials

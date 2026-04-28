@@ -1653,7 +1653,7 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
 def search_solution(cells, spg, composition, ref_den, match_cif,
                     match_csv, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
-                    INST_FILE, logger, max_wp, max_Z, max_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
+                    INST_FILE, logger, max_wp, max_Z, max_dof, per_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
                     perturb_displacement=0.06, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
@@ -1775,6 +1775,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     comp,
                     lattice,
                     wp_ids,
+                    per_dof,
                     use_seeds=use_qrs,
                     qrs_method=qrs_method,
                 )
@@ -1782,7 +1783,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
                 # If DOF=0, allow 1 trial; if DOF=1, use 4; else use DOF*3
-                N4 = 1 if xm.dof == 0 else (4 if xm.dof == 1 else xm.dof * 3)
+                N4 = 1 if xm.dof == 0 else (4 if xm.dof == 1 else xm.dof * per_dof)
                 N_false = 0
                 extra_trials = 0
                 local_perturbations = 0
@@ -1997,6 +1998,18 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                             local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
 
                         if should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
+                            reopt_atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
+                            if reopt_atoms is not None:
+                                reopt_eng = reopt_atoms.get_potential_energy() / len(reopt_atoms)
+                                eng_before = eng
+                                eng_best = min(eng_best, reopt_eng)
+                                eng_rel = max(0.0, reopt_eng - eng_best)
+                                eng = reopt_eng
+                                logger.info(
+                                    f"  Reoptimized energy: {eng_before:.4f} -> {eng:.4f} eV/atom "
+                                    f"(delta={eng - eng_before:+.4f}, eng_rel={eng_rel:.4f})"
+                                )
+                                local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
                             early_stop = True
                             logger.info(
                                 f"***Excellent fit within current WP trial (r2={r2:.3f}, chi2={chi2:.3f}) "
