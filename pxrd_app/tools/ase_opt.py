@@ -205,13 +205,40 @@ def _ase_relax_impl(
     return atoms
 
 
-def _ase_worker_loop(req_q, res_q):
-    """Event loop running inside the persistent ASE worker subprocess.
+def _ase_relax_worker_pipe(conn, atoms, kwargs):
+    """Used on Linux: run one relaxation in a forked child, send result via Pipe.
 
-    Loads the MACE calculator once (on the first request via ``_ase_relax_impl``
-    → ``get_calculator``) and then handles an unlimited stream of relaxation
-    requests.  This avoids the per-call spawn + MACE-reload overhead that the
-    old Pipe-based approach incurred on macOS.
+    Fork inherits the parent's ``_cached_mace`` via CoW, so no MACE reload.
+    Stderr is silenced so CPython crash reports from spglib segfaults are
+    discarded cleanly.
+    """
+    try:
+        _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(_devnull_fd, 2)
+        os.close(_devnull_fd)
+    except OSError:
+        pass
+    try:
+        result = _ase_relax_impl(atoms, **kwargs)
+        conn.send(("ok", _strip_atoms_for_ipc(result)))
+    except Exception as exc:
+        try:
+            conn.send(("error", f"{type(exc).__name__}: {exc}"))
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _ase_worker_loop(req_q, res_q):
+    """Event loop running inside the persistent ASE worker subprocess (macOS).
+
+    Loads MACE once on the first request and reuses it across all subsequent
+    calls, eliminating the ~2–5 s per-call spawn + MACE-reload overhead that
+    the Pipe approach would incur with the ``spawn`` start method.
     """
     # Silence CPython crash reports (spglib segfaults) at the OS fd level.
     try:
@@ -434,8 +461,6 @@ def ASE_relax(
         default=True,
     )
     if use_fix_symmetry and isolate_fix_symmetry and isinstance(calculator, str):
-        # Delegate to the persistent worker subprocess.  MACE is loaded once
-        # in that process and reused across calls — no per-call spawn + reload.
         kwargs = {
             "calculator": calculator,
             "opt_lat": opt_lat,
@@ -446,32 +471,92 @@ def ASE_relax(
             "label": label,
             "use_fix_symmetry": use_fix_symmetry,
         }
-        status, payload = _ase_worker.call(atoms, kwargs)
 
-        if status == "ok":
-            return _restore_atoms_from_ipc(payload, calculator)
-        if status == "crash":
-            logger.warning(
-                f"Warning {label} isolated relaxation process crashed; "
-                "retrying without FixSymmetry."
+        if sys.platform.startswith("linux"):
+            # Linux: fork-per-call.  The forked child inherits _cached_mace via
+            # CoW — no reload cost.  Direct Pipe avoids Queue serialization overhead.
+            _ctx = mp.get_context("fork")
+            parent_conn, child_conn = _ctx.Pipe(duplex=False)
+            process = _ctx.Process(
+                target=_ase_relax_worker_pipe,
+                args=(child_conn, atoms, kwargs),
             )
-            return _ase_relax_impl(
-                atoms,
-                calculator=calculator,
-                opt_lat=opt_lat,
-                step=step,
-                fmax=fmax,
-                logfile=logfile,
-                max_time=max_time,
-                label=f"{label}-nosym",
-                use_fix_symmetry=False,
-            )
-        if status == "timeout":
-            logger.warning(f"Warning {label} timed out in isolated relaxation process.")
+            process.start()
+            child_conn.close()
+            wait_seconds = max(10, int(max_time * 60) + 20)
+            status = None
+            payload = None
+            deadline = time.monotonic() + wait_seconds
+            try:
+                while time.monotonic() < deadline:
+                    remaining = max(0.0, deadline - time.monotonic())
+                    if parent_conn.poll(min(1.0, remaining)):
+                        status, payload = parent_conn.recv()
+                        break
+                    if not process.is_alive():
+                        break
+            except (EOFError, OSError):
+                status = None
+                payload = None
+            process.join(timeout=1)
+            try:
+                parent_conn.close()
+            except Exception:
+                pass
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+                logger.warning(f"Warning {label} timed out in isolated relaxation process.")
+                return None
+            if process.exitcode not in (0, None):
+                logger.warning(
+                    f"Warning {label} isolated relaxation process crashed "
+                    f"(exitcode={process.exitcode}); retrying without FixSymmetry."
+                )
+                return _ase_relax_impl(
+                    atoms,
+                    calculator=calculator,
+                    opt_lat=opt_lat,
+                    step=step,
+                    fmax=fmax,
+                    logfile=logfile,
+                    max_time=max_time,
+                    label=f"{label}-nosym",
+                    use_fix_symmetry=False,
+                )
+            if status == "ok":
+                return _restore_atoms_from_ipc(payload, calculator)
+            if status is not None:
+                logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
             return None
-        # status == "error" or unexpected
-        logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
-        return None
+
+        else:
+            # macOS/Windows: spawn is required; persistent worker avoids the
+            # ~4–8 s per-call MACE reload that a Pipe+spawn approach would incur.
+            status, payload = _ase_worker.call(atoms, kwargs)
+            if status == "ok":
+                return _restore_atoms_from_ipc(payload, calculator)
+            if status == "crash":
+                logger.warning(
+                    f"Warning {label} isolated relaxation process crashed; "
+                    "retrying without FixSymmetry."
+                )
+                return _ase_relax_impl(
+                    atoms,
+                    calculator=calculator,
+                    opt_lat=opt_lat,
+                    step=step,
+                    fmax=fmax,
+                    logfile=logfile,
+                    max_time=max_time,
+                    label=f"{label}-nosym",
+                    use_fix_symmetry=False,
+                )
+            if status == "timeout":
+                logger.warning(f"Warning {label} timed out in isolated relaxation process.")
+                return None
+            logger.warning(f"Warning {label} isolated relaxation failed: {payload}")
+            return None
 
     return _ase_relax_impl(
         atoms,
