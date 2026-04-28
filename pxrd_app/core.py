@@ -733,6 +733,9 @@ def run_pipeline(state: dict) -> dict:
     best_trial_state = None
     best_trial_message = None
     best_trial_score = -1e9
+    best_accepted_trial_state = None
+    best_accepted_trial_message = None
+    best_accepted_trial_score = -1e9
     global_accepted_exists = False  # tracks whether any pair has produced an accepted solution
 
     # key = (seed_spg, dims_sig) — same dims under different SPGs kept separately
@@ -974,6 +977,11 @@ def run_pipeline(state: dict) -> dict:
 
                     if trial_result.get("accepted"):
                         global_accepted_exists = True
+                        trial_score_for_accepted = trial_score if trial_score is not None else -1e9
+                        if trial_score_for_accepted > best_accepted_trial_score:
+                            best_accepted_trial_score = trial_score_for_accepted
+                            best_accepted_trial_state = trial_state
+                            best_accepted_trial_message = trial_message
                         _emit_accepted_solution(spg_val, trial_result)
                         # For inferred-SPG early exit, require stricter criteria: R² > 0.93 AND χ² < 0.18
                         r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
@@ -992,9 +1000,10 @@ def run_pipeline(state: dict) -> dict:
                         if strict_early_exit:
                             if not energy_ok:
                                 logger.info(
-                                    f"Good fit found for spg={spg_val}, but skipping early stop "
+                                    f"Good fit found for spg={spg_val}, but skipping quality-based early stop "
                                     f"because dE_global={global_eng_rel:.4f} exceeds "
-                                    f"{max_eng_rel_early_stop:.4f} eV/atom."
+                                    f"{max_eng_rel_early_stop:.4f} eV/atom; search may still stop via "
+                                    f"the structure-budget criterion."
                                 )
                             else:
                                 if not enough_structures:
@@ -1048,8 +1057,12 @@ def run_pipeline(state: dict) -> dict:
         state["msg"] = "No valid cells are found."
         return state
     elif best_trial_state is not None:
-        best_trial_result = best_trial_state["best_result"] or {}
-        best_trial_spg = best_trial_state["spg"]
+        final_trial_state = best_accepted_trial_state or best_trial_state
+        final_trial_message = best_accepted_trial_message or best_trial_message
+        final_trial_score = best_accepted_trial_score if best_accepted_trial_state is not None else best_trial_score
+
+        best_trial_result = final_trial_state["best_result"] or {}
+        best_trial_spg = final_trial_state["spg"]
         status = "Success" if best_trial_result.get("accepted") else "Failure"
 
         # End of all-pairs loop: emit global plot covering every structure tried
@@ -1057,8 +1070,8 @@ def run_pipeline(state: dict) -> dict:
         spg_str = f"SG{best_trial_spg}" if best_trial_spg is not None else "SG_unknown"
         results_dir = state.get("results_dir", "Results")
         output_png = f"{results_dir}/EnergyR2_{tag}_{spg_str}.png"
-        best_trial_state['status'] = status
-        plot_energy_vs_r2(global_structure_log, best_trial_state, output_png, timing_breakdown)
+        final_trial_state['status'] = status
+        plot_energy_vs_r2(global_structure_log, final_trial_state, output_png, timing_breakdown)
 
         if status == "Success":
             # Recompute dE against the global energy minimum from ALL explored
@@ -1074,15 +1087,15 @@ def run_pipeline(state: dict) -> dict:
             logger.info(f"Return best result in spg={best_trial_spg}.")
         else:
             logger.info(f"No acceptance; return best result in spg={best_trial_spg}")
-        logger.info(f"Best inferred-SG score observed: {best_trial_score:.4f}")
+        logger.info(f"Best inferred-SG score observed: {final_trial_score:.4f}")
 
         # Keep the actual attempt count
         count0 = state.get("attempt_count")
-        state.update(best_trial_state)
+        state.update(final_trial_state)
         state["attempt_count"] = count0
         # Keep the global WP-trial count from this pipeline run.
         state["status"] = status
-        state["msg"] = best_trial_message
+        state["msg"] = final_trial_message
         return state
     return state
 
