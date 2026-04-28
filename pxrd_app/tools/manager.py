@@ -950,7 +950,7 @@ class WPManager:
 
                         if tmp_lists[i] in wp_lists:
                             duplicate = True
-                            print(f"Z={Z}: Found duplicate solution, skipping. {tmp_lists[i]}")
+                            #print(f"Z={Z}: Found duplicate solution, skipping. {tmp_lists[i]}")
                             break
                     if timing: t_dup += _time() - _t1
 
@@ -1033,7 +1033,6 @@ class XtalManager:
 
         Args:
             cell (list): Cell parameters
-            use_asu (bool): Whether to use asymmetric unit for generation
         """
         xtal = pyxtal()
         if self.seeds is not None:

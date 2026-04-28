@@ -121,8 +121,8 @@ def plot_energy_vs_r2(
             pass
 
         r2_str   = f"{r2:.3f}"   if r2   is not None else "n/a"
-        chi2_str = f"{chi2:.3f}" if chi2 is not None else "n/a"
-        wr_str   = f"{wr:.3f}"   if wr   is not None else "n/a"
+        chi2_str = f"{chi2:.2f}" if chi2 is not None else "n/a"
+        wr_str   = f"{wr:.2f}"   if wr   is not None else "n/a"
         ax2.set_title(f"Best Fit: R²={r2_str}, Chi²={chi2_str}, Rwp={wr_str} | {spg_str}: {wp_labels_text}")
         ax2.set_xlabel("2θ (deg)")
         ax2.set_ylabel("Intensity (a.u.)")

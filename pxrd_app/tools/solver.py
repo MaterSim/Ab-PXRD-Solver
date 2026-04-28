@@ -1782,8 +1782,8 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
-                # If DOF=0, allow 1 trial; if DOF=1, use 4; else use DOF*3
-                N4 = 1 if xm.dof == 0 else (4 if xm.dof == 1 else xm.dof * per_dof)
+                # If DOF=0, allow 1 trial; if DOF*per_dof
+                N4 = 1 if xm.dof == 0 else xm.dof * per_dof
                 N_false = 0
                 extra_trials = 0
                 local_perturbations = 0
@@ -1848,7 +1848,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     if sim > best_sim_in_wpset: best_sim_in_wpset = sim
                     # Early exit: if after the warm-up window the WP set has never reached
                     # even a very low sim, it is very unlikely to produce a useful structure.
-                    if (valid_trials_in_wpset >= wpset_warmup and
+                    if not use_qrs and (valid_trials_in_wpset >= wpset_warmup and
                             best_sim_in_wpset < wpset_low_sim_exit and
                             extra_trials == 0):
                         logger.info(
@@ -1921,10 +1921,10 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                                     p_stress = abs(perturbed_atoms.get_stress()[:3].mean())
                                     p_fmax = abs(perturbed_atoms.get_forces()).max()
                                     if p_stress > max_stress or p_fmax > max_force:
-                                        logger.info(
-                                            f"  Perturbation {perturb_idx + 1}/{perturb_trials} rejected by stress/force "
-                                            f"filters ({p_stress:.3f}, {p_fmax:.3f})."
-                                        )
+                                        #logger.info(
+                                        #    f"  Perturbation {perturb_idx + 1}/{perturb_trials} rejected by stress/force "
+                                        #    f"filters ({p_stress:.3f}, {p_fmax:.3f})."
+                                        #)
                                         continue
 
                                     prev_eng_best = eng_best

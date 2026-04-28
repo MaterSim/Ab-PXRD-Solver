@@ -156,7 +156,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
 
     infer_spg = state["infer_spg_from_pxrd"]
     spg_top_k = state["spg_top_k"]
-    max_cell_volume = state["max_cell_volume"]
+    max_volume = state["max_volume"]
     spg_infer_backend = state["spg_infer_backend"].strip().lower()
 
     spg = int(spg_from_filename) if spg_from_filename is not None else 0
@@ -214,7 +214,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
             formula=formula,
             spg_infer_backend=spg_infer_backend,
             spg_top_k=spg_top_k,
-            max_cell_volume=max_cell_volume,
+            max_volume=max_volume,
         )
         predictions = result.get("predictions") or []
         state["spg_predictions"] = [spg for spg, _prob in predictions]
@@ -241,7 +241,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
         "density_min": density_min,
         "density_max": density_max,
         "min_volume": min_volume,
-        "max_cell_volume": max_cell_volume,
+        "max_volume": max_volume,
         "min_abc": min_abc,
         "wavelength": wavelength,
     }
@@ -255,7 +255,7 @@ def run_cell_solver(state: dict) -> dict:
     formula = state.get("formula")
     peak_positions = state.get("peak_positions")
     max_cells = state.get("max_cells")
-    max_cell_volume = state.get("max_cell_volume")
+    max_volume = state.get("max_volume")
     cell_solver_kwargs = _get_cell_solver_kwargs(state)
 
     if state['infer_spg_from_pxrd']:
@@ -291,7 +291,7 @@ def run_cell_solver(state: dict) -> dict:
             min_abc=cell_solver_kwargs["min_abc"],
             max_chi2=cell_solver_kwargs["max_chi2"],
             max_guess=cell_solver_kwargs["max_guess"],
-            max_volume=max_cell_volume,
+            max_volume=max_volume,
             verbose=False,
         )
         solutions = solver.solve()
@@ -363,7 +363,8 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
-    sim_max = state.get("sim_max", 0.90)
+    sim_max = state.get("sim_max")
+    if len(state.get("peaks")) <=4: sim_max = 0.2
     eng_min = 1e10
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")

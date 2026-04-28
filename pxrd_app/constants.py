@@ -83,7 +83,7 @@ DEFAULT_STATE = {
     "max_dof": 25,
     "per_dof": 4,
     "max_atoms": 200,
-    "max_cell_volume": 1000.0,
+    "max_volume": 1000.0,
     "cells": [],
     # Constraints and parameters
     "wavelength": 1.54184,

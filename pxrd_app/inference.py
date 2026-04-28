@@ -202,7 +202,7 @@ def infer_spg_from_backend(
     formula: str,
     spg_infer_backend: str,
     spg_top_k: int,
-    max_cell_volume: Optional[float],
+    max_volume: Optional[float],
 ) -> dict:
     backend = str(spg_infer_backend or "model").strip().lower()
     if backend not in SPG_INFER_BACKENDS:
@@ -228,7 +228,7 @@ def infer_spg_from_backend(
             min_abc=DEFAULT_STATE["min_abc"],
             max_abc=DEFAULT_STATE["max_abc"],
             min_volume=20.0,
-            max_volume=max_cell_volume,
+            max_volume=max_volume,
             verbose=False,
         )
         result["smart_cell_ranked_spg_cells"] = rank_smart_cell_spg_cell_solutions(smart_solutions)

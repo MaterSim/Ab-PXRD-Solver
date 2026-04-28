@@ -149,7 +149,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--max-cell-volume",
+        "--max-volume",
         type=float,
         default=1500.0,
         help="Maximum allowed unit-cell volume (A^3) for cell solutions. Larger cells are discarded.",
@@ -398,7 +398,7 @@ def _build_state(
     max_local_perturbations: Optional[int] = None,
     perturb_displacement: Optional[float] = None,
     max_eng_rel: Optional[float] = None,
-    max_cell_volume: Optional[float] = None,
+    max_volume: Optional[float] = None,
     list_wp_only: Optional[bool] = None,
     results_dir: Optional[str] = None,
     max_wp: Optional[int] = None,
@@ -435,12 +435,12 @@ def _build_state(
     if max_eng_rel is not None:
         run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
         run_state["max_eng_rel_early_stop"] = max(0.0, float(max_eng_rel))
-    if max_cell_volume is not None:
-        max_cell_volume = float(max_cell_volume)
-        if max_cell_volume > 0:
-            run_state["max_cell_volume"] = max_cell_volume
+    if max_volume is not None:
+        max_volume = float(max_volume)
+        if max_volume > 0:
+            run_state["max_volume"] = max_volume
         else:
-            logger.warning(f"Ignoring non-positive max_cell_volume={max_cell_volume}; expected > 0.")
+            logger.warning(f"Ignoring non-positive max_volume={max_volume}; expected > 0.")
     if list_wp_only is not None:
         run_state["list_wp_only"] = bool(list_wp_only)
     if results_dir is not None:
@@ -477,7 +477,7 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         max_local_perturbations=args.local_perturbations,
         perturb_displacement=args.perturb_displacement,
         max_eng_rel=args.max_eng_rel,
-        max_cell_volume=args.max_cell_volume,
+        max_volume=args.max_volume,
         list_wp_only=args.list_wp_only,
         results_dir=args.output,
         max_wp=args.max_wp,
