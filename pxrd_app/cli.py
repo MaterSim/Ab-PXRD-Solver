@@ -128,18 +128,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--local-perturbations",
-        type=int,
-        default=None,
-        help="Maximum number of perturb-and-relax trials per promising Wyckoff setting.",
-    )
-    parser.add_argument(
-        "--perturb-displacement",
-        type=float,
-        default=None,
-        help="Standard deviation of Cartesian perturbation in A for local perturb-and-relax trials.",
-    )
-    parser.add_argument(
         "--max-eng-rel",
         type=float,
         default=None,
@@ -217,7 +205,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Use Quasi-Random Sampling for structure generation instead of purely random sampling. "
-            "This can improve coverage and convergence when max_local_perturbations > 0."
         ),
     )
     parser.add_argument(
@@ -395,8 +382,6 @@ def _build_state(
     spg_top_k: Optional[int] = None,
     spg_infer_backend: Optional[str] = None,
     lattice_symmetry: Optional[str] = None,
-    max_local_perturbations: Optional[int] = None,
-    perturb_displacement: Optional[float] = None,
     max_eng_rel: Optional[float] = None,
     max_volume: Optional[float] = None,
     list_wp_only: Optional[bool] = None,
@@ -428,10 +413,6 @@ def _build_state(
         run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
     elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
         run_state["lattice_symmetry"] = "any"
-    if max_local_perturbations is not None:
-        run_state["max_local_perturbations"] = max_local_perturbations
-    if perturb_displacement is not None:
-        run_state["perturb_displacement"] = perturb_displacement
     if max_eng_rel is not None:
         run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
         run_state["max_eng_rel_early_stop"] = max(0.0, float(max_eng_rel))
@@ -474,8 +455,6 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         spg_top_k=args.spg_top_k,
         spg_infer_backend=args.spg_backend,
         lattice_symmetry=resolve_cli_symmetry(args),
-        max_local_perturbations=args.local_perturbations,
-        perturb_displacement=args.perturb_displacement,
         max_eng_rel=args.max_eng_rel,
         max_volume=args.max_volume,
         list_wp_only=args.list_wp_only,

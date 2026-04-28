@@ -86,7 +86,7 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
         R2 = _format_scalar(wr.get("r2"), 4)
         Chi2 = _format_scalar(wr.get("chi2"), 4)
         SPG = str(run_state.get("spg") or wr.get("spg") or "")
-        Wyckoff = _extract_xtal_wyckoff(xtal) or ""
+        Wyckoff = str(wr.get("wp_labels") or "") or _extract_xtal_wyckoff(xtal) or ""
         Cell = str([_format_scalar(x, 4) for x in xtal.lattice.encode()])
 
     csv_file_name = os.path.basename(input_csv)

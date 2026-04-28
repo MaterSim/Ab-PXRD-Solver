@@ -203,7 +203,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
 
     # QZ: Just to handle cases with very few peaks with light elements.
     if len(peaks) <= 10 and bg_subtract:
-        state['sim_max'] = 0.4
+        state['max_sim'] = 0.4
         state['max_chi2'] = 0.22
 
     if infer_spg:
@@ -363,7 +363,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
-    sim_max = state.get("sim_max")
+    sim_max = state.get("max_sim")
     if len(state.get("peaks")) <=4: sim_max = 0.2
     eng_min = 1e10
     max_wp = state.get("max_wp")

@@ -1872,19 +1872,9 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     if sim >= max(sim_max - refine_margin, 0.0) or (sim >= refine_sim_min and eng_rel <= refine_eng_window):
                         #title0 = title + f' {eng:.3f}/{eng_best:.3f}'
                         #plot_XRD(x1, y1, x2, y2, x1[peaks], y1[peaks], title0, match_png)
-                        xtal.from_seed(atoms)
+                        xtal.from_seed(atoms)#; print("D****************", xtal);
                         xtal.to_file(match_cif)
                         wr, r2, chi2, _, elapsed = refine_pxrd(match_csv, match_cif, INST_FILE)
-
-                        if wr is None:
-                            # Save a copy of the failed CIF for debugging
-                            _fail_dir = os.path.join(os.getenv("PXRD_TMP_ROOT", "tmp"), "gsas_runs")
-                            os.makedirs(_fail_dir, exist_ok=True)
-                            _fail_dst = os.path.join(_fail_dir, f"failed_ID{struc_count}.cif")
-                            try:
-                                shutil.copy2(match_cif, _fail_dst)
-                            except Exception:
-                                pass
 
                         if wr is not None:
                             refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
@@ -1894,77 +1884,17 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                             if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
                                     best_refined_energy_ok_score = refined_score
                                     best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
-
-                            _do_perturb = (
-                                (local_perturbations < max_local_perturbations or is_new_best_energy) and
-                                should_perturb(sim, eng_rel, wr, r2, chi2,
-                                    min_r2, max_chi2, refine_sim_min, refine_eng_window,
-                                )
-                            )
-                            if _do_perturb:
-                                remaining_perturbations = max_local_perturbations - local_perturbations
-                                # If triggered by a new-best-energy bypass, always allow at least 1 trial
-                                if remaining_perturbations <= 0 and is_new_best_energy:
-                                    remaining_perturbations = 1
-                                perturb_trials = min(remaining_perturbations, 1 if wr is not None else 2)
-                                for perturb_idx in range(perturb_trials):
-                                    local_perturbations += 1
-                                    displacement = max(0.02, perturb_displacement * (0.67 if wr is not None else 1.0))
-                                    perturbed_atoms = perturb_atoms(atoms, displacement=displacement)
-                                    perturbed_atoms = relax_structure(perturbed_atoms, xm.dof, ase_logfile=ase_logfile)
-                                    if perturbed_atoms is None:
-                                        continue
-
-                                    #struc_count += 1  # Increment for each perturbed structure
-
-                                    p_eng = perturbed_atoms.get_potential_energy() / len(perturbed_atoms)
-                                    p_stress = abs(perturbed_atoms.get_stress()[:3].mean())
-                                    p_fmax = abs(perturbed_atoms.get_forces()).max()
-                                    if p_stress > max_stress or p_fmax > max_force:
-                                        #logger.info(
-                                        #    f"  Perturbation {perturb_idx + 1}/{perturb_trials} rejected by stress/force "
-                                        #    f"filters ({p_stress:.3f}, {p_fmax:.3f})."
-                                        #)
-                                        continue
-
-                                    prev_eng_best = eng_best
-                                    next_eng_best = min(prev_eng_best, p_eng)
-                                    p_eng_rel = max(0.0, p_eng - next_eng_best)
-                                    p_is_new_best_energy = p_eng < prev_eng_best
-                                    if p_is_new_best_energy: eng_best = p_eng
-
-                                    p_xrd = XRD(perturbed_atoms, wavelength=wavelength, thetas=thetas,
-                                                res=resolution, SCALED_INTENSITY_TOL=SCALED_INTENSITY_TOL)
-                                    p_x2, p_y2 = p_xrd.get_plot_gsas2(U=0.1, V=-0.1, W=0.5, X=0.1, Y=0.1,
-                                                                      bg_ratio=0.0, mix_ratio=0.0)
-                                    p_y2 = RawDataManager(p_x2, p_y2, bg_subtract=False).y
-                                    p_sim = Similarity((x1, y1), (p_x2, p_y2)).value
-                                    if p_sim >= max(sim_max - refine_margin, 0.0) or (p_sim >= refine_sim_min and p_eng_rel <= refine_eng_window):
-                                        xtal.from_seed(perturbed_atoms)
-                                        xtal.to_file(match_cif)
-                                        p_wr, p_r2, p_chi2, _, p_elapsed = refine_pxrd(match_csv, match_cif, INST_FILE)
-                                        if p_wr is None:
-                                            _fail_dir = os.path.join(os.getenv("PXRD_TMP_ROOT", "tmp"), "gsas_runs")
-                                            os.makedirs(_fail_dir, exist_ok=True)
-                                            _fail_dst = os.path.join(_fail_dir, f"failed_ID{struc_count}_perturb{perturb_idx}.cif")
-                                            try:
-                                                shutil.copy2(match_cif, _fail_dst)
-                                            except Exception:
-                                                pass
-                                        if p_wr is not None and p_r2 is not None and p_chi2 is not None:
-                                            if p_r2 > r2 and p_chi2 < chi2:
-                                                wr, r2, chi2, elapsed = p_wr, p_r2, p_chi2, p_elapsed
-                                                eng, eng_rel, sim = p_eng, p_eng_rel, p_sim
-                                                stress, fmax = p_stress, p_fmax
-                                                is_new_best_energy = p_is_new_best_energy
-                                    msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                                    msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {elapsed:.1f}s"
-                                    if is_new_best_energy:
-                                        msg += ' +++++'
-                            else:
-                                msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                                msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {elapsed:.1f}s"
+                            msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
+                            msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {elapsed:.1f}s"
                         else:
+                            # Save a copy of the failed CIF for debugging
+                            _fail_dir = os.path.join(os.getenv("PXRD_TMP_ROOT", "tmp"), "gsas_runs")
+                            os.makedirs(_fail_dir, exist_ok=True)
+                            _fail_dst = os.path.join(_fail_dir, f"failed_ID{struc_count}.cif")
+                            try:
+                                shutil.copy2(match_cif, _fail_dst)
+                            except Exception:
+                                pass
                             logger.info("  Refinement failed; continuing search without refined metrics.")
                             msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
                             msg += " [refine-failed]"
