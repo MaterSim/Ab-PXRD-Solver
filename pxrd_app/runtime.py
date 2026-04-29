@@ -170,7 +170,7 @@ def format_seconds(seconds: float) -> str:
         hours = total_minutes // 60
         minutes = total_minutes % 60
         return f"{hours}h {minutes}m {seconds_remain}s"
-    return f"{total_minutes}m {seconds_remain:04.1f}s"
+    return f"{total_minutes}m {seconds_remain}s"
 
 
 def emit_timing_summary(logger, run_state: Optional[dict]) -> Optional[str]:
