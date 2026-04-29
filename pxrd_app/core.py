@@ -359,13 +359,11 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_chi2 = state.get("max_chi2")
     max_force = state.get("max_force")
     max_stress = state.get("max_stress")
-    max_local_perturbations = max(0, int(state.get("max_local_perturbations", 2)))
-    perturb_displacement = max(0.0, float(state.get("perturb_displacement", 0.06)))
     max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     sim_max = state.get("max_sim")
     if len(state.get("peaks")) <=4: sim_max = 0.2
-    eng_min = 1e10
+    eng_min = _get_global_best_energy(all_structure_log) or 1e10
     max_wp = state.get("max_wp")
     max_Z = state.get("max_Z")
     max_dof = state.get("max_dof")
@@ -444,7 +442,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         attempt_prefix = run_tmp_dir / f"Match_{run_token}_attempt{attempt_idx + 1}"
         attempt_cif = str(attempt_prefix.with_suffix(".cif"))
 
-        wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count = search_solution(
+        wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count, qrs_id = search_solution(
             cells,
             spg,
             composition,
@@ -472,8 +470,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             max_atoms,
             min_r2,
             max_chi2,
-            max_local_perturbations=max_local_perturbations,
-            perturb_displacement=perturb_displacement,
             structure_log=all_structure_log,
             max_eng_rel_early_stop=max_eng_rel_early_stop,
             min_structures_before_early_stop=min_structures_before_early_stop,
@@ -512,6 +508,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             "attempt": attempt_idx + 1,
             "seed": seed,
             "cif": attempt_cif,
+            "qrs_id": qrs_id,
             "accepted": False,
         }
         candidate["accepted"] = _meets_acceptance(candidate)
@@ -969,7 +966,7 @@ def run_pipeline(state: dict) -> dict:
                         terminate_pair = True
                         break
                     if state["Struc_count"] >= state['max_relax_count']:
-                        logger.info(f"Reached maximum relaxation count ({state['max_relax_count']}); stopping further generation.")
+                        logger.info(f"Reached maximum relaxation ({state['max_relax_count']}); stopping further generation.")
                         terminate_pair = True
                         break
                     #print("++++++++++++++++++ Debug attempt_count:", state["attempt_count"], "Struc_count:", state["Struc_count"])
@@ -1064,6 +1061,10 @@ def run_pipeline(state: dict) -> dict:
         final_trial_state = best_accepted_trial_state or best_trial_state
         final_trial_message = best_accepted_trial_message or best_trial_message
         final_trial_score = best_accepted_trial_score if best_accepted_trial_state is not None else best_trial_score
+        final_trial_state["WP_qrs_id"] = (
+            (final_trial_state.get("wyckoff_result") or {}).get("qrs_id")
+            if state.get("use_qrs") else None
+        )
 
         best_trial_result = final_trial_state["best_result"] or {}
         best_trial_spg = final_trial_state["spg"]

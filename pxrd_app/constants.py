@@ -119,12 +119,12 @@ DEFAULT_STATE = {
     "max_eng_rel": 0.025,
     "min_structures_before_early_stop": 10,
     "ase_logfile": None,
-    "max_attempt_count": 800,
+    "max_attempt_count": 5000,
     "max_relax_count": 1000,  # Limit total relaxations to avoid hang
     "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
-    "max_wp_choices": 20,  # Limit number of WP choices per cell to avoid combinatorial explosion
+    "max_wp_choices": 30,  # Limit number of WP choices per cell to avoid combinatorial explosion
     "wp_csv_path": "database/spg_num_wps_mp.csv",
     "use_qrs": False,  # Whether to use Quasi-Random Sampling for structure generation
     "qrs_method": "sobol",  # Quasi-random sampler used when use_qrs is enabled

@@ -8,7 +8,7 @@ FAILURE_STATUSES = {"no_cells", "no_solution"}
 _DEFAULT_RESULTS_DIR = "Results"
 CSV_COLUMNS = [
     "csv_file_name", "Runtime", "N_struc", "N_attempts", "N_est",
-    "Status", "E", "dE", "R2", "Chi2", "SPG", "Wyckoff", "Cell",
+    "Status", "E", "dE", "R2", "Chi2", "Rwp", "SPG", "Wyckoff", "Cell", "WP_qrs_id",
 ]
 
 
@@ -77,7 +77,8 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
     n_est = run_state.get("Total_est", 0)
 
     # --- Best-structure metrics (only on success) ---
-    E = dE = R2 = Chi2 = SPG = Wyckoff = Cell = ""
+    E = dE = R2 = Chi2 = Rwp = SPG = Wyckoff = Cell = ""
+    WP_qrs_id = ""
     if status_label == "Success":
         wr = run_state.get("wyckoff_result") or {}
         xtal = wr.get("xtal")
@@ -85,9 +86,12 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
         dE = _format_scalar(wr.get("eng_rel"), 4)
         R2 = _format_scalar(wr.get("r2"), 4)
         Chi2 = _format_scalar(wr.get("chi2"), 4)
+        Rwp = _format_scalar(wr.get("wr"), 4)
         SPG = str(run_state.get("spg") or wr.get("spg") or "")
         Wyckoff = str(wr.get("wp_labels") or "") or _extract_xtal_wyckoff(xtal) or ""
         Cell = str([_format_scalar(x, 4) for x in xtal.lattice.encode()])
+        qrs_id_val = run_state.get("WP_qrs_id")
+        WP_qrs_id = str(int(qrs_id_val)) if qrs_id_val is not None else ""
 
     csv_file_name = os.path.basename(input_csv)
     is_placeholder_failure = (
@@ -114,9 +118,11 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
         "dE": dE,
         "R2": R2,
         "Chi2": Chi2,
+        "Rwp": Rwp,
         "SPG": SPG,
         "Wyckoff": Wyckoff,
         "Cell": Cell,
+        "WP_qrs_id": WP_qrs_id,
     }
 
     results_csv = Path(run_state.get("results_dir") or _DEFAULT_RESULTS_DIR) / "summary.csv"
@@ -158,11 +164,11 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
 def format_seconds(seconds: float) -> str:
     total_seconds = max(0.0, float(seconds))
     total_minutes = int(total_seconds // 60)
-    seconds_remain = total_seconds - (60 * total_minutes)
+    seconds_remain = int(total_seconds - (60 * total_minutes))
     if total_minutes >= 60:
         hours = total_minutes // 60
         minutes = total_minutes % 60
-        return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
+        return f"{hours}h {minutes}m {seconds_remain}s"
     return f"{total_minutes}m {seconds_remain:04.1f}s"
 
 

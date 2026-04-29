@@ -1562,23 +1562,6 @@ def get_adaptive_wp_limits(total_candidates, max_to_try):
             limits.append(limit)
     return limits
 
-def should_perturb(sim, eng_rel, wr, r2, chi2, min_r2, max_chi2, refine_sim_min, refine_eng_window):
-    """
-    Decide whether ANY candidate deserves a perturb-and-relax trial,
-    independently of the regen-boost budget.
-
-    More permissive than should_intensify_regen: fires on any reasonable
-    refined result (r2 not too far below target) or high-sim unrefined structure.
-    This ensures structures like r2=0.945 get perturbed even after the regen
-    boost budget is exhausted.
-    """
-    if wr is not None and r2 is not None and chi2 is not None:
-        if r2 >= max(min_r2 - 0.15, 0.75) or chi2 <= min(max_chi2 * 3.0, 0.50):
-            return True
-
-    return sim >= max(refine_sim_min + 0.08, 0.80) and eng_rel <= (refine_eng_window + 0.40)
-
-
 def is_excellent_refinement(r2, chi2, min_r2, max_chi2):
     """Return True for clearly strong refined fits that should stop immediately."""
     if r2 is None or chi2 is None:
@@ -1591,15 +1574,6 @@ def should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termin
     if not is_excellent_refinement(r2, chi2, min_r2, max_chi2):
         return False
     return eng_rel <= max_eng_rel_for_termination
-
-
-def perturb_atoms(atoms, displacement=0.06):
-    """Apply a small random Cartesian displacement to atomic positions."""
-    trial_atoms = atoms.copy()
-    positions = trial_atoms.get_positions()
-    positions += np.random.normal(loc=0.0, scale=displacement, size=positions.shape)
-    trial_atoms.set_positions(positions)
-    return trial_atoms
 
 
 def _normalize_signature_value(value):
@@ -1654,8 +1628,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     match_csv, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, max_wp, max_Z, max_dof, per_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
-                    refine_sim_min=0.7, refine_eng_window=0.5, max_local_perturbations=2,
-                    perturb_displacement=0.06, structure_log=[],
+                    refine_sim_min=0.7, refine_eng_window=0.5, structure_log=[],
                     max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
                     forced_wp_solution=None, ase_logfile=None, global_accepted=False,
                     use_qrs=False, qrs_method='sobol'):
@@ -1711,28 +1684,28 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
 
     def _finalize_result(result, attempt_count=None):
         if result is None: return None
-        wr, r2, chi2, xtal, _eng_best, selected_eng, _sel_eng, count = result
+        wr, r2, chi2, xtal, _eng_best, selected_eng, _sel_eng, count, qrs_id = result
         final_eng_rel = None if selected_eng is None else max(0.0, float(selected_eng) - float(eng_best))
-        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count, attempt_count)
+        return (wr, r2, chi2, xtal, eng_best, selected_eng, final_eng_rel, count, attempt_count, qrs_id)
 
     def _return_best_available(local_candidate, best_refined_result_energy_ok,
                                struc_count=None, attempt_count=None):
         if local_candidate is not None:
             if struc_count is not None:
-                # Replace the last item of local_candidate with struc_count
-                local_candidate = tuple(list(local_candidate[:-1]) + [struc_count])
+                # Replace struc_count (index 7) while preserving qrs_id (index 8)
+                local_candidate = tuple(list(local_candidate[:7]) + [struc_count] + list(local_candidate[8:]))
             return _finalize_result(local_candidate, attempt_count=attempt_count)
 
         if best_refined_result_energy_ok is not None:
             if struc_count is not None:
-                best_refined_result_energy_ok = tuple(list(best_refined_result_energy_ok[:-1]) + [struc_count])
+                best_refined_result_energy_ok = tuple(list(best_refined_result_energy_ok[:7]) + [struc_count] + list(best_refined_result_energy_ok[8:]))
             return _finalize_result(best_refined_result_energy_ok, attempt_count=attempt_count)
 
         if best_refined_result is not None:
             #logger.info("No accepted candidate was found")
-            return (None, None, None, None, eng_best, None, None, struc_count, attempt_count)
+            return (None, None, None, None, eng_best, None, None, struc_count, attempt_count, None)
 
-        return (None, None, None, None, eng_best, None, None, struc_count, attempt_count)
+        return (None, None, None, None, eng_best, None, None, struc_count, attempt_count, None)
 
     #trial_cells = list(cells[:N1])
     early_stop = False
@@ -1786,7 +1759,6 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                 N4 = 1 if xm.dof == 0 else xm.dof * per_dof
                 N_false = 0
                 extra_trials = 0
-                local_perturbations = 0
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9
@@ -1880,10 +1852,10 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                             refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
                             if refined_score > best_refined_score:
                                 best_refined_score = refined_score
-                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
+                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
                             if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
                                     best_refined_energy_ok_score = refined_score
-                                    best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
+                                    best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
                             msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
                             msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {elapsed:.1f}s"
                         else:
@@ -1925,7 +1897,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         energy_ok = eng_rel <= max_eng_rel_for_termination
                         if refined_score is not None and refined_score > local_accepted_score and energy_ok:
                             local_accepted_score = refined_score
-                            local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
+                            local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
 
                         if should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
                             reopt_atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
@@ -1939,7 +1911,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                                     f"  Reoptimized energy: {eng_before:.4f} -> {eng:.4f} eV/atom "
                                     f"(delta={eng - eng_before:+.4f}, eng_rel={eng_rel:.4f})"
                                 )
-                                local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count)
+                                local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
                             early_stop = True
                             logger.info(
                                 f"***Excellent fit within current WP trial (r2={r2:.3f}, chi2={chi2:.3f}) "
