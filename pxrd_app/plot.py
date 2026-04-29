@@ -50,12 +50,12 @@ def plot_energy_vs_r2(
     def _fmt_breakdown(seconds: float) -> str:
         if seconds is None or seconds <= 0: return "N/A"
         total_minutes = int(seconds // 60)
-        seconds_remain = seconds - (60 * total_minutes)
+        seconds_remain = int(seconds - (60 * total_minutes))
         if total_minutes >= 60:
             hours = total_minutes // 60
             minutes = total_minutes % 60
-            return f"{hours}h {minutes}m {seconds_remain:04.1f}s"
-        return f"{total_minutes}m {seconds_remain:04.1f}s"
+            return f"{hours}h {minutes}m {seconds_remain}s"
+        return f"{total_minutes}m {seconds_remain}s"
 
     total_seconds = timing_breakdown_seconds.get("total")
     spg_cell_seconds = timing_breakdown_seconds.get("spg_and_cell")
