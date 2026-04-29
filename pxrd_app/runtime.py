@@ -76,10 +76,10 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
     n_attempts = run_state.get("attempt_count")
     n_est = run_state.get("Total_est", 0)
 
-    # --- Best-structure metrics (only on success) ---
+    # --- Best-structure metrics (on success or conditional success) ---
     E = dE = R2 = Chi2 = Rwp = SPG = Wyckoff = Cell = ""
     WP_qrs_id = ""
-    if status_label == "Success":
+    if status_label in ("Success", "C-Success"):
         wr = run_state.get("wyckoff_result") or {}
         xtal = wr.get("xtal")
         E = _format_scalar(wr.get("selected_energy"), 4)
@@ -143,8 +143,9 @@ def write_results_csv(input_csv: str, run_state: Optional[dict]) -> None:
             if replaced:
                 continue
             existing_status = (row.get("Status") or "").strip()
-            if existing_status == "Success" and status_label != "Success":
-                # Keep the successful row; do not downgrade it with a later failure.
+            _status_rank = {"Success": 2, "C-Success": 1, "Failure": 0}
+            if _status_rank.get(existing_status, 0) > _status_rank.get(status_label, 0):
+                # Keep the higher-ranked status; do not downgrade.
                 updated_rows.append(row)
             else:
                 updated_rows.append(row_data)

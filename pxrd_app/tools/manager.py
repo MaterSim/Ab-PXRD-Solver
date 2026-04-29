@@ -908,15 +908,13 @@ class WPManager:
             for _, row in df_z.iterrows():
                 # Early exit if we've exceeded max_samples during cost estimation
                 if max_samples is not None and enumeration_count >= max_samples:
-                    if verbose:
-                        print(f"Z={Z}: Enumeration limited to {max_samples} samples (cost estimation mode).")
+                    #if verbose: print(f"Z={Z}: Enumeration limited to {max_samples} samples (cost estimation mode).")
                     break
 
                 ids = [int(x) for x in row['wps'].split('-')]
                 count = row['count']
                 nums = [self.group[id].multiplicity for id in ids]
-                if len(ids) > self.max_wp:
-                    continue
+                if len(ids) > self.max_wp: continue
 
                 # Pre-filter: every solution from a row has the same total DOF
                 # (all WPs are always fully assigned), so skip the whole row early.

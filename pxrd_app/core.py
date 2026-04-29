@@ -1068,7 +1068,15 @@ def run_pipeline(state: dict) -> dict:
 
         best_trial_result = final_trial_state["best_result"] or {}
         best_trial_spg = final_trial_state["spg"]
-        status = "Success" if best_trial_result.get("accepted") else "Failure"
+        if best_trial_result.get("accepted"):
+            status = "Success"
+        elif (
+            best_trial_result.get("r2") is not None
+            and best_trial_result["r2"] >= state.get("min_r2", 0.95)
+        ):
+            status = "C-Success"
+        else:
+            status = "Failure"
 
         # End of all-pairs loop: emit global plot covering every structure tried
         tag = state['pxrd_csv'].split("/")[-1].split(".")[0]
