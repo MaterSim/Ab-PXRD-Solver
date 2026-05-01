@@ -579,3 +579,14 @@ if __name__ == "__main__":
     #for match_cif in ['Fails/failed_ID100.cif', 'Fails/failed_ID77.cif']:
     wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE)#, plot=True)
     print(match_cif, wr, r2, chi2, elapsed)
+
+    x, y =simulate_pxrd("data/BPd6.cif",  Tmax=150.0, iparams=INST_FILE, bg_ratio=0.00)
+    plt.plot(x, y)
+    plt.xlabel('2θ (degrees)')
+    plt.ylabel('Intensity (a.u.)')
+    plt.title('Simulated PXRD Pattern')
+    plt.show()
+    # save to CSV
+    import pandas as pd
+    df = pd.DataFrame({'2theta': x, 'intensity': y})
+    df.to_csv("example.csv", index=False)

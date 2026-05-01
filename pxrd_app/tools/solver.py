@@ -1756,7 +1756,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
                 # If DOF=0, allow 1 trial; if DOF*per_dof
-                N4 = 1 if xm.dof == 0 else xm.dof * per_dof
+                N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
                 N_false = 0
                 extra_trials = 0
                 best_sim_in_wpset = 0.0

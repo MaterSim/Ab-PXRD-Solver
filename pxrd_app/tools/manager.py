@@ -990,7 +990,9 @@ class XtalManager:
         self.spg = Group(spg)
         self.WPs = WPs
         self.per_dof = per_dof
+        # Allow more resolution
         self.cell = cell
+        if self.spg.number > 194: self.per_dof = max([self.per_dof, int(self.cell.encode()[0]/0.9)])
         self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
         dof = 0
@@ -1028,9 +1030,6 @@ class XtalManager:
     def generate_structure(self, idx=0):
         """
         Generate the crystal structure from the Wyckoff positions and cell parameters.
-
-        Args:
-            cell (list): Cell parameters
         """
         xtal = pyxtal()
         if self.seeds is not None:
