@@ -194,10 +194,10 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--wp-csv-path",
         type=str,
-        default="database/spg_num_wps_mp.csv",
+        default="pxrd_app/tools/spg_comp_wp.csv",
         help=(
             "Path to CSV file containing number of Wyckoff positions per space group, used for "
-            "estimating enumeration cost and guiding search. Defaults to 'database/spg_num_wps_mp.csv'."
+            "estimating enumeration cost and guiding search. Defaults to 'pxrd_app/tools/spg_num_wps_mp.csv'."
         ),
     )
     parser.add_argument(

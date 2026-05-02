@@ -125,7 +125,7 @@ DEFAULT_STATE = {
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
     "max_wp_choices": 30,  # Limit number of WP choices per cell to avoid combinatorial explosion
-    "wp_csv_path": "database/spg_num_wps_mp.csv",
+    "wp_csv_path": "pxrd_app/tools/spg_comp_wp.csv",
     "use_qrs": False,  # Whether to use Quasi-Random Sampling for structure generation
     "qrs_method": "sobol",  # Quasi-random sampler used when use_qrs is enabled
     "suppress_torch_load_futurewarning": _env_flag("PXRD_SUPPRESS_TORCH_LOAD_FUTUREWARNING", True),

@@ -2,7 +2,7 @@ from math import nan
 import sys
 from pathlib import Path
 from functools import lru_cache
-from typing import Any, Sequence, Tuple, Union, Optional
+from typing import Any, Sequence, Union
 
 # Add peak_finder to path
 peak_path = Path(__file__).parent / "peak_finder"

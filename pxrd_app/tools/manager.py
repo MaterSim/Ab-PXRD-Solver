@@ -15,7 +15,9 @@ from pyxtal import pyxtal
 from pyxtal.lattice import Lattice
 from pyxtal.symmetry import rf, Group
 from pyxtal.database.element import Element
-
+from time import time as _time
+import ast
+from itertools import permutations
 
 DEFAULT_BG_ORDER = 6
 DEFAULT_BG_ITERS = 50
@@ -776,7 +778,7 @@ class WPManager:
         return solutions
 
     def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10, max_atoms=200,
-                 ref_den=None, csv='database/spg_num_wps_mp.csv'):
+                 ref_den=None, csv='pxrd_app/tools/spg_comp_wp.csv'):
         """
         WP Manager is used to infer likely Wyckoff positions from the given space group,
         cell, composition, and density constraint.
@@ -793,7 +795,8 @@ class WPManager:
             csv (str): Path to the CSV file containing Wyckoff position data
         """
         #print(ref_den)
-        df = read_csv(rf("pyxtal", csv))
+        #df = read_csv(rf("pyxtal", csv))
+        df = read_csv(csv)
         self.spg = spg
         self.df = df[df['spg'] == self.spg]
         self.cell = cell
@@ -839,7 +842,7 @@ class WPManager:
             self.Zs = (Z, Z)
         # print(f"Estimated Z range: {self.Zs}, Vol: {volume:.2f}, Vol bounds: [{vol[0]:.2f}, {vol[1]:.2f}]")
 
-    def get_wyckoff_positions_general(self):
+    def get_wp_general(self):
         """
         Infer possible Wyckoff position combinations based on the composition and Z range.
         """
@@ -880,16 +883,14 @@ class WPManager:
         #    # print(f"SPG: {sol[0]}, WPs: {wp_labels}, Num WPs: {sol[4]}, DOF: {sol[5]}")
         return sols
 
-    def get_wyckoff_positions(self, verbose=False, max_samples=None, timing=False):
+    def get_wp(self, max_samples=None, timing=False):
         """
         Infer possible Wyckoff position combinations based on the composition and Z range.
 
         Args:
-            verbose: Print enumeration progress
             max_samples: If set, limit total enumeration to this many samples (for cost estimation)
             timing: If True, print per-Z timing breakdown for each step
         """
-        from time import time as _time
         sols = []
         enumeration_count = 0  # Track enumeration progress
         #print(f"Enumerating Wyckoff position combinations for {self.spg}/{self.composition} with Z in {self.Zs}...")
@@ -968,6 +969,135 @@ class WPManager:
                 break
 
         # Sort the solutions by count and DOF
+        sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))
+        return sols
+
+    def get_wp_from_composition(self, max_samples=None, timing=False):
+        """
+        Infer possible Wyckoff position combinations using per-species WP assignments
+        read directly from the numIons column in the CSV (new format).
+
+        Unlike get_wp, this skips find_wp_assignments because the CSV
+        already encodes which WPs belong to which species. All permutations of species
+        that satisfy the composition are enumerated.
+
+        Args:
+            max_samples: If set, limit total enumeration to this many samples.
+            timing: If True, print per-Z timing breakdown.
+
+        Returns:
+            List of (spg, comp, lattice, wps_per_species, n_wps, total_dof, count, Z)
+            where wps_per_species[i] is the list of WP indices for species i.
+        """
+        sols = []
+        enumeration_count = 0
+        n_group = len(self.group)
+        n_species = len(self.comp)
+
+        for Z in range(self.Zs[0], self.Zs[1] + 1):
+            if max_samples is not None and enumeration_count >= max_samples:
+                break
+
+            comp = [n * Z for n in self.comp]
+            target_numIons = tuple(comp)
+            sorted_target = sorted(target_numIons)
+            n_atoms = sum(comp)
+
+            df_z = self.df[self.df['n_atoms'] == n_atoms]
+            if len(df_z) == 0:
+                continue
+
+            # Pre-parse and filter all rows using itertuples (much faster than iterrows).
+            # Permutation candidates are also computed here to avoid redundant work.
+            parsed_rows = []
+            for row in df_z.itertuples(index=False):
+                try:
+                    row_numIons = tuple(ast.literal_eval(row.numIons))
+                except Exception:
+                    continue
+                if sorted(row_numIons) != sorted_target:
+                    continue
+                try:
+                    raw_wps = [
+                        [int(x) for x in s.split('-')]
+                        for s in row.wps.split(',')
+                    ]
+                except Exception:
+                    continue
+                if len(raw_wps) != n_species:
+                    continue
+                n_wps = sum(len(w) for w in raw_wps)
+                if n_wps > self.max_wp:
+                    continue
+                total_dof = sum(self.group[wp].get_dof() for wps in raw_wps for wp in wps)
+                if total_dof > self.max_dof:
+                    continue
+                perm_indices = [
+                    perm for perm in permutations(range(n_species))
+                    if tuple(row_numIons[perm[i]] for i in range(n_species)) == target_numIons
+                ]
+                if not perm_indices:
+                    continue
+                parsed_rows.append((raw_wps, int(row.count), n_wps, total_dof, perm_indices))
+
+            # Use a set of tuples for O(1) duplicate detection instead of a list.
+            wp_seen = set()
+            t_dup = 0.0
+            n_raw_sols = 0
+            sols_before_z = len(sols)
+
+            for raw_wps, count, n_wps, total_dof, perm_indices in parsed_rows:
+                if max_samples is not None and enumeration_count >= max_samples:
+                    break
+
+                for perm in perm_indices:
+                    n_raw_sols += 1
+                    enumeration_count += 1
+                    if max_samples is not None and enumeration_count >= max_samples:
+                        break
+
+                    wps_per_species = [raw_wps[perm[i]] for i in range(n_species)]
+
+                    if timing:
+                        _t1 = _time()
+
+                    # Flatten all WP indices into one array and map through each
+                    # symmetry order in a single numpy fancy-index call per order.
+                    items_flat = np.fromiter(
+                        (n_group - 1 - item for sublist in wps_per_species for item in sublist),
+                        dtype=np.intp,
+                        count=n_wps,
+                    )
+                    sublens = [len(sublist) for sublist in wps_per_species]
+                    split_pts = np.cumsum(sublens[:-1]).tolist() if len(sublens) > 1 else []
+
+                    duplicate = False
+                    canonical_key = None
+                    for i, order in enumerate(self.orders):
+                        mapped = order[items_flat]
+                        key = tuple(
+                            v for seg in np.split(mapped, split_pts)
+                            for v in np.sort(seg).tolist()
+                        )
+                        if i == 0:
+                            canonical_key = key
+                        if key in wp_seen:
+                            duplicate = True
+                            break
+
+                    if timing:
+                        t_dup += _time() - _t1
+
+                    if not duplicate:
+                        wp_seen.add(canonical_key)
+                        sols.append((self.spg, comp, self.lattice, wps_per_species,
+                                     n_wps, total_dof, count, Z))
+
+            kept_z = len(sols) - sols_before_z
+            if timing:
+                print(f"  Z={Z}: rows={len(df_z)}, raw_sols={n_raw_sols}, "
+                      f"kept={kept_z} | t_dup={t_dup:.4f}s")
+
         sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))
         return sols
 
@@ -1072,18 +1202,18 @@ if __name__ == "__main__":
     from time import time
     spgs, cell, comp, ref_den = [63, 64], [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, (1.04, 3.80)
     spgs, cell, comp, ref_den = [142], [7.53540996, 14.84882202], {'Er': 1, 'B': 4, 'Rh': 4}, (9.13, 10.33)
-    spgs, cell, comp, ref_den = [216], [10.029], {'As': 5, 'Re': 4, 'S': 4}, (6.84, 12.89)
+    #spgs, cell, comp, ref_den = [216], [10.029], {'As': 5, 'Re': 4, 'S': 4}, (6.84, 12.89)
     for spg in spgs:
         print(f"\n--- SPG {spg} ---")
         t0 = time()
-        wp = WPManager(spg, cell, comp, max_wp=15, max_Z=36, max_dof=21, ref_den=ref_den,
-                       csv='database/spg_num_wps_raw.csv')
+        wp = WPManager(spg, cell, comp, max_wp=15, max_Z=36, max_dof=21, ref_den=ref_den)
+                       #csv='database/spg_num_wps_raw.csv')
         t_init = time() - t0
         print(f"  Init: {t_init:.4f}s")
         t1 = time()
-        sols = wp.get_wyckoff_positions(timing=True)
+        sols = wp.get_wp_from_composition(timing=True)
         t_wp = time() - t1
-        print(f"  get_wyckoff_positions total: {t_wp:.4f}s {len(sols)}")
+        print(f"  get_wp_from_composition total: {t_wp:.4f}s {len(sols)}")
         for sol in sols:
             wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
             print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")

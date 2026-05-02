@@ -936,7 +936,7 @@ class CellSolver:
             print(f"Refinement: {cell_init}  {chi2_init:.4f} -> {cell_refined} {chi2_final:.4f}")
         return cell_refined, chi2_final, chi2_half
 
-    def solve(self, max_solutions=20, max_count=100):
+    def solve(self, max_solutions=100, max_count=1000):
         """
         Solve for possible cell parameters based on the provided 2theta values.
 
@@ -1259,7 +1259,10 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                                 min_abc=min_abc, max_abc=max_abc, min_volume=min_volume,
                                 theta_tols=theta_tols, max_guess=solver_max_guess, max_volume=max_volume,
                                 verbose=verbose)
-            base_solutions = solver.solve(max_solutions=25, max_count=100)
+            if bra_index in [11, 12]:
+                base_solutions = solver.solve(max_solutions=100, max_count=1000)
+            else:
+                base_solutions = solver.solve(max_solutions=25, max_count=100)
             if len(base_solutions) == 0: continue
 
             count = 0
@@ -1497,7 +1500,7 @@ def enumerate_wyckoff(cell_dims, spg_list, composition, max_wp, max_dof, max_Z, 
     for spg in spg_list:
         wp_manager = WPManager(spg, cell_dims, composition, max_wp=max_wp, max_Z=max_Z,
                                max_dof=max_dof, ref_den=ref_den, csv=csv_path)
-        local_sols = wp_manager.get_wyckoff_positions(verbose, max_samples=max_samples)
+        local_sols = wp_manager.get_wp_from_composition(max_samples=max_samples)
         #print(f"Enumerated {len(local_sols)} Wyckoff position combinations for SPG {spg} {ref_den}.")
         enumeration_count += len(local_sols)
 
