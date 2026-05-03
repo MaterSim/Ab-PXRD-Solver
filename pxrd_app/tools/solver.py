@@ -1761,40 +1761,26 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                 # If DOF=0, allow 1 trial; if DOF*per_dof
                 N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
                 N_false = 0
-                extra_trials = 0
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9
                 # Exit a WP set early if the first warm-up trials all yield very low sim.
                 # Use a conservative threshold — well below refine_sim_min — so only
                 # truly hopeless WP combinations are skipped.
-                wpset_warmup = max(4, N4 // 3)
                 wpset_low_sim_exit = max(0.35, refine_sim_min - 0.35)
                 trial_idx = 0
-                while trial_idx < (N4 + 1 + extra_trials):
+                while trial_idx < (N4 + 1):
                     trial_idx += 1
                     attempt_count += 1
-                    if N_false > max([4, N4 // 2]):
-                        #logger.info("Too many invalid structures, skip....")
-                        break
-                    _dbg(
-                        f"[NDBG] pre-generate spg={spg_sol} wp#{num_wps} dof={xm.dof} "
-                        f"trial={trial_idx} skips={xm.skips}"
-                    )
                     xtal = xm.generate_structure(trial_idx)
                     actual_idx = trial_idx + xm.skips
                     _dbg(f"[NDBG] post-generate valid={xtal.valid} actual_idx={actual_idx}")
-                    if not xtal.valid:
-                        N_false += 1
-                        continue
-                    _dbg("[NDBG] pre-relax")
                     atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
                     _dbg(f"[NDBG] post-relax atoms_is_none={atoms is None}")
                     if atoms is None:
                         N_false += 1
                         continue
 
-                    _dbg("[NDBG] pre-energy-stress")
                     eng = atoms.get_potential_energy() / len(atoms)
                     stress = abs(atoms.get_stress()[:3].mean())
                     fmax = abs(atoms.get_forces()).max()
@@ -1823,9 +1809,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     if sim > best_sim_in_wpset: best_sim_in_wpset = sim
                     # Early exit: if after the warm-up window the WP set has never reached
                     # even a very low sim, it is very unlikely to produce a useful structure.
-                    if not use_qrs and (valid_trials_in_wpset >= wpset_warmup and
-                            best_sim_in_wpset < wpset_low_sim_exit and
-                            extra_trials == 0):
+                    if not use_qrs and best_sim_in_wpset < wpset_low_sim_exit:
                         logger.info(
                             f"  Low-sim early exit: best_sim={best_sim_in_wpset:.3f} < "
                             f"{wpset_low_sim_exit:.2f} after {valid_trials_in_wpset} valid trials; "
