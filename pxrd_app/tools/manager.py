@@ -1122,7 +1122,18 @@ class XtalManager:
         self.per_dof = per_dof
         # Allow more resolution
         self.cell = cell
-        if self.spg.number > 194: self.per_dof = max([self.per_dof, int(self.cell.encode()[0]/0.9)])
+        if self.spg.number > 194:
+            self.per_dof = max([self.per_dof, int(self.cell.encode()[0]/0.9)])
+        else:
+            if self.spg.number > 15:
+                max_abc = max(self.cell.encode())
+            else:
+                max_abc = max(self.cell.encode()[:3])
+            if self.cell.volume > 1000:
+                self.per_dof = max([self.per_dof, int(max_abc/1.5)])
+            else: # 7.2
+                self.per_dof = max([self.per_dof, int(max_abc/1.8)])
+
         self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
         dof = 0
@@ -1170,7 +1181,7 @@ class XtalManager:
                 else:
                     x = self.cell.encode()
                 xtal.from_spg_wps_rep(self.spg.number, self.sites_flat, x, self.elements_flat)
-                if len(xtal.check_short_distances(r=0.8)) > 0:
+                if len(xtal.check_short_distances(r=0.65)) > 0:
                     self.skips += 1
                 else:
                     #xtal.to_file(f"debug.cif", fmt='cif')
