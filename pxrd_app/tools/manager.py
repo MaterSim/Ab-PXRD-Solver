@@ -1132,7 +1132,8 @@ class XtalManager:
             if self.cell.volume > 1000:
                 self.per_dof = max([self.per_dof, int(max_abc/1.5)])
             else: # 7.2
-                self.per_dof = max([self.per_dof, int(max_abc/1.8)])
+                self.per_dof = max([self.per_dof, int(max_abc/1.2)])
+            print("The updated per_dof", self.per_dof, self.spg.number)
 
         self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
