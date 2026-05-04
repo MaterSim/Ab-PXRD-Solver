@@ -1144,7 +1144,7 @@ class CellSolver:
 
 def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, total_square=25,
                     theta_tols=[0.1, 0.15, 0.5], min_abc=2.0, max_abc=30.0,
-                    min_volume=20.0, max_volume=None, verbose=False):
+                    min_volume=20.0, max_volume=None, verbose=False, crystal_system=None):
         """
         A smarter version of CellSolver that automatically guess the space group and uses
         more intelligent heuristics to generate hkl guesses.
@@ -1196,6 +1196,20 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
             ('monoclinic-P', 2, 4, [3, 4, 6, 7, 10, 11, 13, 14]),
         ]
+        if crystal_system is not None:
+            cs = crystal_system.lower().strip()
+            _cs_map = {
+                'cubic': {'cubic'},
+                'hexagonal': {'hexagonal'},
+                'trigonal': {'trigonal', 'hexagonal'},
+                'tetragonal': {'tetragonal'},
+                'orthorhombic': {'orthorhombic'},
+                'monoclinic': {'monoclinic'},
+                'triclinic': {'triclinic'},
+            }
+            allowed_prefixes = _cs_map.get(cs, None)
+            if allowed_prefixes is not None:
+                bra_list = [b for b in bra_list if b[0].split('-')[0] in allowed_prefixes]
         min_mismatch = max_mismatch + 1
         rescue_stats = {
             "triggered": 0,
