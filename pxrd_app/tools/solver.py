@@ -1191,7 +1191,7 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             ('orthorhombic-I', 7, 0, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
             ('orthorhombic-C', 6, 0, [21, 20, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
             ('orthorhombic-A', 5, 0, [38, 39, 40, 41]),
-            ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 33, 34, 47, 48, 49,
+            ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 47, 48, 49,
                                       50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]),
             ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
             ('monoclinic-P', 2, 4, [3, 4, 6, 7, 10, 11, 13, 14]),
@@ -1226,9 +1226,9 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             # combinatorics can explode (e.g., monoclinic-C > 1e6 raw guesses).
             if bra_type.startswith('monoclinic'):
                 solver_hkl_max = (
-                    min(int(hkl_max[0]), 3),
-                    min(int(hkl_max[1]), 4),
-                    min(int(hkl_max[2]), 4),
+                    min(hkl_max[0], 3),
+                    min(hkl_max[1], 4),
+                    min(hkl_max[2], 4),
                 )
                 solver_max_square = min(int(max_square), 20)
                 solver_total_square = min(int(total_square), 28)
@@ -1240,9 +1240,9 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                 solver_max_guess = 25000
             elif bra_index in [9, 10, 11, 12]: # teragonal and hexagonal
                 solver_hkl_max = (
-                    min(int(hkl_max[0]), 3),
-                    min(int(hkl_max[1]), 3),
-                    min(int(hkl_max[2]), 10),
+                    max(hkl_max[0], 4),
+                    max(hkl_max[1], 4),
+                    max(hkl_max[2], 10),
                 )
 
             if bra_index in [15, 14, 8, 7]: # orthorhombic
@@ -1775,6 +1775,9 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     xtal = xm.generate_structure(trial_idx)
                     actual_idx = trial_idx + xm.skips
                     _dbg(f"[NDBG] post-generate valid={xtal.valid} actual_idx={actual_idx}")
+                    if not xtal.valid:
+                        N_false += 1
+                        continue
                     atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
                     _dbg(f"[NDBG] post-relax atoms_is_none={atoms is None}")
                     if atoms is None:

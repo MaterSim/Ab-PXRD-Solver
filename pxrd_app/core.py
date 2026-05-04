@@ -160,6 +160,16 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     spg_infer_backend = state["spg_infer_backend"].strip().lower()
 
     spg = int(spg_from_filename) if spg_from_filename is not None else 0
+
+    # Resolve the crystal-system filter that will be applied during SPG inference.
+    lattice_filter = str(state.get("lattice_symmetry", "auto") or "auto").strip().lower()
+    if lattice_filter == "auto":
+        infer_crystal_system = spg_to_crystal_system(spg) if spg else None
+    elif lattice_filter in VALID_LATTICE_SYMMETRIES:
+        infer_crystal_system = lattice_filter
+    else:
+        infer_crystal_system = None  # "any" or unrecognised → no restriction
+
     composition = parse_formula(formula)
     min_abc = state["min_abc"]
     wavelength = state["wavelength"]
@@ -215,6 +225,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
             spg_infer_backend=spg_infer_backend,
             spg_top_k=spg_top_k,
             max_volume=max_volume,
+            crystal_system=infer_crystal_system,
         )
         predictions = result.get("predictions") or []
         state["spg_predictions"] = [spg for spg, _prob in predictions]

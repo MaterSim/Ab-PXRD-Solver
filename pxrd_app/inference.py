@@ -203,6 +203,7 @@ def infer_spg_from_backend(
     spg_infer_backend: str,
     spg_top_k: int,
     max_volume: Optional[float],
+    crystal_system: Optional[str] = None,
 ) -> dict:
     backend = str(spg_infer_backend or "model").strip().lower()
     if backend not in SPG_INFER_BACKENDS:
@@ -230,6 +231,7 @@ def infer_spg_from_backend(
             min_volume=20.0,
             max_volume=max_volume,
             verbose=False,
+            crystal_system=crystal_system,
         )
         result["smart_cell_ranked_spg_cells"] = rank_smart_cell_spg_cell_solutions(smart_solutions)
         candidate_map = build_ranked_smart_cell_solution_cache(smart_solutions)
