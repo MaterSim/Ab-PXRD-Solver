@@ -34,20 +34,21 @@ def get_pair_priority(
     est_trials: int,
     volume: float,
     missing_peaks: int,
+    chi2: float,
     min_trials: int,
     min_volume: float,
     max_missing: int,
     trial_weight: float = 0.5,
-    volume_weight: float = 0.5,
+    vol_weight: float = 0.5,
 ) -> float:
     safe_trials = max(1.0, float(est_trials))
     safe_volume = max(1e-6, float(volume))
     ref_trials = max(1.0, float(min_trials))
     ref_volume = max(1e-6, float(min_volume))
     trial_ratio = safe_trials / ref_trials
-    volume_ratio = safe_volume / ref_volume
-    missing_score = (missing_peaks + 1) / (max_missing + 1)
-    return (trial_ratio ** trial_weight) * (volume_ratio ** volume_weight) * (missing_score ** 0.5)
+    vol_ratio = safe_volume / ref_volume
+    missing = (missing_peaks + 1) / (max_missing + 1)
+    return (trial_ratio ** trial_weight) * (vol_ratio ** vol_weight) * (missing ** 0.5) * (chi2 ** 0.5)
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
@@ -837,6 +838,7 @@ def run_pipeline(state: dict) -> dict:
                 member["est_trials"],
                 member["vol"],
                 member["cell"].missing,
+                member["cell"].chi2,
                 min_pair_trials,
                 min_pair_volume,
                 max_missing,
@@ -905,6 +907,7 @@ def run_pipeline(state: dict) -> dict:
     spg_cell_end_time = time.perf_counter()
     structure_start_time = spg_cell_end_time
     terminate_pair = False
+    stop_after_pair = False  # finish current pair's WPs, then stop
     structure_limit = state['min_structures_before_early_stop']
     max_wp_choices = state.get("max_wp_choices")
     N_cells = len(all_seed_cells)
@@ -989,6 +992,11 @@ def run_pipeline(state: dict) -> dict:
                         best_trial_state = trial_state
                         best_trial_message = trial_message
 
+                    r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
+                    _min_r2 = float(state.get("min_r2") or 0.9)
+                    # Matches the solver-level is_excellent_refinement threshold
+                    excellent_r2 = (r2_val is not None and r2_val >= max(_min_r2 + 0.03, 0.98))
+
                     if trial_result.get("accepted"):
                         global_accepted_exists = True
                         trial_score_for_accepted = trial_score if trial_score is not None else -1e9
@@ -998,7 +1006,6 @@ def run_pipeline(state: dict) -> dict:
                             best_accepted_trial_message = trial_message
                         _emit_accepted_solution(spg_val, trial_result)
                         # For inferred-SPG early exit, require stricter criteria: R² > 0.93 AND χ² < 0.18
-                        r2_val, chi2_val = trial_result.get("r2"), trial_result.get("chi2")
                         strict_early_exit = (
                             r2_val is not None and chi2_val is not None and
                             r2_val >= 0.93 and chi2_val < 0.18
@@ -1035,6 +1042,25 @@ def run_pipeline(state: dict) -> dict:
                                     f"and {wp_attempted} WP candidate(s).")
                                     terminate_pair = True
                                     break
+                    elif excellent_r2:
+                        # The WP-level solver fired its early stop (r2 >= 0.98) but the
+                        # result is not strictly accepted (chi2 slightly exceeds threshold).
+                        # Finish the remaining WPs for this pair, but don't start new pairs.
+                        candidate_energy = trial_result.get("selected_energy")
+                        global_best_energy = _get_global_best_energy(global_structure_log)
+                        global_eng_rel = trial_result.get("eng_rel")
+                        if global_eng_rel is None and candidate_energy is not None and global_best_energy is not None:
+                            global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
+                        max_eng_rel_early_stop = max(0.0, float(state.get("max_eng_rel_early_stop") or state.get("max_eng_rel") or 0.20))
+                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop)
+                        enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
+                        if energy_ok and enough_structures and not stop_after_pair:
+                            stop_after_pair = True
+                            logger.info(
+                                f"Excellent r2 fit (not strictly accepted: R2={r2_val:.4f}, "
+                                f"Chi2={chi2_val:.4f}, dE_global={global_eng_rel:.4f}) for spg={spg_val}. "
+                                f"Will finish remaining WPs for pair {rank_idx}, then stop."
+                            )
 
                     # If a globally-accepted solution already exists (from any
                     # previous WP/pair) and the minimum-structures budget is
@@ -1052,6 +1078,13 @@ def run_pipeline(state: dict) -> dict:
                 if terminate_pair: break
                 prev_limit = limit
             if terminate_pair: break
+            if stop_after_pair:
+                logger.info(
+                    f"Stopping after pair {rank_idx}/{len(all_seed_cells)} "
+                    f"(excellent r2 fit found; all WPs for this pair have been explored)."
+                )
+                terminate_pair = True
+                break
 
     state["Total_est"] = total_count
     state["structure_log"] = global_structure_log

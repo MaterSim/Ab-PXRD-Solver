@@ -103,7 +103,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         "--spg-top-k",
         type=int,
         choices=COMMON_SPG_TOP_K_CHOICES,
-        default=150,
+        default=160,
         help="Number of inferred space-group options to evaluate/show.",
     )
     parser.add_argument(
