@@ -373,7 +373,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_chi2 = state.get("max_chi2")
     max_force = state.get("max_force")
     max_stress = state.get("max_stress")
-    max_eng_rel_early_stop = state.get("max_eng_rel_early_stop", state.get("max_eng_rel", None))
+    max_eng_rel = state.get("max_eng_rel")
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     sim_max = state.get("max_sim")
     if len(state.get("peaks")) <=4: sim_max = 0.2
@@ -485,7 +485,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             min_r2,
             max_chi2,
             structure_log=all_structure_log,
-            max_eng_rel_early_stop=max_eng_rel_early_stop,
+            max_eng_rel=max_eng_rel,
             min_structures_before_early_stop=min_structures_before_early_stop,
             forced_wp_solution=forced_wp_solution,
             ase_logfile=state.get("ase_logfile"),
@@ -911,6 +911,7 @@ def run_pipeline(state: dict) -> dict:
     structure_limit = state['min_structures_before_early_stop']
     max_wp_choices = state.get("max_wp_choices")
     N_cells = len(all_seed_cells)
+    max_eng_rel = max(0.0, state.get("max_eng_rel"))
 
     for it in range(3):
         # Just in case some strctures failed very frequently
@@ -947,7 +948,7 @@ def run_pipeline(state: dict) -> dict:
                     # at the outer-loop boundary, to avoid overshooting by 1+ WPs.
                     if len(global_structure_log) >= structure_limit and terminate_pair:
                         logger.info(
-                            f"Reached maximum structure limit ({structure_limit}) while exploring pair "
+                            f"Reached max structure limit ({structure_limit}) while exploring pair "
                             f"{rank_idx}/{len(all_seed_cells)}; stopping further generation."
                         )
                         break
@@ -978,11 +979,11 @@ def run_pipeline(state: dict) -> dict:
                     state["attempt_count"] = trial_state["attempt_count"]
                     trial_result = trial_state.get("wyckoff_result") or {}
                     if state["attempt_count"] >= state['max_attempt_count']:
-                        logger.info(f"Reached maximum attempt ({state['max_attempt_count']}); stopping further generation.")
+                        logger.info(f"Reached max attempt ({state['max_attempt_count']}); stopping further generation.")
                         terminate_pair = True
                         break
                     if state["Struc_count"] >= state['max_relax_count']:
-                        logger.info(f"Reached maximum relaxation ({state['max_relax_count']}); stopping further generation.")
+                        logger.info(f"Reached max relaxation ({state['max_relax_count']}); stopping further generation.")
                         terminate_pair = True
                         break
                     #print("++++++++++++++++++ Debug attempt_count:", state["attempt_count"], "Struc_count:", state["Struc_count"])
@@ -1015,15 +1016,14 @@ def run_pipeline(state: dict) -> dict:
                         global_eng_rel = trial_result.get("eng_rel")
                         if global_eng_rel is None and candidate_energy is not None and global_best_energy is not None:
                             global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
-                        max_eng_rel_early_stop = max(0.0, float(state.get("max_eng_rel_early_stop") or state.get("max_eng_rel") or 0.20))
-                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop)
+                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel)
                         enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
                         if strict_early_exit:
                             if not energy_ok:
                                 logger.info(
                                     f"Good fit found for spg={spg_val}, but skipping quality-based early stop "
                                     f"because dE_global={global_eng_rel:.4f} exceeds "
-                                    f"{max_eng_rel_early_stop:.4f} eV/atom; search may still stop via "
+                                    f"{max_eng_rel:.4f} eV/atom; search may still stop via "
                                     f"the structure-budget criterion."
                                 )
                             else:
@@ -1051,8 +1051,7 @@ def run_pipeline(state: dict) -> dict:
                         global_eng_rel = trial_result.get("eng_rel")
                         if global_eng_rel is None and candidate_energy is not None and global_best_energy is not None:
                             global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
-                        max_eng_rel_early_stop = max(0.0, float(state.get("max_eng_rel_early_stop") or state.get("max_eng_rel") or 0.20))
-                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel_early_stop)
+                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel)
                         enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
                         if energy_ok and enough_structures and not stop_after_pair:
                             stop_after_pair = True

@@ -415,7 +415,6 @@ def _build_state(
         run_state["lattice_symmetry"] = "any"
     if max_eng_rel is not None:
         run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
-        run_state["max_eng_rel_early_stop"] = max(0.0, float(max_eng_rel))
     if max_volume is not None:
         max_volume = float(max_volume)
         if max_volume > 0:

@@ -1646,7 +1646,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, max_wp, max_Z, max_dof, per_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, structure_log=[],
-                    max_eng_rel_early_stop=None, min_structures_before_early_stop=10,
+                    max_eng_rel=None, min_structures_before_early_stop=10,
                     forced_wp_solution=None, ase_logfile=None, global_accepted=False,
                     use_qrs=False, qrs_method='sobol'):
     """
@@ -1687,16 +1687,14 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
     # Special case for single-element systems: be more permissive to allow more candidates to be refined and potentially find a good match.
     if len(composition.keys()) == 1: sim_max = min(sim_max, 0.4)  # be more permissive for single-element systems where sim is less reliable
     eng_best = eng_min
-    best_refined_result = None
-    best_refined_score = -1e9
     best_refined_result_energy_ok = None
     best_refined_energy_ok_score = -1e9
     min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
 
-    if max_eng_rel_early_stop is None:
-        max_eng_rel_for_termination = max(float(refine_eng_window), 0.30)
+    if max_eng_rel is None:
+        max_eng_rel_for_termination = refine_eng_window
     else:
-        max_eng_rel_for_termination = max(0.0, float(max_eng_rel_early_stop))
+        max_eng_rel_for_termination = max_eng_rel
 
 
     def _finalize_result(result, attempt_count=None):
@@ -1717,10 +1715,6 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
             if struc_count is not None:
                 best_refined_result_energy_ok = tuple(list(best_refined_result_energy_ok[:7]) + [struc_count] + list(best_refined_result_energy_ok[8:]))
             return _finalize_result(best_refined_result_energy_ok, attempt_count=attempt_count)
-
-        if best_refined_result is not None:
-            #logger.info("No accepted candidate was found")
-            return (None, None, None, None, eng_best, None, None, struc_count, attempt_count, None)
 
         return (None, None, None, None, eng_best, None, None, struc_count, attempt_count, None)
 
@@ -1768,6 +1762,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     per_dof,
                     use_seeds=use_qrs,
                     qrs_method=qrs_method,
+                    factor = 1 if len(cells) > 5 else 2,
                 )
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
@@ -1853,15 +1848,13 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         wr, r2, chi2, _, elapsed = refine_pxrd(match_csv, match_cif, INST_FILE)
 
                         if wr is not None:
-                            refined_score = float((1.5 * r2) - (0.4 * wr) - (0.2 * chi2))
-                            if refined_score > best_refined_score:
-                                best_refined_score = refined_score
-                                best_refined_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
-                            if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
-                                    best_refined_energy_ok_score = refined_score
-                                    best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
+                            refined_score = (1.5 * r2) - (0.4 * wr) - (0.2 * chi2)
                             msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
-                            msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {elapsed:.1f}s"
+                            msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {refined_score:.1f}, {elapsed:.1f}s"
+                            if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
+                                best_refined_energy_ok_score = refined_score
+                                best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
+                                msg += " [best-energy-ok]"
                         else:
                             # Save a copy of the failed CIF for debugging
                             _fail_dir = os.path.join(os.getenv("PXRD_TMP_ROOT", "tmp"), "gsas_runs")

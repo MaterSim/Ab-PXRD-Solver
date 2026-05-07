@@ -1103,7 +1103,7 @@ class WPManager:
 
 class XtalManager:
     def __init__(self, spg, species, numIons, cell, WPs, per_dof, use_seeds=False,
-                 qrs_method='sobol'):
+                 qrs_method='sobol', factor=1):
         """
         Crystal Manager is used to handle crystal structure related operations.
 
@@ -1116,6 +1116,7 @@ class XtalManager:
             per_dof (int): Number of parameters per degree of freedom
             use_seeds (bool): Whether to use seed structures for generation
             qrs_method (str): Quasi-random sampler to use when seed structures are enabled.
+            factor (int): Scaling factor for per_dof when using qms (default: 1)
         """
         self.spg = Group(spg)
         self.WPs = WPs
@@ -1130,9 +1131,9 @@ class XtalManager:
             else:
                 max_abc = max(self.cell.encode()[:3])
             if self.cell.volume > 1000:
-                self.per_dof = max([self.per_dof, int(max_abc/1.5)])
+                self.per_dof = max([self.per_dof, int(max_abc/1.5)]) * factor
             else: # 7.2
-                self.per_dof = max([self.per_dof, int(max_abc/1.2)])
+                self.per_dof = max([self.per_dof, int(max_abc/1.2)]) * factor
             print("The updated per_dof", self.per_dof, self.spg.number)
 
         self.species = species#; print(f"  Species: {self.species}")
