@@ -1783,7 +1783,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     attempt_count += 1
                     xtal = xm.generate_structure(trial_idx)
                     actual_idx = trial_idx + xm.skips
-                    _dbg(f"[NDBG] post-generate valid={xtal.valid} actual_idx={actual_idx}")
+                    _dbg(f"[NDBG] post-generate valid={xtal.valid} {trial_idx}/{actual_idx}/{N4}")
                     if not xtal.valid:
                         N_false += 1
                         continue

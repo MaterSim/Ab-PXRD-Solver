@@ -1153,7 +1153,7 @@ class XtalManager:
         self.sites_flat = sites_flat
         self.elements_flat = elements_flat
         if use_seeds:
-            n_seeds = (self.per_dof + 8) * dof + 2
+            n_seeds = (self.per_dof + 15) * dof + 2
             method = str(qrs_method).strip().lower()
             if method == 'halton':
                 _sampler = Halton(d=max(dof, 1), scramble=False)
