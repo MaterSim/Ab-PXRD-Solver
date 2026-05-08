@@ -128,6 +128,16 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--spg",
+        type=int,
+        default=None,
+        help=(
+            "Restrict the search to a single space group number (1-230). "
+            "When --infer-spg is set, this filters the inferred SPG list to only this space group. "
+            "Without --infer-spg, it overrides the space group parsed from the filename."
+        ),
+    )
+    parser.add_argument(
         "--max-eng-rel",
         type=float,
         default=None,
@@ -382,6 +392,7 @@ def _build_state(
     spg_top_k: Optional[int] = None,
     spg_infer_backend: Optional[str] = None,
     lattice_symmetry: Optional[str] = None,
+    force_spg: Optional[int] = None,
     max_eng_rel: Optional[float] = None,
     max_volume: Optional[float] = None,
     list_wp_only: Optional[bool] = None,
@@ -413,6 +424,12 @@ def _build_state(
         run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
     elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
         run_state["lattice_symmetry"] = "any"
+    if force_spg is not None:
+        spg_val = int(force_spg)
+        if 1 <= spg_val <= 230:
+            run_state["force_spg"] = spg_val
+        else:
+            logger.warning(f"Ignoring invalid --spg={spg_val}; must be between 1 and 230.")
     if max_eng_rel is not None:
         run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
     if max_volume is not None:
@@ -454,6 +471,7 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         spg_top_k=args.spg_top_k,
         spg_infer_backend=args.spg_backend,
         lattice_symmetry=resolve_cli_symmetry(args),
+        force_spg=args.spg,
         max_eng_rel=args.max_eng_rel,
         max_volume=args.max_volume,
         list_wp_only=args.list_wp_only,

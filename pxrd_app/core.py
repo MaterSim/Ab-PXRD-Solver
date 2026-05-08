@@ -738,8 +738,26 @@ def run_pipeline(state: dict) -> dict:
             if len(predicted_spgs) == 0:
                 logger.info(f"No SPG candidates after applying symmetry filter '{target_system}'.")
                 return state
+
+        force_spg = state.get("force_spg")
+        if force_spg is not None:
+            before = len(predicted_spgs)
+            predicted_spgs = [sg for sg in predicted_spgs if sg == int(force_spg)]
+            logger.info(
+                f"Applying --spg filter: restricted to spg={force_spg}. "
+                f"Kept {len(predicted_spgs)}/{before} inferred SG candidate(s)."
+            )
+            if len(predicted_spgs) == 0:
+                logger.info(f"No SPG candidates match --spg={force_spg}; aborting search.")
+                return state
     else:
-        predicted_spgs = [state["spg"]]
+        force_spg = state.get("force_spg")
+        if force_spg is not None:
+            predicted_spgs = [int(force_spg)]
+            logger.info(f"--spg override: using spg={force_spg} (ignoring filename SPG={state['spg']}).")
+            state["spg"] = int(force_spg)
+        else:
+            predicted_spgs = [state["spg"]]
         state["spg_predictions"] = predicted_spgs
         logger.info(f"No SPG inference. Using provided SPG: {predicted_spgs[0]}")
 
