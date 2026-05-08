@@ -1153,7 +1153,7 @@ class XtalManager:
         self.sites_flat = sites_flat
         self.elements_flat = elements_flat
         if use_seeds:
-            n_seeds = (self.per_dof + 15) * dof + 2
+            n_seeds = max(8000, (self.per_dof + 25) * dof + 2)
             method = str(qrs_method).strip().lower()
             if method == 'halton':
                 _sampler = Halton(d=max(dof, 1), scramble=False)
@@ -1183,11 +1183,14 @@ class XtalManager:
                 else:
                     x = self.cell.encode()
                 xtal.from_spg_wps_rep(self.spg.number, self.sites_flat, x, self.elements_flat)
-                if len(xtal.check_short_distances(r=0.65)) > 0:
+                if not xtal.valid:
+                    self.skips += 1
+                elif len(xtal.check_short_distances(r=0.7)) > 0:# or not xtal.valid:
+                    #print(f"Distance, {len(xtal.check_short_distances(r=0.65))}")
                     self.skips += 1
                 else:
-                    #xtal.to_file(f"debug.cif", fmt='cif')
-                    #print(f"Generating: {idx+self.skips}, {x}, {self.spg.number}")
+                    #print(xtal)
+                    #print(f"Generating: {idx+self.skips}, {self.seeds[id].tolist()}, {xtal.valid}")
                     break
         else:
             xtal.from_random(3, self.spg, self.species, self.numIons,

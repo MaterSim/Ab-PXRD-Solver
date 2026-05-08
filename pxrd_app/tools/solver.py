@@ -1769,7 +1769,6 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                 )
                 # If DOF=0, allow 1 trial; if DOF*per_dof
                 N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
-                N_false = 0
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9
@@ -1783,23 +1782,18 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     attempt_count += 1
                     xtal = xm.generate_structure(trial_idx)
                     actual_idx = trial_idx + xm.skips
-                    _dbg(f"[NDBG] post-generate valid={xtal.valid} {trial_idx}/{actual_idx}/{N4}")
-                    if not xtal.valid:
-                        N_false += 1
-                        continue
+                    #print(f"[NDBG] post-generate valid={xtal.valid} {trial_idx}/{actual_idx}/{N4}")
+                    #print(xtal.get_xtal_string())
+                    if not xtal.valid: continue
                     atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
                     _dbg(f"[NDBG] post-relax atoms_is_none={atoms is None}")
-                    if atoms is None:
-                        N_false += 1
-                        continue
+                    if atoms is None: continue
 
                     eng = atoms.get_potential_energy() / len(atoms)
                     stress = abs(atoms.get_stress()[:3].mean())
                     fmax = abs(atoms.get_forces()).max()
                     _dbg(f"[NDBG] post-energy-stress eng={eng:.4f} stress={stress:.4f} fmax={fmax:.4f}")
-                    if stress > max_stress or fmax > max_force:
-                        N_false += 1
-                        continue
+                    if stress > max_stress or fmax > max_force: continue
                     prev_eng_best = eng_best
                     next_eng_best = min(prev_eng_best, eng)
                     eng_rel = max(0.0, eng - next_eng_best)
@@ -1916,11 +1910,21 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                             )
                     if (struc_count >= min_structures_before_early_stop
                             or len(structure_log) >= min_structures_before_early_stop) and early_stop:
-                        logger.info(
-                            f"Early stop triggered after {struc_count} local / "
-                            f"{len(structure_log)} global structures; terminating current WP search."
-                        )
-                        return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count, attempt_count=attempt_count)
+                        # Recompute the effective eng_rel of the best candidate against
+                        # the current eng_best.  A later structure in this same WP trial
+                        # may have found a lower energy, demoting the early-stop candidate
+                        # above the acceptable energy threshold.  If so, keep searching.
+                        best_for_check = local_accepted_result or best_refined_result_energy_ok
+                        if best_for_check is not None:
+                            current_final_eng_rel = max(0.0, float(best_for_check[5]) - float(eng_best))
+                            if current_final_eng_rel > max_eng_rel_for_termination:
+                                early_stop = False
+                        if early_stop:
+                            logger.info(
+                                f"Early stop triggered after {struc_count} local / "
+                                f"{len(structure_log)} global structures; terminating current WP search."
+                            )
+                            return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count, attempt_count=attempt_count)
 
             prev_limit = limit
         # Correct the structure count in the final accepted result if it exists, to reflect the total number of structures generated so far.
