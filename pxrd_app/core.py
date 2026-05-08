@@ -48,7 +48,7 @@ def get_pair_priority(
     trial_ratio = safe_trials / ref_trials
     vol_ratio = safe_volume / ref_volume
     missing = (missing_peaks + 1) / (max_missing + 1)
-    return (trial_ratio ** trial_weight) * (vol_ratio ** vol_weight) * (missing ** 0.5) * (chi2 ** 0.5)
+    return (trial_ratio ** trial_weight) * (vol_ratio ** vol_weight) * (missing ** 0.5) * (chi2 ** 0.4)
 
 def _safe_name_token(value: str | None, fallback: str = "unknown") -> str:
     text = str(value or "").strip()
@@ -353,7 +353,7 @@ def run_cell_solver(state: dict) -> dict:
 
 
 def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counter=None,
-                       global_accepted: bool = False) -> str:
+                       global_accepted: bool = False, factor=1) -> str:
     spg = state.get("spg")
     formula = state.get("formula")
     cells = state.get("cells")
@@ -494,6 +494,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             global_accepted=global_accepted,
             use_qrs=state.get("use_qrs"),
             qrs_method=state.get("qrs_method", "sobol"),
+            factor=factor,
         )
 
         state["attempt_count"] += attempt_count
@@ -701,12 +702,21 @@ def run_pipeline(state: dict) -> dict:
                                                  max_samples=max_samples, csv_path=csv_path)
         #print(f"Estimated cell {cell_obj.dims} under SPG {spg_value}: {len(candidates)} Wyckoffs.")
         candidate_count = len(candidates)
-
-        est_trials = 0
-        for candidate in candidates:
-            dof = int(candidate[5])
-            n4 = dof * per_dof if dof != 1 else 4
-            est_trials += (n4 + 1)
+        est_trials = sum(candidate[6] for candidate in candidates)  # sum of dof*per_dof across candidates
+        #est_trials = 0
+        #for candidate in candidates:
+        #    #dof = candidate[5]
+        #    est_trials += candidate[6]
+        #    #if cell_obj.spg > 15:
+        #    #    max_abc = max(cell_obj.dims)
+        #    #else:
+        #    #    max_abc = max(cell_obj.dims[:3])
+        #    #if cell_obj.size > 1000:
+        #    #    per_dof = max(4, int(max_abc/1.5))
+        #    #else:
+        #    #    per_dof = max(4, int(max_abc/1.2))
+        #    #n4 = dof * per_dof if dof != 1 else 4
+        #    #est_trials += (n4 + 1)
 
         out = (candidate_count, candidate_count, est_trials)
         wp_cost_cache[key] = out
@@ -973,7 +983,7 @@ def run_pipeline(state: dict) -> dict:
                         )
                         break
 
-                    spg_val, _comp, _lat, wp_ids, num_wps, dof, count, Z, orig_spg = sol
+                    spg_val, _comp, _lat, wp_ids, num_wps, dof, _, count, Z, orig_spg = sol
                     wp_attempted += 1
 
                     wp_labels_text = format_wyckoff_labels(spg_val, wp_ids)
@@ -992,6 +1002,7 @@ def run_pipeline(state: dict) -> dict:
                     trial_message, trial_state = run_wyckoff_solver(
                         trial_state, global_structure_log,
                         global_accepted=global_accepted_exists,
+                        factor = 1 if len(all_seed_cells) > 5 else 2,
                     )
 
                     # After running, update the main state's Struc_count by accumulating

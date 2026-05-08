@@ -936,7 +936,7 @@ class CellSolver:
             print(f"Refinement: {cell_init}  {chi2_init:.4f} -> {cell_refined} {chi2_final:.4f}")
         return cell_refined, chi2_final, chi2_half
 
-    def solve(self, max_solutions=100, max_count=1000):
+    def solve(self, max_solutions=250, max_count=1000):
         """
         Solve for possible cell parameters based on the provided 2theta values.
 
@@ -1304,96 +1304,22 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             early_stop = False
 
             for base_solution in base_solutions:
-                if bra_index in [4, 7, 8]:
+                if bra_index in [4, 5, 6, 7, 8]:
                     axis_orders = [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
-                elif bra_index in [5]: #A-center
-                    axis_orders = [(0, 1, 2), (0, 2, 1)]
-                elif bra_index in [6]: #C-center
-                    axis_orders = [(0, 1, 2), (1, 0, 2)]
+                #elif bra_index in [5]: #A-center
+                #    #axis_orders = [(0, 1, 2), (0, 2, 1)]
+                #    axis_orders = [(0, 1, 2), (1, 0, 2)]
+                #elif bra_index in [6]: #C-center
+                #    axis_orders = [(0, 1, 2), (1, 0, 2)]
                 elif bra_index in [2, 3]: #Monoclinic
                     axis_orders = [(0, 1, 2), (2, 1, 0)]
                 else:
                     axis_orders = [(0, 1, 2)]
 
-                matched_hkls = [m[0] for m in base_solution['match']]
-                base_cell = base_solution['cell']
-                base_match = base_solution['match']
-                base_mismatch = base_solution['mismatch']
-
-                for axis_order in axis_orders:
-                    # Axis permutations are only meaningful for orthorhombic SPGs (16-74).
-                    has_orthorhombic_spg = any(15 < spg < 75 for spg in spgs)
-                    if has_orthorhombic_spg:
-                        permuted_cell = [base_cell[i] for i in axis_order]
-                        permuted_match = [
-                            (tuple(m[0][i] for i in axis_order), m[1], m[2])
-                            for m in base_match
-                        ]
-                        permuted_mismatch = [
-                            (tuple(m[0][i] for i in axis_order), m[1])
-                            for m in base_mismatch
-                        ]
-                    else:
-                        permuted_cell = base_cell
-                        permuted_match = base_match
-                        permuted_mismatch = base_mismatch
-                    for spg in spgs:
-                        use_axis_permutation = 15 < spg < 75
-                        candidate_cell = permuted_cell if use_axis_permutation else base_cell
-
-                        match, unmatch = check_space_group(spg, matched_hkls, base_mismatch, axis_order)
-                        #print(f"Checking SPG {spg} for {bra_type} with axis order {axis_order}: match={match}, unmatch={len(unmatch)}")
-                        #import sys; sys.exit()
-                        use_direct_rescue = False
-                        direct_sol = None
-                        if not match:
-                            rescue_ok, direct_sol = rescue_spg_cell(spg, candidate_cell, rescue_state)
-                            if rescue_ok:
-                                match = True
-                                use_direct_rescue = True
-                                unmatch = direct_sol.get('mismatch', [])
-
-                        if match:
-                            #if verbose:
-                            #    print(f"Adding Space group {spg}: Match: {match} {len(unmatch)}")
-                            if use_direct_rescue:
-                                cell = candidate_cell
-                                peaks = direct_sol.get('match', [])
-                                mis_peaks = direct_sol.get('mismatch', [])
-                                chi2_vals = direct_sol.get('chi2', base_solution['chi2'])
-                                errors_vals = direct_sol.get('errors', base_solution['errors'])
-                                id_vals = direct_sol.get('id', base_solution['id'])
-                            elif 15 < spg < 75:
-                                cell = candidate_cell
-                                peaks = permuted_match
-                                mis_peaks = permuted_mismatch
-                                chi2_vals = base_solution['chi2']
-                                errors_vals = base_solution['errors']
-                                id_vals = base_solution['id']
-                            else:
-                                cell = base_cell
-                                peaks = base_match
-                                mis_peaks = base_mismatch
-                                chi2_vals = base_solution['chi2']
-                                errors_vals = base_solution['errors']
-                                id_vals = base_solution['id']
-                            solution = {
-                                'spg': spg,
-                                'cell': cell,
-                                'match': peaks,
-                                'mismatch': mis_peaks,
-                                'chi2': chi2_vals,
-                                'errors': errors_vals,
-                                'id': id_vals,
-                            }
-                            volume = solver.get_volume_from_cell(cell)
-                            if max_volume is not None and volume > max_volume: continue
-                            #cell_str = '[' + ', '.join(f'{float(x):.3f}' for x in np.asarray(cell).tolist()) + ']'
-                            #print(f"Solution for {bra_type}, {spg}, cell: {cell_str}, volume: {volume:.2f}, mismatch: {len(unmatch)}, chi2: {chi2_vals[1]:.4f}")
-                            solutions.append(solution)
-                            min_mismatch = min(min_mismatch, len(unmatch))
-                            count += 1
-
+                _solutions, min_mismatch = extend_solutions(base_solution, spgs, axis_orders, rescue_state, min_mismatch)
+                if len(_solutions) > 0:
+                    solutions += _solutions
+                    count += len(_solutions)
             #if branch_rescue_stats["triggered"] > 0:
             #    print(
             #        f"Direct SG rescue stats ({bra_type}): "
@@ -1412,6 +1338,88 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
                 )
                 return solutions
         return solutions
+
+def extend_solutions(base_solution, spgs, axis_orders, rescue_state=None, min_mismatch=0):
+    matched_hkls = [m[0] for m in base_solution['match']]
+    base_cell = base_solution['cell']
+    base_match = base_solution['match']
+    base_mismatch = base_solution['mismatch']
+    solutions = []
+
+    for axis_order in axis_orders:
+        # Axis permutations are only meaningful for orthorhombic SPGs (16-74).
+        has_orthorhombic_spg = any(15 < spg < 75 for spg in spgs)
+        if has_orthorhombic_spg:
+            permuted_cell = [base_cell[i] for i in axis_order]
+            permuted_match = [
+                (tuple(m[0][i] for i in axis_order), m[1], m[2])
+                for m in base_match
+            ]
+            permuted_mismatch = [
+                (tuple(m[0][i] for i in axis_order), m[1])
+                for m in base_mismatch
+            ]
+        else:
+            permuted_cell = base_cell
+            permuted_match = base_match
+            permuted_mismatch = base_mismatch
+
+        for spg in spgs:
+            use_axis_permutation = 15 < spg < 75
+            candidate_cell = permuted_cell if use_axis_permutation else base_cell
+
+            match, unmatch = check_space_group(spg, matched_hkls, base_mismatch, axis_order)
+            #print(f"Checking SPG {spg} with axis order {axis_order}: match={match}, unmatch={len(unmatch)}")
+            #import sys; sys.exit()
+            use_direct_rescue = False
+            direct_sol = None
+            if not match:
+                rescue_ok, direct_sol = rescue_spg_cell(spg, candidate_cell, rescue_state)
+                if rescue_ok:
+                    match = True
+                    use_direct_rescue = True
+                    unmatch = direct_sol.get('mismatch', [])
+
+            if match:
+                #if verbose:
+                #    print(f"Adding Space group {spg}: Match: {match} {len(unmatch)}")
+                if use_direct_rescue:
+                    cell = candidate_cell
+                    peaks = direct_sol.get('match', [])
+                    mis_peaks = direct_sol.get('mismatch', [])
+                    chi2_vals = direct_sol.get('chi2', base_solution['chi2'])
+                    errors_vals = direct_sol.get('errors', base_solution['errors'])
+                    id_vals = direct_sol.get('id', base_solution['id'])
+                elif 15 < spg < 75:
+                    cell = candidate_cell
+                    peaks = permuted_match
+                    mis_peaks = permuted_mismatch
+                    chi2_vals = base_solution['chi2']
+                    errors_vals = base_solution['errors']
+                    id_vals = base_solution['id']
+                else:
+                    cell = base_cell
+                    peaks = base_match
+                    mis_peaks = base_mismatch
+                    chi2_vals = base_solution['chi2']
+                    errors_vals = base_solution['errors']
+                    id_vals = base_solution['id']
+                solution = {
+                    'spg': spg,
+                    'cell': cell,
+                    'match': peaks,
+                    'mismatch': mis_peaks,
+                    'chi2': chi2_vals,
+                    'errors': errors_vals,
+                    'id': id_vals,
+                }
+                #cell_str = '[' + ', '.join(f'{float(x):.3f}' for x in np.asarray(cell).tolist()) + ']'
+                #print(f"Solution for {bra_type}, {spg}, cell: {cell_str}, volume: {volume:.2f}, mismatch: {len(unmatch)}, chi2: {chi2_vals[1]:.4f}")
+                solutions.append(solution)
+                min_mismatch = min(min_mismatch, len(unmatch))
+
+    return solutions, min_mismatch
+
 
 def check_centering(matched_hkls, centering):
     """
@@ -1583,7 +1591,7 @@ def is_excellent_refinement(r2, chi2, min_r2, max_chi2):
     """Return True for clearly strong refined fits that should stop immediately."""
     if r2 is None or chi2 is None:
         return False
-    return r2 >= max(min_r2 + 0.03, 0.98) or chi2 <= min(max_chi2 * 0.75, 0.08)
+    return r2 >= max(min_r2 + 0.03, 0.98) and chi2 <= min(max_chi2 * 0.75, 0.08)
 
 
 def should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
@@ -1648,7 +1656,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     refine_sim_min=0.7, refine_eng_window=0.5, structure_log=[],
                     max_eng_rel=None, min_structures_before_early_stop=10,
                     forced_wp_solution=None, ase_logfile=None, global_accepted=False,
-                    use_qrs=False, qrs_method='sobol'):
+                    use_qrs=False, qrs_method='sobol', factor=1):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1762,13 +1770,16 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     per_dof,
                     use_seeds=use_qrs,
                     qrs_method=qrs_method,
-                    factor = 1 if len(cells) > 5 else 2,
+                    factor = factor,
                 )
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
                 # If DOF=0, allow 1 trial; if DOF*per_dof
-                N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
+                if xm.seeds is not None:
+                    N4 = len(xm.seeds)
+                else:
+                    N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9

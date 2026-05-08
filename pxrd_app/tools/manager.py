@@ -25,6 +25,78 @@ DEFAULT_BG_ASYM = 0.01
 DEFAULT_SAVGOL_WINDOW = 4
 DEFAULT_SAVGOL_POLYORDER = 3
 
+
+def generate_qrs_grid(bounds, scramble=True, centered=False, seed=42, method='sobol', max_pts=5000):
+    """
+    Generate a Sobol/QRS ordering of an anisotropic discrete grid.
+
+    Parameters
+    ----------
+    bounds : list[int] Number of grid points along each dimension (e.g., [3, 3, 5])
+    scramble : bool, Whether to use scrambled Sobol sequence.
+    centered : bool, If True, use centered grid points: (k + 0.5) / N
+    seed : int, Random seed for Sobol scrambling.
+    method : str, The method to use for generating the grid ('sobol' or 'halton').
+    max_pts : int, Maximum number of points to generate.
+
+    Returns
+    -------
+    points : ndarray, shape (prod(bounds), len(bounds))
+        Sobol-ordered unique grid points.
+    """
+
+    bounds = list(bounds)
+    dim = len(bounds)
+
+    # total number of unique lattice points
+    total = min(np.prod(bounds), max_pts)
+
+    # Sobol sampler
+    if method == 'sobol':
+        sampler = Sobol(d=dim, scramble=scramble, seed=seed)
+    elif method == 'halton':
+        sampler = Halton(d=dim, scramble=scramble, seed=seed)
+
+    # generate extra samples to compensate duplicates
+    U = sampler.random(total * 3)
+
+    visited = set()
+    points = []
+
+    for u in U:
+
+        # quantize onto anisotropic lattice
+        idx = tuple(
+            min(int(ui * Ni), Ni - 1)
+            for ui, Ni in zip(u, bounds)
+        )
+
+        # skip duplicates
+        if idx in visited: continue
+
+        visited.add(idx)
+
+        # map to fractional coordinates
+        if centered:
+            x = [
+                (idx_i + 0.5) / Ni
+                for idx_i, Ni in zip(idx, bounds)
+            ]
+        else:
+            x = [
+                idx_i / Ni
+                for idx_i, Ni in zip(idx, bounds)
+            ]
+
+        points.append(x)
+
+        # stop once all unique points obtained
+        if len(points) == total:
+            break
+
+    return np.array(points)
+
+
 class RawDataManager:
     def __init__(self, two_thetas: Sequence[float], intensities: Sequence[float],
                  bg_subtract: bool = True, smooth: bool = True):
@@ -511,10 +583,10 @@ class CellManager:
                               43, 44, 49, 51, 52, 54, 56, 58, 59, 65,
                               66, 67, 68, 74]: # c is the special, a/b same
                 axis_orders = [(0, 1, 2), (1, 0, 2)]
-            elif self.spg in [38, 40]: # a is the special, b/c permutable
-                axis_orders = [(0, 1, 2), (0, 2, 1)]
-            elif self.spg in [41]: # b is the special, a/c permutable
-                axis_orders = [(0, 1, 2), (2, 1, 0)]
+            #elif self.spg in [38, 40]: # a is the special, b/c permutable
+            #    axis_orders = [(0, 1, 2), (0, 2, 1)]
+            #elif self.spg in [41]: # b is the special, a/c permutable
+            #    axis_orders = [(0, 1, 2), (2, 1, 0)]
             else: # a/b/c not permutable like Pnma
                 axis_orders = [(0, 1, 2)]
             #print(self.spg, axis_orders)
@@ -993,6 +1065,7 @@ class WPManager:
         enumeration_count = 0
         n_group = len(self.group)
         n_species = len(self.comp)
+        cell = [self.lattice.a, self.lattice.b, self.lattice.c]
 
         for Z in range(self.Zs[0], self.Zs[1] + 1):
             if max_samples is not None and enumeration_count >= max_samples:
@@ -1024,21 +1097,24 @@ class WPManager:
                     ]
                 except Exception:
                     continue
-                if len(raw_wps) != n_species:
-                    continue
+                if len(raw_wps) != n_species: continue
                 n_wps = sum(len(w) for w in raw_wps)
-                if n_wps > self.max_wp:
-                    continue
-                total_dof = sum(self.group[wp].get_dof() for wps in raw_wps for wp in wps)
-                if total_dof > self.max_dof:
-                    continue
+                if n_wps > self.max_wp: continue
+                total_dof = 0
+                total_num = 0
+                for wps in raw_wps:
+                    for wp in wps:
+                        total_dof += self.group[wp].get_dof()
+                        for i in range(3):
+                            if i not in self.group[wp].get_frozen_axis():
+                                total_num += int(cell[i])
+                if total_dof > self.max_dof: continue
                 perm_indices = [
                     perm for perm in permutations(range(n_species))
                     if tuple(row_numIons[perm[i]] for i in range(n_species)) == target_numIons
                 ]
-                if not perm_indices:
-                    continue
-                parsed_rows.append((raw_wps, int(row.count), n_wps, total_dof, perm_indices))
+                if not perm_indices: continue
+                parsed_rows.append((raw_wps, int(row.count), n_wps, total_dof, total_num,perm_indices))
 
             # Use a set of tuples for O(1) duplicate detection instead of a list.
             wp_seen = set()
@@ -1046,20 +1122,18 @@ class WPManager:
             n_raw_sols = 0
             sols_before_z = len(sols)
 
-            for raw_wps, count, n_wps, total_dof, perm_indices in parsed_rows:
+            for raw_wps, count, n_wps, total_dof, total_num, perm_indices in parsed_rows:
                 if max_samples is not None and enumeration_count >= max_samples:
                     break
 
                 for perm in perm_indices:
                     n_raw_sols += 1
                     enumeration_count += 1
-                    if max_samples is not None and enumeration_count >= max_samples:
-                        break
+                    if max_samples is not None and enumeration_count >= max_samples: break
 
                     wps_per_species = [raw_wps[perm[i]] for i in range(n_species)]
 
-                    if timing:
-                        _t1 = _time()
+                    if timing: _t1 = _time()
 
                     # Flatten all WP indices into one array and map through each
                     # symmetry order in a single numpy fancy-index call per order.
@@ -1091,14 +1165,14 @@ class WPManager:
                     if not duplicate:
                         wp_seen.add(canonical_key)
                         sols.append((self.spg, comp, self.lattice, wps_per_species,
-                                     n_wps, total_dof, count, Z))
+                                     n_wps, total_dof, total_num, count, Z))
 
             kept_z = len(sols) - sols_before_z
             if timing:
                 print(f"  Z={Z}: rows={len(df_z)}, raw_sols={n_raw_sols}, "
                       f"kept={kept_z} | t_dup={t_dup:.4f}s")
 
-        sols = sorted(sols, key=lambda x: (x[7], -x[6], x[5]))
+        sols = sorted(sols, key=lambda x: (x[-1], -x[-2], x[-4]))
         return sols
 
 class XtalManager:
@@ -1134,7 +1208,6 @@ class XtalManager:
                 self.per_dof = max([self.per_dof, int(max_abc/1.5)]) * factor
             else: # 7.2
                 self.per_dof = max([self.per_dof, int(max_abc/1.2)]) * factor
-            print("The updated per_dof", self.per_dof, self.spg.number)
 
         self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
@@ -1153,22 +1226,32 @@ class XtalManager:
         self.sites_flat = sites_flat
         self.elements_flat = elements_flat
         if use_seeds:
-            n_seeds = max(8000, (self.per_dof + 25) * dof + 2)
-            method = str(qrs_method).strip().lower()
-            if method == 'halton':
-                _sampler = Halton(d=max(dof, 1), scramble=False)
-                self.seeds = _sampler.random(n=n_seeds)
-            elif method == 'sobol':
-                _sampler = Sobol(d=max(dof, 1), scramble=False)
-                # Sobol balance properties require a power-of-two sample count.
-                m = int(np.ceil(np.log2(max(n_seeds, 1))))
-                self.seeds = _sampler.random_base2(m=m)[:n_seeds]
-            else:
-                raise ValueError(f"Unsupported qrs_method={qrs_method!r}; expected 'sobol' or 'halton'.")
-            self.skips = 0
+            #n_seeds = max(8000, (self.per_dof + 25) * dof + 2)
+            #method = str(qrs_method).strip().lower()
+            #if method == 'halton':
+            #    _sampler = Halton(d=max(dof, 1), scramble=False)
+            #    self.seeds = _sampler.random(n=n_seeds)
+            #elif method == 'sobol':
+            #    _sampler = Sobol(d=max(dof, 1), scramble=False)
+            #    # Sobol balance properties require a power-of-two sample count.
+            #    m = int(np.ceil(np.log2(max(n_seeds, 1))))
+            #    self.seeds = _sampler.random_base2(m=m)[:n_seeds]
+            #else:
+            #    raise ValueError(f"Unsupported qrs_method={qrs_method!r}; expected 'sobol' or 'halton'.")
+            #self.skips = 0
             #print(f"Using {len(self.seeds)} seed structures for generation.")
+            xtal = pyxtal()
+            bounds = xtal.get_rep_bounds_from_spg_wps_cell(self.spg.number,
+                                                           self.sites_flat,
+                                                           [self.cell.a, self.cell.b, self.cell.c])
+            max_pts = sum(int(b) for b in bounds) * factor
+            grids = [int(b) for b in bounds]
+            self.skips = 0
+            self.seeds = generate_qrs_grid(grids, method=qrs_method, max_pts=max_pts)
+            print("The estimated number of structures", len(self.seeds))
         else:
             self.seeds = None
+
 
     def generate_structure(self, idx=0):
         """
@@ -1215,23 +1298,24 @@ if __name__ == "__main__":
     #for sol in sols:
     #    wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
     #    print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}")
-    from time import time
-    spgs, cell, comp, ref_den = [63, 64], [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, (1.04, 3.80)
-    spgs, cell, comp, ref_den = [142], [7.53540996, 14.84882202], {'Er': 1, 'B': 4, 'Rh': 4}, (9.13, 10.33)
-    #spgs, cell, comp, ref_den = [216], [10.029], {'As': 5, 'Re': 4, 'S': 4}, (6.84, 12.89)
-    for spg in spgs:
-        print(f"\n--- SPG {spg} ---")
-        t0 = time()
-        wp = WPManager(spg, cell, comp, max_wp=15, max_Z=36, max_dof=21, ref_den=ref_den)
-                       #csv='database/spg_num_wps_raw.csv')
-        t_init = time() - t0
-        print(f"  Init: {t_init:.4f}s")
-        t1 = time()
-        sols = wp.get_wp_from_composition(timing=True)
-        t_wp = time() - t1
-        print(f"  get_wp_from_composition total: {t_wp:.4f}s {len(sols)}")
-        for sol in sols:
-            wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
-            print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
-        if len(sols) == 0:
-            print(f"SPG: {spg}, No Wyckoff solutions found for the given composition and cell.")
+    #from time import time
+    #spgs, cell, comp, ref_den = [63, 64], [32.42842875, 2.26406458, 9.41050049], {'B': 2, 'Be': 1, 'C': 2}, (1.04, 3.80)
+    #spgs, cell, comp, ref_den = [142], [7.53540996, 14.84882202], {'Er': 1, 'B': 4, 'Rh': 4}, (9.13, 10.33)
+    ##spgs, cell, comp, ref_den = [216], [10.029], {'As': 5, 'Re': 4, 'S': 4}, (6.84, 12.89)
+    #for spg in spgs:
+    #    print(f"\n--- SPG {spg} ---")
+    #    t0 = time()
+    #    wp = WPManager(spg, cell, comp, max_wp=15, max_Z=36, max_dof=21, ref_den=ref_den)
+    #                   #csv='database/spg_num_wps_raw.csv')
+    #    t_init = time() - t0
+    #    print(f"  Init: {t_init:.4f}s")
+    #    t1 = time()
+    #    sols = wp.get_wp_from_composition(timing=True)
+    #    t_wp = time() - t1
+    #    print(f"  get_wp_from_composition total: {t_wp:.4f}s {len(sols)}")
+    #    for sol in sols:
+    #        wp_labels = [[wp.group[w].get_label() for w in _wp] for _wp in sol[3]]
+    #        print(f"SPG: {sol[0]}, Comp: {sol[1]}, WPs: {wp_labels}, DOF: {sol[5]}, Count: {sol[6]}, Z: {sol[7]}, T: {time()-t0}")
+    #    if len(sols) == 0:
+    #        print(f"SPG: {spg}, No Wyckoff solutions found for the given composition and cell.")
+    print(generate_qrs_grid([2, 2, 2], method='sobol'))
