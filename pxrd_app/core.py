@@ -142,7 +142,8 @@ def _get_cell_solver_kwargs(state: dict) -> dict:
         "max_square": state.get("cell_solver_max_square", 28),
         "total_square": state.get("cell_solver_total_square", 40),
         "theta_tols": theta_tols,
-        "min_abc": state.get("min_abc", 2.0),
+        "min_abc": state.get("min_abc"),
+        "max_abc": state.get("max_abc"),
         "max_chi2": state.get("cell_solver_max_chi2", 0.5),
         "max_guess": state.get("cell_solver_max_guess", 50000),
     }
@@ -302,6 +303,7 @@ def run_cell_solver(state: dict) -> dict:
             total_square=cell_solver_kwargs["total_square"],
             theta_tols=cell_solver_kwargs["theta_tols"],
             min_abc=cell_solver_kwargs["min_abc"],
+            max_abc=cell_solver_kwargs["max_abc"],
             max_chi2=cell_solver_kwargs["max_chi2"],
             max_guess=cell_solver_kwargs["max_guess"],
             max_volume=max_volume,
