@@ -936,7 +936,7 @@ class CellSolver:
             print(f"Refinement: {cell_init}  {chi2_init:.4f} -> {cell_refined} {chi2_final:.4f}")
         return cell_refined, chi2_final, chi2_half
 
-    def solve(self, max_solutions=250, max_count=1000):
+    def solve(self, max_solutions=150, max_count=1000):
         """
         Solve for possible cell parameters based on the provided 2theta values.
 
