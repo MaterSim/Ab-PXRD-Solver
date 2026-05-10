@@ -118,7 +118,7 @@ DEFAULT_STATE = {
     "max_eng_rel": 0.1,
     "min_structures_before_early_stop": 10,
     "ase_logfile": None,
-    "max_attempt_count": 5000,
+    "max_attempt_count": 10000,
     "max_relax_count": 1500,  # Limit total relaxations to avoid hang
     "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
