@@ -586,6 +586,14 @@ if __name__ == "__main__":
     match_cif = 'data/BeH2.cif'
     pxrd_csv = "GSAS_PXRD/BC2F2LiO4_63.csv"
     match_cif = 'data/BC2F2LiO4.cif'
+    pxrd_csv = "GSAS_PXRD/FeLi2O4Ti_131.csv"
+    match_cif = 'data/Li2TiFeO4.cif'
+    pxrd_csv = "GSAS_PXRD/Cr4NaO8_87.csv"
+    match_cif = 'data/NaCr4O8.cif'
+    pxrd_csv = "GSAS_PXRD/Fe3SeTe2_99.csv"
+    match_cif = 'data/Fe3Te2Se.cif'
+    pxrd_csv = "GSAS_PXRD/B2BeC2_59.csv"
+    match_cif = 'data/B2BeC2.cif'
     #for match_cif in ['Fails/failed_ID100.cif', 'Fails/failed_ID77.cif']:
     wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE, plot=True)
     print(match_cif, wr, r2, chi2, elapsed)
