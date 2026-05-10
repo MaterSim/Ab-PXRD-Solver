@@ -577,11 +577,11 @@ class CellManager:
             diff = np.abs(self.dims - other) / other
             return np.all(diff < tol)
         elif len(self.dims) == 3:
-            if self.spg in [16, 19, 21, 22, 23, 24, 47, 48, 69, 70, 71]:
+            if self.spg in [16, 19, 21, 22, 23, 24]:#, 47, 48]:#, 69, 70, 71]:
                 axis_orders = [(0, 1, 2), (1, 0, 2), (0, 2, 1), (2, 0, 1), (1, 2, 0), (2, 1, 0)]
-            elif self.spg in [17, 18, 20, 25, 26, 27, 34, 35, 36, 37, 42,
-                              43, 44, 49, 51, 52, 54, 56, 58, 59, 65,
-                              66, 67, 68, 74]: # c is the special, a/b same
+            elif self.spg in [17, 18, 20, 25, 26, 27]:#, 34, 35, 36, 37, 42,
+                              #43, 44, 49, 51, 52, 54, 56, 58, 59, 65,
+                              #66, 67, 68, 74]: # c is the special, a/b same
                 axis_orders = [(0, 1, 2), (1, 0, 2)]
             #elif self.spg in [38, 40]: # a is the special, b/c permutable
             #    axis_orders = [(0, 1, 2), (0, 2, 1)]

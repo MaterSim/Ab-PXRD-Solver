@@ -580,6 +580,10 @@ if __name__ == "__main__":
     match_cif = 'data/CaGe2-2.cif'
     pxrd_csv = "GSAS_PXRD/FFe7LiO7_38.csv"
     match_cif = 'data/LiFe7O7F.cif'
+    pxrd_csv = "GSAS_PXRD/B12BeC2_166.csv"
+    match_cif = 'data/B12BeC2.cif'
+    pxrd_csv = "GSAS_PXRD/BeH2_72.csv"
+    match_cif = 'data/BeH2.cif'
     #for match_cif in ['Fails/failed_ID100.cif', 'Fails/failed_ID77.cif']:
     wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE, plot=True)
     print(match_cif, wr, r2, chi2, elapsed)

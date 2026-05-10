@@ -16,6 +16,7 @@ from pxrd_app.tools.utils import parse_formula, get_volume_from_density, format_
 from pxrd_app.tools.manager import RawDataManager, CellManager
 from pxrd_app.tools.density import predict_density_ensemble
 from pxrd_app.tools.solver import CellSolver, search_solution, enumerate_wyckoff, get_adaptive_wp_limits
+from pyxtal.database.element import Element
 
 # Configure logging with both file and console handlers, avoiding duplicate handlers
 logger = logging.getLogger("pxrd_agent")
@@ -378,6 +379,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_eng_rel = state.get("max_eng_rel")
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     sim_max = state.get("max_sim")
+    if max([Element(ele).z for ele in composition.keys()]) <= 6: sim_max = 0.55
     if len(state.get("peaks")) <=4: sim_max = 0.2
     eng_min = _get_global_best_energy(all_structure_log) or 1e10
     max_wp = state.get("max_wp")
@@ -1002,7 +1004,7 @@ def run_pipeline(state: dict) -> dict:
                     trial_message, trial_state = run_wyckoff_solver(
                         trial_state, global_structure_log,
                         global_accepted=global_accepted_exists,
-                        factor = 1 if len(all_seed_cells) > 5 else 2,
+                        factor = 1 if len(all_seed_cells) > 5 else 3, #if len(all_seed_cells) > 2 else 10
                     )
 
                     # After running, update the main state's Struc_count by accumulating
