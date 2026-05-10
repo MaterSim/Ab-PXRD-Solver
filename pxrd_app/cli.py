@@ -172,7 +172,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--parallel-retry-rounds",
         type=int,
-        default=3,
+        default=1,
         help=(
             "Number of extra parallel retry rounds after the initial pool attempt when a "
             "BrokenProcessPool occurs. Set to 0 to disable retries."

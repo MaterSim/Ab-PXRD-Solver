@@ -49,7 +49,7 @@ def generate_qrs_grid(bounds, scramble=True, centered=False, seed=42, method='so
     dim = len(bounds)
 
     # total number of unique lattice points
-    total = min(np.prod(bounds), max_pts)
+    total = int(max(min(np.prod(bounds), max_pts), 1))
 
     # Sobol sampler
     if method == 'sobol':
@@ -1244,7 +1244,7 @@ class XtalManager:
             bounds = xtal.get_rep_bounds_from_spg_wps_cell(self.spg.number,
                                                            self.sites_flat,
                                                            [self.cell.a, self.cell.b, self.cell.c])
-            max_pts = sum(int(b) for b in bounds) * factor
+            max_pts = int(max(1, sum(int(b) for b in bounds) * factor))
             grids = [int(b) for b in bounds]
             self.skips = 0
             self.seeds = generate_qrs_grid(grids, method=qrs_method, max_pts=max_pts)
@@ -1260,11 +1260,12 @@ class XtalManager:
         xtal = pyxtal()
         if self.seeds is not None:
             skips = self.skips
-            for id in range(idx + skips, len(self.seeds)):
+            for id in range(idx + skips, len(self.seeds) + 1):
                 if self.dof > 0:
-                    x = self.cell.encode() + self.seeds[id].tolist()
+                    x = self.cell.encode() + self.seeds[id-1].tolist()
                 else:
                     x = self.cell.encode()
+                #print(self.spg.number, self.sites_flat, x, self.elements_flat)
                 xtal.from_spg_wps_rep(self.spg.number, self.sites_flat, x, self.elements_flat)
                 if not xtal.valid:
                     self.skips += 1
@@ -1273,7 +1274,7 @@ class XtalManager:
                     self.skips += 1
                 else:
                     #print(xtal)
-                    #print(f"Generating: {idx+self.skips}, {self.seeds[id].tolist()}, {xtal.valid}")
+                    #print(f"Generating: {idx+self.skips}, {self.seeds[id-1].tolist()}, {xtal.valid}")
                     break
         else:
             xtal.from_random(3, self.spg, self.species, self.numIons,

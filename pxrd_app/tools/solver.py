@@ -1777,7 +1777,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                 )
                 # If DOF=0, allow 1 trial; if DOF*per_dof
                 if xm.seeds is not None:
-                    N4 = len(xm.seeds)
+                    N4 = max(1, len(xm.seeds))
                 else:
                     N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
                 best_sim_in_wpset = 0.0
