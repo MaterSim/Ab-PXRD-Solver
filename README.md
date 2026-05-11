@@ -152,7 +152,7 @@ $$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10
 
 ### 2.2 CellSolver (known SPG)
 
-`CellSolver` in `tools/solver.py`:
+`CellSolver` in `pxrd_app/tools/solver.py`:
 
 1. **hkl enumeration** — all symmetry-allowed (h k l) triples up to `hkl_max = (2, 5, 6)`.
 2. **Linear solve** — Bragg equation + lattice metric form a linear system solved by `numpy.linalg.solve`. For tetragonal:
@@ -184,7 +184,7 @@ For orthorhombic SPGs, all six axis permutations are tried to handle axis-settin
 
 ### 3.2 Trial Structure Generation and QRS
 
-`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites with **Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
+`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites with **Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `pxrd_app/tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
 
 ### 3.3 Geometry Relaxation (MACE + ASE)
 
@@ -238,8 +238,8 @@ The pipeline exits immediately on the first accepted solution.
 | Model | Location | Task |
 |-------|----------|------|
 | Peak detector | `pxrd_app/tools/peak_finder/` | Assign peak probability to each 2θ point (CNN/transformer) |
-| Space group predictor | `pxrd_app/tools/spacegroup/` | Rank space groups from PXRD profile + formula (`ImprovedXRDNetWithFormula`) |
-| Density ensemble | `pxrd_app/tools/aviary/` | Predict density mean + uncertainty from composition (Roost, PyTorch) |
+| Space group predictor | `pxrd_app/tools/spacegroup/` | Rank space groups from PXRD profile + formula |
+| Density ensemble | `pxrd_app/tools/aviary/` | Predict density mean + uncertainty from composition (Roost) |
 
 ---
 
@@ -266,6 +266,7 @@ Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
 9     1     123   782.6       0.0353   156       28       2.041        7.652    13.367
 ```
 The solver goes through the list and finds an excellent fit for the first cell which is the energy minimum with a high R2 value, and then stops the search.
+
 <figure>
   <img src="Figs/EnergyR2_PrYMg2_123_single.png" width="600">
   <figcaption>Figure 1. Solution when SPG is known.</figcaption>
@@ -286,10 +287,12 @@ Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
 92    3     82    899.1       0.0167   284       11       1.857       10.811     7.692
 ```
 When the space group is unknown, the solver will generate a larger list and then goes through the list. It takes a longer time to find the excellent fit  which is the energy minimum with a high R2 value.
+
 <figure>
   <img src="Figs/EnergyR2_PrYMg2_123_auto.png" width="600">
   <figcaption>Figure 2. Solution when SPG is unknown.</figcaption>
 </figure>
+
 ```bash
 # Batch: file list (SLURM-style array job)
 python PXRD_solve.py --use-list --input data/test.txt --infer-spg --workers 48 
