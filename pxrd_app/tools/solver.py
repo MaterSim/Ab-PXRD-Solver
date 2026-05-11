@@ -1652,11 +1652,11 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
 def search_solution(cells, spg, composition, ref_den, match_cif,
                     match_csv, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
-                    INST_FILE, logger, max_wp, max_Z, max_dof, per_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
+                    INST_FILE, logger, max_wp, max_Z, max_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, structure_log=[],
                     max_eng_rel=None, min_structures_before_early_stop=10,
                     forced_wp_solution=None, ase_logfile=None, global_accepted=False,
-                    use_qrs=False, qrs_method='sobol', factor=1):
+                    use_qrs=True, qrs_method='sobol', factor=1):
     """
     Explore candidates and return first satisfactory refinement result.
 
@@ -1767,7 +1767,6 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     comp,
                     lattice,
                     wp_ids,
-                    per_dof,
                     use_seeds=use_qrs,
                     qrs_method=qrs_method,
                     factor = factor,
@@ -1776,10 +1775,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
                 # If DOF=0, allow 1 trial; if DOF*per_dof
-                if xm.seeds is not None:
-                    N4 = max(1, len(xm.seeds))
-                else:
-                    N4 = 1 if xm.dof == 0 else xm.dof * xm.per_dof
+                N4 = max(1, len(xm.seeds))
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9

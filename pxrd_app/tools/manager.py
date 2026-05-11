@@ -1176,7 +1176,7 @@ class WPManager:
         return sols
 
 class XtalManager:
-    def __init__(self, spg, species, numIons, cell, WPs, per_dof, use_seeds=False,
+    def __init__(self, spg, species, numIons, cell, WPs, use_seeds=False,
                  qrs_method='sobol', factor=1):
         """
         Crystal Manager is used to handle crystal structure related operations.
@@ -1187,28 +1187,14 @@ class XtalManager:
             numIons (list): Number of ions for each species
             cell (list): Cell parameters
             WPs (list): Wyckoff positions
-            per_dof (int): Number of parameters per degree of freedom
             use_seeds (bool): Whether to use seed structures for generation
             qrs_method (str): Quasi-random sampler to use when seed structures are enabled.
             factor (int): Scaling factor for per_dof when using qms (default: 1)
         """
         self.spg = Group(spg)
         self.WPs = WPs
-        self.per_dof = per_dof
         # Allow more resolution
         self.cell = cell
-        if self.spg.number > 194:
-            self.per_dof = max([self.per_dof, int(self.cell.encode()[0]/0.9)])
-        else:
-            if self.spg.number > 15:
-                max_abc = max(self.cell.encode())
-            else:
-                max_abc = max(self.cell.encode()[:3])
-            if self.cell.volume > 1000:
-                self.per_dof = max([self.per_dof, int(max_abc/1.5)]) * factor
-            else: # 7.2
-                self.per_dof = max([self.per_dof, int(max_abc/1.2)]) * factor
-
         self.species = species#; print(f"  Species: {self.species}")
         self.numIons = numIons
         dof = 0
@@ -1226,20 +1212,6 @@ class XtalManager:
         self.sites_flat = sites_flat
         self.elements_flat = elements_flat
         if use_seeds:
-            #n_seeds = max(8000, (self.per_dof + 25) * dof + 2)
-            #method = str(qrs_method).strip().lower()
-            #if method == 'halton':
-            #    _sampler = Halton(d=max(dof, 1), scramble=False)
-            #    self.seeds = _sampler.random(n=n_seeds)
-            #elif method == 'sobol':
-            #    _sampler = Sobol(d=max(dof, 1), scramble=False)
-            #    # Sobol balance properties require a power-of-two sample count.
-            #    m = int(np.ceil(np.log2(max(n_seeds, 1))))
-            #    self.seeds = _sampler.random_base2(m=m)[:n_seeds]
-            #else:
-            #    raise ValueError(f"Unsupported qrs_method={qrs_method!r}; expected 'sobol' or 'halton'.")
-            #self.skips = 0
-            #print(f"Using {len(self.seeds)} seed structures for generation.")
             xtal = pyxtal()
             bounds = xtal.get_rep_bounds_from_spg_wps_cell(self.spg.number,
                                                            self.sites_flat,
@@ -1280,7 +1252,6 @@ class XtalManager:
             xtal.from_random(3, self.spg, self.species, self.numIons,
                          lattice=self.cell, sites=self.sites,
                          force_pass=True,
-                         #use_asu=use_asu,
                          t_factor=0.8,
                          )
         return xtal

@@ -1,26 +1,10 @@
 import argparse
 import copy
-import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 from pathlib import Path
 from typing import Optional, List
-
-SPG_INFER_BACKENDS = {"smart-cell", "model"}
-COMMON_SPG_TOP_K_CHOICES = [3, 5, 10, 20, 25, 30, 50, 100]
-COMMON_SYMMETRY_CHOICES = [
-    "auto",
-    "any",
-    "triclinic",
-    "monoclinic",
-    "orthorhombic",
-    "tetragonal",
-    "trigonal",
-    "hexagonal",
-    "cubic",
-]
-
 
 def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
@@ -78,18 +62,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Optional formula override. Leave empty to parse from filename.",
     )
     parser.add_argument(
-        "--multi-attempts",
-        type=int,
-        default=None,
-        help="Override number of adaptive attempts (same as PXRD_MULTI_ATTEMPTS).",
-    )
-    parser.add_argument(
-        "--seed-base",
-        type=int,
-        default=123456,
-        help="Override base random seed (same as PXRD_SEED_BASE).",
-    )
-    parser.add_argument(
         "--infer-spg",
         action="store_true",
         help="Infer space group from PXRD/profile model instead of filename convention.",
@@ -102,30 +74,8 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--spg-top-k",
         type=int,
-        choices=COMMON_SPG_TOP_K_CHOICES,
         default=160,
         help="Number of inferred space-group options to evaluate/show.",
-    )
-    parser.add_argument(
-        "--spg-backend",
-        type=str,
-        choices=sorted(SPG_INFER_BACKENDS),
-        default="smart-cell",
-        help=(
-            "Backend for --infer-spg: 'model' uses pretrained SG classifier, "
-            "'smart-cell' uses SmartCellSolver to rank likely SGs by high->low symmetry and indexing evidence."
-        ),
-    )
-    parser.add_argument(
-        "--symmetry",
-        type=str,
-        choices=COMMON_SYMMETRY_CHOICES,
-        default=None,
-        help=(
-            "Optional crystal-system filter for inferred SG candidates. "
-            "Defaults to 'auto' when --infer-spg is set; otherwise unset. "
-            "'auto' uses filename SPG (if present), 'any' disables filtering."
-        ),
     )
     parser.add_argument(
         "--spg",
@@ -211,27 +161,12 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--use-qrs",
-        action="store_true",
-        help=(
-            "Use Quasi-Random Sampling for structure generation instead of purely random sampling. "
-        ),
-    )
-    parser.add_argument(
         "--qrs-method",
         choices=("sobol", "halton"),
         default="sobol",
         help="Quasi-random sampler to use with --use-qrs. Defaults to sobol.",
     )
     return parser
-
-
-def resolve_cli_symmetry(args: argparse.Namespace) -> Optional[str]:
-    if args.symmetry is not None:
-        return args.symmetry
-    if args.infer_spg and args.spg_backend == "smart-cell":
-        return "any"
-    return "auto" if args.infer_spg else None
 
 
 def collect_input_csv_files(input_csv: str, use_list: bool = False) -> List[Path]:
@@ -386,12 +321,8 @@ def _build_state(
     state: Optional[dict] = None,
     pxrd_csv: Optional[str] = None,
     formula: Optional[str] = None,
-    multi_attempts: Optional[int] = None,
-    seed_base: Optional[int] = None,
     infer_spg_from_pxrd: Optional[bool] = None,
     spg_top_k: Optional[int] = None,
-    spg_infer_backend: Optional[str] = None,
-    lattice_symmetry: Optional[str] = None,
     force_spg: Optional[int] = None,
     max_eng_rel: Optional[float] = None,
     max_volume: Optional[float] = None,
@@ -404,26 +335,14 @@ def _build_state(
     max_sim: Optional[float] = None,
     ase_logfile: Optional[str] = None,
     wp_csv_path: Optional[str] = None,
-    use_qrs: Optional[bool] = None,
     qrs_method: Optional[str] = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None: run_state["pxrd_csv"] = pxrd_csv
     if formula is not None: run_state["formula"] = formula
-    if multi_attempts is not None: run_state["multi_attempts"] = max(1, int(multi_attempts))
-    if seed_base is not None: run_state["seed_base"] = int(seed_base)
     if infer_spg_from_pxrd is not None: run_state["infer_spg_from_pxrd"] = bool(infer_spg_from_pxrd)
     if spg_top_k is not None: run_state["spg_top_k"] = int(spg_top_k)
-    if spg_infer_backend is not None:
-        backend = str(spg_infer_backend).strip().lower()
-        if backend in SPG_INFER_BACKENDS:
-            run_state["spg_infer_backend"] = backend
-        else:
-            run_state["spg_infer_backend"] = "model"
-    if lattice_symmetry is not None:
-        run_state["lattice_symmetry"] = str(lattice_symmetry).strip().lower()
-    elif bool(run_state.get("infer_spg_from_pxrd", False)) and str(run_state.get("spg_infer_backend", "model")).strip().lower() == "smart-cell":
-        run_state["lattice_symmetry"] = "any"
+    run_state["spg_infer_backend"] = "smart-cell"
     if force_spg is not None:
         spg_val = int(force_spg)
         if 1 <= spg_val <= 230:
@@ -438,10 +357,8 @@ def _build_state(
             run_state["max_volume"] = max_volume
         else:
             logger.warning(f"Ignoring non-positive max_volume={max_volume}; expected > 0.")
-    if list_wp_only is not None:
-        run_state["list_wp_only"] = bool(list_wp_only)
-    if results_dir is not None:
-        run_state["results_dir"] = str(results_dir)
+    if list_wp_only is not None: run_state["list_wp_only"] = bool(list_wp_only)
+    if results_dir is not None: run_state["results_dir"] = str(results_dir)
     if wp_csv_path is not None: run_state["wp_csv_path"] = str(wp_csv_path)
     if max_wp is not None: run_state["max_wp"] = int(max_wp)
     if max_dof is not None: run_state["max_dof"] = int(max_dof)
@@ -451,7 +368,6 @@ def _build_state(
     if ase_logfile is not None:
         text = str(ase_logfile).strip()
         run_state["ase_logfile"] = text or None
-    if use_qrs is not None: run_state["use_qrs"] = bool(use_qrs)
     if qrs_method is not None:
         method = str(qrs_method).strip().lower()
         run_state["qrs_method"] = method if method in ("sobol", "halton") else "sobol"
@@ -465,12 +381,8 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         logger,
         pxrd_csv=csv_path,
         formula=args.formula,
-        multi_attempts=args.multi_attempts,
-        seed_base=args.seed_base,
         infer_spg_from_pxrd=args.infer_spg,
         spg_top_k=args.spg_top_k,
-        spg_infer_backend=args.spg_backend,
-        lattice_symmetry=resolve_cli_symmetry(args),
         force_spg=args.spg,
         max_eng_rel=args.max_eng_rel,
         max_volume=args.max_volume,
@@ -482,6 +394,5 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         max_sim=args.max_sim,
         ase_logfile=args.ase_logfile,
         wp_csv_path=args.wp_csv_path,
-        use_qrs=args.use_qrs,
         qrs_method=args.qrs_method,
         )

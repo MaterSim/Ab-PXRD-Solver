@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from pxrd_app.constants import VALID_LATTICE_SYMMETRIES, CRYSTAL_SYSTEM_PRIORITY
+from pxrd_app.constants import CRYSTAL_SYSTEM_PRIORITY
 from pxrd_app.inference import infer_formula_spg, infer_spg_from_backend, spg_to_crystal_system
 from pxrd_app.plot import plot_energy_vs_r2
 from pxrd_app.tools.utils import parse_formula, get_volume_from_density, format_wyckoff_labels
@@ -160,18 +160,10 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     infer_spg = state["infer_spg_from_pxrd"]
     spg_top_k = state["spg_top_k"]
     max_volume = state["max_volume"]
-    spg_infer_backend = state["spg_infer_backend"].strip().lower()
-
     spg = int(spg_from_filename) if spg_from_filename is not None else 0
 
     # Resolve the crystal-system filter that will be applied during SPG inference.
-    lattice_filter = str(state.get("lattice_symmetry", "auto") or "auto").strip().lower()
-    if lattice_filter == "auto":
-        infer_crystal_system = spg_to_crystal_system(spg) if spg else None
-    elif lattice_filter in VALID_LATTICE_SYMMETRIES:
-        infer_crystal_system = lattice_filter
-    else:
-        infer_crystal_system = None  # "any" or unrecognised → no restriction
+    infer_crystal_system = None
 
     composition = parse_formula(formula)
     min_abc = state["min_abc"]
@@ -221,11 +213,8 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
 
     if infer_spg:
         result = infer_spg_from_backend(
-            x1=np.array(x1, dtype=float),
-            y1=np.array(y1, dtype=float),
             peak_positions=np.array(peak_positions, dtype=float),
             formula=formula,
-            spg_infer_backend=spg_infer_backend,
             spg_top_k=spg_top_k,
             max_volume=max_volume,
             crystal_system=infer_crystal_system,
@@ -423,20 +412,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             stale_path.unlink()
         except FileNotFoundError:
             pass
-    attempts = state["multi_attempts"]
-    seed_base = int(state.get("seed_base", 20260315))
-
-    def _set_seed(seed: int) -> None:
-        random.seed(seed)
-        np.random.seed(seed)
-        try:
-            import torch
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(seed)
-        except Exception:
-            pass
-
     def _score_result(res: dict) -> float:
         wr = res["wr"]
         r2 = res["r2"]
@@ -453,57 +428,51 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     struc_count = state.get("Struc_count") or 0
     update_best = False
 
-    for attempt_idx in range(attempts):
-        seed = seed_base + 9973 * attempt_idx
-        _set_seed(seed)
+    attempt_prefix = run_tmp_dir / f"Match_{run_token}_attempt1"
+    attempt_cif = str(attempt_prefix.with_suffix(".cif"))
 
-        attempt_prefix = run_tmp_dir / f"Match_{run_token}_attempt{attempt_idx + 1}"
-        attempt_cif = str(attempt_prefix.with_suffix(".cif"))
+    wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count, qrs_id = search_solution(
+        cells,
+        spg,
+        composition,
+        ref_den,
+        attempt_cif,
+        pxrd_csv,
+        x1,
+        y1,
+        eng_min,
+        sim_max,
+        max_wp_choices,
+        struc_count if structure_id_counter is None else structure_id_counter,
+        max_force,
+        max_stress,
+        wavelength,
+        thetas,
+        resolution,
+        SCALED_INTENSITY_TOL,
+        INST_FILE,
+        logger,
+        max_wp,
+        max_Z,
+        max_dof,
+        per_dof,
+        max_atoms,
+        min_r2,
+        max_chi2,
+        structure_log=all_structure_log,
+        max_eng_rel=max_eng_rel,
+        min_structures_before_early_stop=min_structures_before_early_stop,
+        forced_wp_solution=forced_wp_solution,
+        ase_logfile=state.get("ase_logfile"),
+        global_accepted=global_accepted,
+        qrs_method=state.get("qrs_method", "sobol"),
+        factor=factor,
+    )
 
-        wr, r2, chi2, xtal, eng_best, selected_eng, _, struc_count, attempt_count, qrs_id = search_solution(
-            cells,
-            spg,
-            composition,
-            ref_den,
-            attempt_cif,
-            pxrd_csv,
-            x1,
-            y1,
-            eng_min,
-            sim_max,
-            max_wp_choices,
-            struc_count if structure_id_counter is None else structure_id_counter,
-            max_force,
-            max_stress,
-            wavelength,
-            thetas,
-            resolution,
-            SCALED_INTENSITY_TOL,
-            INST_FILE,
-            logger,
-            max_wp,
-            max_Z,
-            max_dof,
-            per_dof,
-            max_atoms,
-            min_r2,
-            max_chi2,
-            structure_log=all_structure_log,
-            max_eng_rel=max_eng_rel,
-            min_structures_before_early_stop=min_structures_before_early_stop,
-            forced_wp_solution=forced_wp_solution,
-            ase_logfile=state.get("ase_logfile"),
-            global_accepted=global_accepted,
-            use_qrs=state.get("use_qrs"),
-            qrs_method=state.get("qrs_method", "sobol"),
-            factor=factor,
-        )
-
-        state["attempt_count"] += attempt_count
-        #print(f"{struc_count} new structure(s). Total: {len(all_structure_log)}/{state['attempt_count']}.")
-        # Accumulate struc_count with the number of new structures generated in this attempt
-        if wr is None: continue
-
+    state["attempt_count"] += attempt_count
+    #print(f"{struc_count} new structure(s). Total: {len(all_structure_log)}/{state['attempt_count']}.")
+    # Accumulate struc_count with the number of new structures generated in this attempt
+    if wr is not None:
         global_best_energy = _get_global_best_energy(all_structure_log)
         if global_best_energy is None and eng_best is not None:
             global_best_energy = float(eng_best)
@@ -524,8 +493,6 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             "selected_energy": candidate_selected_energy,
             "eng_rel": candidate_eng_rel,
             "wp_labels": state.get("wp_labels"),
-            "attempt": attempt_idx + 1,
-            "seed": seed,
             "cif": attempt_cif,
             "qrs_id": qrs_id,
             "accepted": False,
@@ -552,14 +519,12 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             state['best_result']["r2"] >= max(min_r2 + 0.02, 0.97)
             or state['best_result']["chi2"] <= min(max_chi2 * 0.7, 0.08)
         ):
-            logger.info(f"Early stop: excellent solution found at attempt {attempt_idx + 1}.")
-            break
+            logger.info(f"Early stop: excellent solution found.")
 
     state["structure_log"] = all_structure_log
     state["Struc_count"] = struc_count
 
     if state['best_result'] is None: #and len(all_structure_log) >= min_structures_before_early_stop:
-        #logger.info("No satisfactory solution found across all attempts.")
         state["wyckoff_result"] = {
             "spg": spg,
             "accepted": False,
@@ -569,13 +534,11 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             "chi2": None,
             "eng_best": eng_min,
             "attempt": None,
-            "seed": None,
             "png": None,
             "cif": None,
             "score": None,
         }
         text = f"Wyckoff solving completed for formula {formula} in space group {spg}.\n"
-        text += f"Adaptive attempts: {attempts}, seed_base: {seed_base}\n"
         text += f"Best similarity: {sim_max:.3f}, Minimum energy per atom: {eng_min:.3f} eV\n"
         text += "No satisfactory solution found.\n"
         return text, state
@@ -593,10 +556,8 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     state["wyckoff_result"] = state['best_result']
 
     text = f"Wyckoff solving completed for formula {formula} in space group {spg}.\n"
-    text += f"Adaptive attempts: {attempts}, seed_base: {seed_base}\n"
     text += f"Best similarity: {sim_max:.3f}, Min_energy: {state['best_result']['eng_best']:.3f} eV\n"
     text += f"Final Rietveld refinement results: Wr={wr:.4f}, R2={r2:.4f}, Chi2={chi2:.4f}\n"
-    text += f"Selected attempt: {state['best_result']['attempt']} \n"
     if not state['best_result']["accepted"]:
         text += "Best candidate did not meet the acceptance thresholds, but was kept as a fallback result.\n"
     text += f"Best structure saved to {match_cif}\n"
@@ -705,21 +666,6 @@ def run_pipeline(state: dict) -> dict:
         #print(f"Estimated cell {cell_obj.dims} under SPG {spg_value}: {len(candidates)} Wyckoffs.")
         candidate_count = len(candidates)
         est_trials = sum(candidate[6] for candidate in candidates)  # sum of dof*per_dof across candidates
-        #est_trials = 0
-        #for candidate in candidates:
-        #    #dof = candidate[5]
-        #    est_trials += candidate[6]
-        #    #if cell_obj.spg > 15:
-        #    #    max_abc = max(cell_obj.dims)
-        #    #else:
-        #    #    max_abc = max(cell_obj.dims[:3])
-        #    #if cell_obj.size > 1000:
-        #    #    per_dof = max(4, int(max_abc/1.5))
-        #    #else:
-        #    #    per_dof = max(4, int(max_abc/1.2))
-        #    #n4 = dof * per_dof if dof != 1 else 4
-        #    #est_trials += (n4 + 1)
-
         out = (candidate_count, candidate_count, est_trials)
         wp_cost_cache[key] = out
         return out
@@ -734,24 +680,6 @@ def run_pipeline(state: dict) -> dict:
 
     if infer_spg:
         predicted_spgs = state["spg_predictions"][:state["spg_top_k"]]
-        lattice_filter = str(state.get("lattice_symmetry", "auto") or "auto").strip().lower()
-        target_system = None
-        if lattice_filter == "auto":
-            filename_spg = state.get("spg_from_filename")
-            target_system = spg_to_crystal_system(int(filename_spg)) if filename_spg is not None else None
-        elif lattice_filter in VALID_LATTICE_SYMMETRIES:
-            target_system = lattice_filter
-
-        if predicted_spgs and target_system is not None:
-            filtered_spgs = [sg for sg in predicted_spgs if spg_to_crystal_system(sg) == target_system]
-            logger.info(
-                f"Applying lattice symmetry filter: {target_system}. "
-                f"Kept {len(filtered_spgs)}/{len(predicted_spgs)} inferred SG candidates."
-            )
-            predicted_spgs = filtered_spgs
-            if len(predicted_spgs) == 0:
-                logger.info(f"No SPG candidates after applying symmetry filter '{target_system}'.")
-                return state
 
         force_spg = state.get("force_spg")
         if force_spg is not None:

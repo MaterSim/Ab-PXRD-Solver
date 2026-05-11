@@ -1,448 +1,366 @@
-# PXRD-Agent: Automated Crystal Determination from Powder X-Ray Diffraction
+# PXRD-Agent: Ab Initio Powder X-Ray Diffraction Structure Solver
 
 ## Overview
 
-PXRD-Agent is an agentic pipeline that automates the *ab initio* crystal structure determination workflow from experimental Powder X-Ray Diffraction (PXRD) data. Given a measured diffraction pattern and the chemical formula of the material, the system autonomously:
+PXRD-Agent is a fully automated *ab initio* crystal structure determination pipeline. Given an experimental Powder X-Ray Diffraction (PXRD) pattern and a chemical formula, it autonomously:
 
-1. Preprocesses and cleans the raw diffraction pattern to get peaks and space group symmetry (a pretrained CNN model)
-2. Predicts a physical density range from the given chemical formula (a pretrained ML ensemble model).
-3. Indexes the peaks to candidate unit cells (tools.solver)
-4. Samples Wyckoff position combinations and generates trial crystal structures (`PyXtal` or others)
-5. Relaxes structures with a neural-network force field (Foundational `MACE-MLFF`)
-6. Matches simulated patterns against the experiment and refines promising solutions with Rietveld refinement (`GSAS2` utility)
-
-The pipeline is implemented with the [Strands](https://github.com/strands-agents/sdk-python) agentic framework and uses a **Gemini 2.5 Pro** LLM as the reasoning backbone for each specialist agent.
-
-## Recent Search Improvements
-
-- **Top-k inferred space-group iteration:** `--infer-spg` can now try ranked space groups up to `--spg-top-k` (supports `3`, `5`, `10`, `20`) and stop early on accepted solutions.
-- **Cell reuse across inferred SGs:** after obtaining candidate cells from the first viable inferred SG, the same cells are reused while testing other inferred space groups during Wyckoff/structure generation.
-- **Wyckoff reranking + adaptive expansion:** candidates are reranked (`score_wp_candidate`) and explored progressively (`top-3 → top-5 → top-10 → up to N2`) to reduce unnecessary expensive relaxations.
-- **Supercell-aware budgeting:** likely near-integer supercells are still checked but with reduced per-cell search effort (`N2/N3`), prioritizing primitive/smaller cells first.
-- **Composite refinement trigger:** refinement uses similarity plus relative energy (`eng_rel = eng - eng_best`) rather than similarity alone.
-- **Transparent skip diagnostics:** when refinement is skipped despite promising similarity, logs now include the explicit reason and `eng_rel`.
-
----
+1. **Preprocesses** the diffraction pattern — adaptive background subtraction, Savitzky-Golay smoothing, and ML-guided peak detection.
+2. **Predicts density** bounds from the chemical formula using a pretrained Roost ensemble model.
+3. **Infers or enumerates space groups** — either read from the filename, inferred by a CNN classifier (`--spg-backend model`), or jointly solved with cell indexing (`--spg-backend smart-cell`).
+4. **Indexes peaks** to candidate unit cells via `CellSolver` (known SPG) or `SmartCellSolver` (unknown SPG).
+5. **Enumerates Wyckoff positions** compatible with the composition and density range.
+6. **Generates trial structures** using PyXtal with optional Quasi-Random Sampling (Sobol or Halton).
+7. **Relaxes structures** with the MACE universal neural-network force field via ASE.
+8. **Screens candidates** by cosine similarity of simulated vs. experimental PXRD patterns.
+9. **Refines** promising structures with full-pattern Rietveld refinement via GSAS-II.
 
 ## System Architecture
 
-The pipeline follows a **linear directed acyclic graph (DAG)** of three specialist agents, each wrapping one Python tool:
+---
+
+## Pipeline Flowchart
 
 ```
-┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
-│  DataPreprocessAgent │ ───► │   CellManagerAgent   │ ───► │  WyckoffSolverAgent  │
-│  (DataPreprocessor)  │      │   (CellSolverTool)   │      │  (WyckoffSolverTool) │
-└──────────────────────┘      └──────────────────────┘      └──────────────────────┘
+Input: PXRD CSV + formula
+          │
+          ▼
+┌─────────────────────────┐
+│   Data Preprocessing    │  adaptive background subtraction → smoothing
+│   (RawDataManager)      │  SciPy peaks → ML peak filter
+│                         │  Roost density ensemble → density bounds
+└────────────┬────────────┘
+             │  peaks, density_min/max, formula, composition
+             ▼
+    ┌────────────────────┐
+    │  Space Group Mode? │
+    └──┬─────────────────┘
+       │
+       ├── Known SPG (filename or --spg)
+       │        │
+       │        ▼
+       │   ┌──────────────────────────────────────┐
+       │   │  CellSolver                          │
+       │   │  hkl enumeration → linear solve →    │
+       │   │  mismatch scoring → consolidation    │
+       │   └────────────────┬─────────────────────┘
+       │                    │
+       └── --infer-spg ─────┤
+           (model backend)  │
+                │           │
+                ▼           │
+           CNN classifier   │
+           top-k SPG list   │
+                │           │
+                ▼           │
+       SmartCellSolver ─────┘
+       (smart-cell backend: jointly ranks SPG + cell)
+                │
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│  For each (cell, SPG) pair, ordered by estimated cost:   │
+│                                                          │
+│   WPManager: enumerate valid Wyckoff assignments         │
+│   XtalManager: generate trial structures (PyXtal)        │
+│       ↓  optional: Quasi-Random Sampling (QRS)           │
+│   MACE force field: geometry relaxation (ASE)            │
+│   XRD.py: simulate pattern → cosine similarity           │
+│       ↓  if sim ≥ threshold or (sim + energy gate)       │
+│   GSAS-II: Rietveld refinement                           │
+│       ↓  if R² ≥ 0.95 or χ² ≤ 0.12                      │
+│   ✓ ACCEPTED — save CIF + plot, exit immediately         │
+└──────────────────────────────────────────────────────────┘
+          │
+          ▼
+Output: Results/cifs/Match_<formula>_<spg>.cif
+        Results/logs/<run>.log
+        Results/summary.csv
 ```
-
-All three agents share a single mutable `invocation_state` dictionary (`share_state`) that carries every intermediate result from one stage to the next without re-serialising through the LLM context.
-
-### Runtime Robustness (new)
-
-The default execution path is still the Strands graph, but `PXRD_agent.py` now includes a **deterministic fallback pipeline** for runtime reliability:
-
-- It first attempts graph execution.
-- If a known Strands Gemini streaming bug is detected (the `candidate` `UnboundLocalError`), it automatically falls back to sequential stage execution:
-  1. data preprocessing,
-  2. cell solving,
-  3. Wyckoff/structure search.
-
-The script also prints startup runtime-control flags and selected mode for reproducibility.
-
-#### Environment flags
-
-- `STRANDS_FORCE_FALLBACK=1`: always run deterministic fallback mode.
-- `STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=1`: allow graph mode even if vulnerable Strands code is detected.
-
-### Quick Start / Run
-
-Run from the repository root:
-
-```bash
-python PXRD_solve.py
-```
-
-This is the deterministic entrypoint. It runs the three stages directly in sequence without the Strands graph, which is the better place to debug pipeline limitations before adding agent orchestration.
-
-If you want the current graph-based agent entrypoint instead:
-
-```bash
-python PXRD_agent.py
-```
-
-The script prints startup flags, selected runtime mode (`graph` or `fallback`), and progress logs.
-
-#### Force deterministic fallback mode
-
-```bash
-STRANDS_FORCE_FALLBACK=1 python PXRD_agent.py
-```
-
-#### Force graph mode even when known bug signature is detected
-
-```bash
-STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=1 python PXRD_agent.py
-```
-
-#### Optional: show both runtime flags explicitly
-
-```bash
-STRANDS_FORCE_FALLBACK=0 STRANDS_ALLOW_GRAPH_WITH_KNOWN_BUG=0 python PXRD_agent.py
-```
-
-#### Infer space group from PXRD model instead of filename
-
-By default, the space group is read from the filename convention (`PXRD_<formula>_<spg>.csv`). Pass `--infer-spg` to instead predict it from the diffraction pattern using the pretrained space group classifier:
-
-```bash
-# Infer top-5 space groups (default) and try each until a solution is found
-python PXRD_agent.py --infer-spg --input-csv Examples/PXRD_Ba4NaBi_216.csv
-
-# Try up to 20 predicted space groups
-python PXRD_agent.py --infer-spg --spg-top-k 20 --input-csv Examples/PXRD_Ce3Si8Ni2_65.csv
-```
-
-Available `--spg-top-k` values: `3`, `5` (default), `10`, `20`.
-
-You can additionally constrain inferred candidates by crystal system:
-
-```bash
-# Auto: infer crystal system from filename SPG and keep only matching inferred SGs
-python PXRD_agent.py --infer-spg --lattice-symmetry auto --input-csv Examples/PXRD_Ce3Si8Ni2_65.csv
-
-# Explicit: only test cubic inferred SG candidates
-python PXRD_agent.py --infer-spg --lattice-symmetry cubic --spg-top-k 20 --input-csv Examples/PXRD_Ba4NaBi_216.csv
-```
-
-`--lattice-symmetry` choices: `auto`, `any`, `triclinic`, `monoclinic`, `orthorhombic`, `tetragonal`, `trigonal`, `hexagonal`, `cubic`.
-
-When `--infer-spg` is active, the pipeline:
-1. Detects peaks with the CNN peak finder.
-2. Reconstructs a Gaussian profile from those peaks.
-3. Feeds the profile + formula into the space group classifier to rank candidates.
-4. Solves cells once from the first inferred SG that yields valid cells, then reuses those cells across top-k SG candidates for Wyckoff/structure search.
-5. Iterates over inferred SG candidates, stopping as soon as an accepted solution is found.
-
-This infer-SPG behavior is consistent in deterministic fallback mode and graph-consistent deterministic mode.
-
-#### Improve stability for stochastic search (recommended)
-
-The Wyckoff/structure stage is stochastic. `PXRD_agent.py` now supports adaptive multi-attempt search with deterministic seeds:
-
-- `PXRD_MULTI_ATTEMPTS` (default `3`, minimum `1`): number of independent attempts.
-- `PXRD_SEED_BASE` (default `20260315`): base seed used to derive per-attempt seeds.
-
-Examples:
-
-```bash
-# More robust, slower
-PXRD_MULTI_ATTEMPTS=5 python PXRD_agent.py
-
-# Fully reproducible run with a fixed seed base
-PXRD_MULTI_ATTEMPTS=4 PXRD_SEED_BASE=123456 python PXRD_agent.py
-```
-
-Recommended settings (speed vs stability):
-
-| `PXRD_MULTI_ATTEMPTS` | Runtime Cost | Result Stability | Recommended Use |
-|---|---|---|---|
-| `1` | Lowest | Lowest | Fast debugging and smoke tests |
-| `3` (default) | Moderate | Good | Daily development runs |
-| `5` | High | Better | Important runs where robustness matters |
-| `7+` | Very high | Best-effort | Hard cases and final confirmation |
-
-### Shared State (`share_state`)
-
-| Key | Type | Populated by | Description |
-|-----|------|-------------|-------------|
-| `pxrd_csv` | `str` | User | Path to the input CSV file |
-| `formula` | `str` | DataPreprocessAgent | Chemical formula parsed from filename |
-| `composition` | `dict` | DataPreprocessAgent | Element → count mapping |
-| `x1`, `y1` | `list[float]` | DataPreprocessAgent | 2θ array and intensity array |
-| `peaks` | `list[int]` | DataPreprocessAgent | Peak indices in the 2θ grid |
-| `peak_positions` | `list[float]` | DataPreprocessAgent | 2θ values of detected peaks |
-| `spg` | `int` | DataPreprocessAgent | Space group number (from filename) |
-| `density_min/max` | `float` | DataPreprocessAgent | ML-predicted density bounds (g cm⁻³) |
-| `min_volume` | `float` | DataPreprocessAgent | Minimum unit cell volume (Å³) |
-| `cells` | `list[CellManager]` | CellManagerAgent | Ranked candidate unit cells |
-| `wavelength` | `float` | Default | Cu-Kα₁ wavelength, 1.54184 Å |
-| `min_r2` | `float` | Default | Minimum acceptable R² (0.95) |
-| `max_chi2` | `float` | Default | Maximum acceptable χ² (0.12) |
-| `max_cells` | `int` | Default | Maximum candidate cells to carry forward (10) |
 
 ---
 
-## Stage 1 — Data Preprocessing (`DataPreprocessAgent`)
+## Module Structure
 
-**Class / tool:** `DataPreprocessor` (in `PXRD_agent.py`)  
-**Core logic:** `tools/manager.py` → `RawDataManager`  
-**ML component:** `tools/peak_prediction.py` → `_predict_peaks`  
-**ML component:** `tools/density.py` → `DensityEnsemblePredictor` / `predict_density_ensemble`
+```
+PXRD-Agent/
+├── PXRD_solve.py              # Main entry point (deterministic pipeline)
+├── pxrd_app/
+│   ├── cli.py                 # Argument parsing, batch dispatch, parallel workers
+│   ├── constants.py           # DEFAULT_STATE — all tunable hyperparameters
+│   ├── core.py                # Pipeline stages: run_data_preprocessor,
+│   │                          #   run_cell_solver, run_wyckoff_solver
+│   ├── inference.py           # SPG inference backends, SmartCellSolver ranking
+│   ├── runtime.py             # Results CSV writing, timing summary
+│   └── tools/
+│       ├── manager.py         # RawDataManager, CellManager, WPManager, XtalManager
+│       │                      #   generate_qrs_grid (Sobol / Halton)
+│       ├── solver.py          # CellSolver, SmartCellSolver, search_solution,
+│       │                      #   enumerate_wyckoff, get_adaptive_wp_limits
+│       ├── density.py         # Roost ensemble density predictor
+│       ├── peak_prediction.py # CNN peak detector + space group classifier
+│       ├── XRD.py             # Pattern simulation, Similarity (cosine) metric
+│       ├── gsas.py            # GSAS-II Rietveld refinement wrapper
+│       ├── ase_opt.py         # MACE + ASE structure relaxation
+│       └── utils.py           # parse_formula, relax_structure, volume helpers
+├── Examples/                  # Sample PXRD CSV files
+├── GSAS_PXRD/                 # Larger benchmark dataset
+├── data/                      # CIF reference files, run lists
+└── environment.yml            # Conda environment spec
+```
+
+---
+
+## Stage 1 — Data Preprocessing
+
+**Code:** `pxrd_app/core.py → run_data_preprocessor`  
+**Key class:** `pxrd_app/tools/manager.py → RawDataManager`
 
 ### 1.1 Filename Parsing
 
-The chemical formula and space group number are encoded in the input filename using the convention `PXRD_<formula>_<spg>.csv`. These are extracted with string splitting:
+The chemical formula and space group are parsed from the filename convention `PXRD_<formula>_<spg>.csv`:
 
 ```
 PXRD_PrYMg2_123.csv  →  formula = "PrYMg2",  spg = 123
 ```
 
-The formula is further parsed into a composition dictionary (e.g., `{'Pr': 1, 'Y': 1, 'Mg': 2}`) by `parse_formula()` in `tools/utils.py`.
+Use `--formula` to override, or `--infer-spg` to ignore the filename SPG entirely. Hyphen-separated names are also supported.
 
-### 1.2 Raw Data Loading and Smoothing
+### 1.2 Adaptive Background Subtraction
 
-The CSV file contains two columns: 2θ (degrees) and intensity (arbitrary units). The data are loaded with `pandas` and passed to `RawDataManager`, which optionally:
+If `min(intensity) > 2.5`, background subtraction is applied via **asymmetric least-squares polynomial fitting** (order 6, 50 iterations, asymmetry `asym = 0.01`). The corrected pattern is saved as `<name>_bg_subtracted.csv` for downstream use. A **Savitzky-Golay filter** (window 4, polynomial order 3) then smooths noise while preserving peak shapes.
 
-- Performs **background subtraction** via asymmetric least-squares polynomial fitting (`polyfit` order 6, 50 iterations). Points above the fitted baseline are down-weighted with asymmetry parameter `asym = 0.01`.
-- Applies **Savitzky-Golay smoothing** (window 4, polynomial order 3) to reduce noise while preserving peak shapes.
+### 1.3 Peak Detection
 
-### 1.3 Initial Peak Detection (SciPy)
+`RawDataManager.get_peaks_from_scipy()` calls `scipy.signal.find_peaks` with conservative thresholds to over-detect peaks. `filter_peaks_by_ml()` then filters with a pretrained CNN model — a peak is **removed** only when **both** of these hold:
 
-`get_peaks_from_scipy()` calls `scipy.signal.find_peaks` with conservative thresholds (`height=1.0`, `distance=5`, `prominence=1.5`) to capture even weak peaks that would otherwise be missed. This intentional over-detection is followed by ML-based filtering.
+- Model peak probability < 0.8
+- Intensity < `min_height` (3.0–7.5, depending on background mode)
 
-### 1.4 ML-Based Peak Filtering
+### 1.4 Density Prediction
 
-`filter_peaks_by_ml()` normalises the intensity profile to [0, 1] and passes it to a pretrained CNN/transformer peak-detection model (`tools/peak_finder/`) via `_predict_peaks`. Each data point receives a peak probability score. Candidate peaks from Step 1.3 are **discarded** only when both conditions hold:
+`predict_density_ensemble()` runs a **Roost** message-passing neural network ensemble on the composition. Predictions are aggregated as `mean ± 2.5·std`, yielding `density_min` and `density_max` (g cm⁻³). The minimum cell volume bound is:
 
-- Model probability < `threshold` (default 0.8)
-- Raw intensity < `min_height` (default 3.0 normalised units)
-
-This conjunction prevents the removal of low-probability but clearly intense peaks.
-
-### 1.5 Density Range Prediction
-
-`predict_density_ensemble()` in `tools/density.py` loads a **Roost ensemble** (multiple checkpoint files matching `models/density/checkpoint-r*.pth.tar`). Roost is a message-passing neural network that ingests element embeddings and stoichiometry. For the given formula, all models perform inference and their predictions are aggregated. The output is a `(mean ± sigma·std)` interval, defining `density_min` and `density_max` (default `sigma = 2.5`).
-
-### 1.6 Minimum Volume Constraint
-
-The minimum unit cell volume is derived from the maximum density bound:
-
-$$V_\text{min} = \frac{M_\text{formula}}{d_\text{max} \cdot N_A} \times 10^{24} \quad (\text{Å}^3)$$
-
-where $M_\text{formula}$ is the formula-unit molecular weight in g mol⁻¹ and $N_A$ is Avogadro's number. This hard lower bound prevents physically unreasonable cells from entering the indexing stage.
-
-### 1.7 Output
-
-All extracted values are written back to `invocation_state` and returned as a structured dictionary for the LLM to reason about. The agent reports any data-quality issues before passing control downstream.
+$$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10^{24} \;\; (\text{Å}^3)$$
 
 ---
 
-## Stage 2 — Unit Cell Indexing (`CellManagerAgent`)
+## Stage 2 — Space Group Inference and Cell Indexing
 
-**Class / tool:** `CellSolverTool` (in `PXRD_agent.py`)  
-**Core logic:** `tools/solver.py` → `CellSolver`, `tools/manager.py` → `CellManager`
+### 2.1 Space Group Modes
 
-### 2.1 Bravais Lattice
+| Mode | Flag | How SPG is obtained |
+|------|------|---------------------|
+| **Filename** | *(default)* | Parsed from `_<spg>.csv` suffix |
+| **Override** | `--spg N` | Fixed to space group N |
+| **ML classifier** | `--infer-spg --spg-backend model` | CNN predicts top-k SPGs from PXRD profile + formula |
+| **SmartCellSolver** | `--infer-spg --spg-backend smart-cell` | Jointly enumerates SPGs and cells, ranked by indexing quality |
 
-The Bravais lattice type is looked up from the space group number using `pyxtal.symmetry.get_bravais_lattice`. This determines how many independent cell parameters must be solved for (1 for cubic, 2 for hexagonal/tetragonal, 3 for orthorhombic, 4 for monoclinic, 6 for triclinic).
+`--symmetry` (e.g., `cubic`, `monoclinic`, `any`) restricts the SPG search space. When `--infer-spg` is used with `smart-cell`, it defaults to `any`.
 
-### 2.2 hkl Enumeration
+### 2.2 CellSolver (known SPG)
 
-All **(h k l)** triples up to `hkl_max = (2, 5, 6)` that are **systematically allowed** by the space group are generated. The solver then considers combinations of these up to the number needed for a linearly determined system (e.g., 2 peaks for tetragonal, 3 for orthorhombic, etc.).
+`CellSolver` in `tools/solver.py`:
 
-### 2.3 Cell Parameter Solving
+1. **hkl enumeration** — all symmetry-allowed (h k l) triples up to `hkl_max = (2, 5, 6)`.
+2. **Linear solve** — Bragg equation + lattice metric form a linear system solved by `numpy.linalg.solve`. For tetragonal:
 
-For each hkl combination, the Bragg equation
+$$\frac{1}{d^2} = \frac{h^2+k^2}{a^2} + \frac{l^2}{c^2}$$
 
-$$d_{hkl} = \frac{\lambda}{2 \sin\theta}$$
+3. **Mismatch scoring** — peaks re-indexed against trial cell at tolerances `[0.1°, 0.15°, 0.5°]`.
 
-is combined with the lattice-metric formula to form a linear system. For example, for **tetragonal** symmetry:
+For orthorhombic SPGs, all six axis permutations are tried to handle axis-setting ambiguity.
 
-$$\frac{1}{d^2} = \frac{h^2 + k^2}{a^2} + \frac{l^2}{c^2}$$
+### 2.3 SmartCellSolver (unknown SPG)
 
-Each system is solved analytically (via `numpy.linalg.solve`) and the result is filtered against:
+`SmartCellSolver` sweeps through space groups from **highest to lowest symmetry** (cubic → triclinic), simultaneously solving for unit cells under each SPG. Solutions are ranked jointly by mismatch, χ², and volume. This is the recommended mode when the SPG is unknown. The solver stops early once an ideal-mismatch solution is found for a high-symmetry system.
 
-- $a, b, c > $ `min_abc` = 2.0 Å
-- $a, b, c < $ `max_abc`
-- $V > V_\text{min}$ from Stage 1
+### 2.4 Cell Consolidation
 
-### 2.4 Mismatch Scoring and Tolerances
-
-The solver re-indexes all detected peaks against the trial cell using a series of angular tolerances `theta_tols = [0.1°, 0.15°, 0.5°]`. The **mismatch score** is the number of experimentally observed peaks that cannot be assigned to any allowed reflection within the tightest tolerance (`max_mismatch = 12`). A `chi2` score quantifies the mean squared residual between observed and predicted peak positions.
-
-### 2.5 Cell Consolidation
-
-`CellManager.consolidate()` merges cells that are crystallographically equivalent (within a fractional tolerance of 5 % on each parameter) and retains the top `max_cells = 10` solutions ranked primarily by the number of missing peaks (fewer is better) and secondarily by chi2.
-
-### 2.6 Output
-
-The tool returns a list of `CellManager` objects, each carrying:
-
-- `dims`: lattice parameters $(a, b, c, \alpha, \beta, \gamma)$
-- `missing`: number of unindexed peaks
-
-These are stored in `invocation_state["cells"]` for Stage 3.
+`CellManager.consolidate()` merges equivalent cells (within 5% on each parameter) and retains the top `max_cells = 10` solutions ranked by (missing peaks, χ²).
 
 ---
 
-## Stage 3 — Crystal Structure Solution (`WyckoffSolverAgent`)
+## Stage 3 — Crystal Structure Solution
 
-**Class / tool:** `WyckoffSolverTool` (in `PXRD_agent.py`)  
-**Core logic:** `tools/solver.py` → `search_solution`  
-**Supporting logic:** `tools/manager.py` → `WPManager`, `XtalManager`  
-**Force field:** ASE + MACE (via `tools/ase_opt.py`)  
-**Refinement:** GSAS-II (via `tools/gsas.py`)
+**Code:** `pxrd_app/core.py → run_wyckoff_solver`  
+**Key function:** `pxrd_app/tools/solver.py → search_solution`
 
-This is the computationally intensive stage. For each candidate cell, the solver systematically explores the space of atomic arrangements consistent with the crystal symmetry.
+### 3.1 Wyckoff Position Enumeration
 
-### 3.1 Wyckoff Position Enumeration (`WPManager`)
+`WPManager` lists all valid Wyckoff position assignments where each element's site multiplicities sum to its count in the formula and the resulting density is within `(density_min, density_max)`. Assignments are reranked by `score_wp_candidate()` to prefer lower-DOF, fewer-site configurations.
 
-For the given space group and chemical composition, `WPManager` enumerates all **Wyckoff position (WP) assignments** that:
+### 3.2 Trial Structure Generation and QRS
 
-- Place each element on a set of Wyckoff sites whose multiplicities sum to the element count in the formula.
-- Produce unit cell contents consistent with the density bounds `(density_min, density_max)`.
+`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites. Trials per assignment: `per_dof × DOF + 1` (default `per_dof = 4`).
 
-`WPManager` first enumerates all valid assignments, then `search_solution()` reranks them with `score_wp_candidate()` to prioritize cheaper/more plausible candidates (lower DOF, higher combinatorial support, fewer/less fragmented sites).
+**Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
 
-Evaluation then uses adaptive expansion (`top-3 → top-5 → top-10 → up to N2`) rather than spending full effort on every candidate from the start.
+### 3.3 Geometry Relaxation (MACE + ASE)
 
-### 3.2 Trial Structure Generation (`XtalManager`)
+Each trial structure is relaxed with the **MACE** universal force field via ASE:
 
-For each WP assignment, `XtalManager` generates random atomic coordinates consistent with the site symmetry using **PyXtal**. The number of random trials per WP assignment is `3 × DOF + 1`.
+1. Coarse relaxation (`10 × DOF` steps).
+2. Stress check — structures with diagonal stress > 5 GPa are discarded.
+3. Fine relaxation (`5 × DOF` steps, `fmax = 0.1` eV Å⁻¹).
 
-`search_solution()` also applies a **supercell-aware per-cell budget**: if a candidate cell volume is a near-integer multiple of the smallest tested cell (likely supercell), that cell is still evaluated but with reduced `N2/N3` effort.
+Only structures with `max_force ≤ 0.5` eV Å⁻¹ and `max_stress ≤ 0.3` GPa pass to screening. The global minimum energy per atom `eng_best` is tracked across all valid structures.
 
-### 3.3 Geometry Optimisation (ASE + MACE)
+### 3.4 Pattern Similarity Screening
 
-Each trial structure is relaxed using `relax_structure()` in `tools/utils.py`, which calls the MACE universal neural-network force field via ASE:
+A theoretical PXRD pattern is simulated (2θ: 10°–80°, step 0.02°, Cu-Kα₁ λ = 1.54184 Å) and compared to the experiment using a cosine-like `Similarity` metric. A structure proceeds to refinement when **either** condition holds:
 
-1. A first relaxation with larger steps (`10 × DOF` steps) loosens the initial geometry.
-2. The structure is discarded if the mean diagonal stress exceeds 5 GPa after step 1.
-3. A second finer relaxation (`5 × DOF` steps, `fmax = 0.1` eV Å⁻¹) converges atomic positions.
+| Trigger | Condition |
+|---------|-----------|
+| Similarity gate | `sim ≥ sim_max − 0.02` (default: `sim ≥ 0.88`) |
+| Energy + similarity gate | `sim ≥ 0.70` **and** `eng − eng_best ≤ max_eng_rel` |
 
-The potential energy per atom after relaxation is tracked. Only structures satisfying `max_force ≤ 0.5` eV Å⁻¹ and `max_stress ≤ 0.3` GPa proceed to XRD comparison.
-
-### 3.4 XRD Pattern Similarity Screening
-
-For each relaxed structure, a theoretical PXRD pattern is computed with `tools/XRD.py` using the experimental wavelength, 2θ range `[10°, 80°]`, and step size 0.02°. The similarity to the experimental pattern is evaluated with a cosine-like metric (`Similarity` class).
-
-Candidates are sent to refinement when either:
-
-- `sim ≥ sim_max - refine_margin` (default `0.90 - 0.02 = 0.88`), or
-- `sim ≥ refine_sim_min` **and** `eng_rel ≤ refine_eng_window`, where
-  - `eng_rel = eng - eng_best` and `eng_best` is tracked from valid (stress/force-passing) structures only.
-
-When similarity is promising but energy-window filtering rejects refinement, the solver logs an explicit skip reason with `eng_rel`.
+`sim_max` (default 0.9) is automatically lowered for light-element compositions (Z ≤ 6) or sparse peak sets (≤ 4 peaks).
 
 ### 3.5 Rietveld Refinement (GSAS-II)
 
-Structures that satisfy the composite trigger above are submitted to full-pattern Rietveld refinement via `tools/gsas.py`, which wraps GSAS-II:
-
-- Refines lattice parameters, atomic positions, thermal parameters, and profile parameters.
-- Computes the standard crystallographic fit metrics:
-  - **Rwp** (weighted profile R-factor)
-  - **R²** (coefficient of determination)
-  - **χ²** (goodness of fit, normalised by degrees of freedom)
+`tools/gsas.py` wraps GSAS-II for full-pattern Rietveld refinement. A per-refinement wall-time limit of 60 s prevents hangs; GSAS-II is recycled every 30 calls to avoid memory leaks.
 
 A solution is **accepted** when:
 
 $$R^2 \geq 0.95 \quad \text{or} \quad \chi^2 \leq 0.12$$
 
-The refined structure is saved as a CIF file and a comparison plot (observed vs. simulated pattern) is written to `Results/`.
+The pipeline exits immediately on the first accepted solution.
 
-### 3.6 Search Strategy Summary
+### 3.6 Key Search Parameters
 
-| Parameter | Value | Meaning |
-|-----------|-------|---------|
-| `N1` | 5 | Top cells tested |
-| `N2` | 20 | Max WP combinations per cell before adaptive/supercell reduction |
-| `N3` | 9 | Max DOF per WP combination before adaptive/supercell reduction |
-| `max cells` | 10 | Cells retained after indexing |
-| Refinement trigger 1 | `sim ≥ 0.88` | Near-threshold similarity gate (`sim_max - refine_margin`) |
-| Refinement trigger 2 | `sim ≥ 0.70` and `eng_rel ≤ 0.5` | Composite similarity+relative-energy gate |
-| Acceptance: R² | ≥ 0.95 | Rietveld quality gate |
-| Acceptance: χ² | ≤ 0.12 | Rietveld quality gate |
-
-The solver exits **immediately** upon finding any structure meeting the acceptance criteria. Because WP exploration now uses reranking + adaptive expansion + supercell-aware budget reduction, practical search cost is usually lower than the fixed-budget worst-case bound.
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `max_cells` | 10 | Candidate cells carried into Stage 3 |
+| `max_wp` | 18 | Max Wyckoff sites per assignment |
+| `max_dof` | 25 | Max degrees of freedom per WP combination |
+| `per_dof` | 4 | Trials per degree of freedom |
+| `max_Z` | 24 | Max formula units per cell |
+| `max_eng_rel` | 0.1 eV/atom | Energy window above best for refinement trigger 2 |
+| `max_force` | 0.5 eV/Å | Max per-atom force after relaxation |
+| `max_stress` | 0.3 GPa | Max diagonal stress after relaxation |
+| `min_r2` | 0.95 | Rietveld acceptance: R² |
+| `max_chi2` | 0.12 | Rietveld acceptance: χ² |
+| `gsas_refine_timeout` | 60 s | Per-refinement wall-time limit |
 
 ---
 
 ## Machine Learning Models
 
-| Model | Location | Framework | Task |
-|-------|----------|-----------|------|
-| Peak detector | `tools/models/peaks/best_model.pth` | Custom CNN/transformer | Assign peak probability to each 2θ point |
-| Space group predictor | `tools/models/spacegroup/best_model.pth` | `ImprovedXRDNetWithFormula` (203 classes) | Predict ranked space groups from reconstructed PXRD profile + formula |
-| Density ensemble | `tools/models/density/checkpoint-r*.pth.tar` | Roost (PyTorch) | Predict density mean and uncertainty from composition |
+| Model | Location | Task |
+|-------|----------|------|
+| Peak detector | `tools/peak_finder/` | Assign peak probability to each 2θ point (CNN/transformer) |
+| Space group predictor | `tools/spacegroup/` | Rank space groups from PXRD profile + formula (`ImprovedXRDNetWithFormula`) |
+| Density ensemble | `tools/aviary/` | Predict density mean + uncertainty from composition (Roost, PyTorch) |
 
 ---
 
-## Model Evaluation
+## Usage
 
-### Space Group Prediction Quality
-
-`evaluate_spacegroup_prediction.py` measures how well the pretrained space group classifier performs across a set of labelled PXRD files. It uses the same reconstructed-profile pipeline as the main agent.
-
-#### Basic usage
+### Quick Start
 
 ```bash
-# Evaluate all CSV files in the Examples/ directory
-python evaluate_spacegroup_prediction.py --input Examples/ --top-k 5
+# Single file, SPG from filename
+python PXRD_solve.py --input Examples/PXRD_PrYMg2_123.csv
 
-# Evaluate a specific pattern
-python evaluate_spacegroup_prediction.py --input Examples/PXRD_Ba4NaBi_216.csv
+# Single file, infer SPG with SmartCellSolver + Halton QRS
+python PXRD_solve.py --input GSAS_PXRD/Ag2Hg5_127.csv \
+    --infer-spg \
+    --qrs-method halton \
+    --max-volume 1500.0
 
-# Report top-10 predictions; save per-file results to CSV
-python evaluate_spacegroup_prediction.py --input Examples/ --top-k 10 --output-csv results_spg.csv
+# Batch: directory, 8 parallel workers
+python PXRD_solve.py --input GSAS_PXRD/ --workers 8 \
+    --infer-spg --output Results
 
-# Limit to the first 5 files (quick smoke test)
-python evaluate_spacegroup_prediction.py --input Examples/ --max-files 5
+# Batch: file list (SLURM-style array job)
+python PXRD_solve.py --use-list --input data/test.txt \
+    --infer-spg --qrs-method halton --workers 48 --output 0428
 ```
 
-#### CLI arguments
+### All CLI Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--input` | `Examples/` | Directory of CSV files or path to a single CSV |
-| `--pattern` | `PXRD_*.csv` | Glob pattern when `--input` is a directory |
-| `--top-k` | `5` | Number of ranked predictions to display and score (choices: `3`, `5`, `10`) |
-| `--no-normalization` | off | Pass raw intensity directly to the classifier (skips reconstructed-profile step) |
-| `--max-files` | ∞ | Stop after this many files |
-| `--output-csv` | — | Write per-file predictions to a CSV file |
+| `--input PATH` | `Examples/PXRD_PrYMg2_123.csv` | CSV file, directory of CSVs, or (with `--use-list`) a text file of paths |
+| `--use-list` | off | Treat `--input` as a text file with one CSV path per line |
+| `--output DIR` | `Results` | Output directory for CIFs, logs, plots, and summary CSV |
+| `--formula STR` | *(from filename)* | Override formula instead of parsing from filename |
+| `--spg N` | *(from filename)* | Fix or filter to a single space group (1–230) |
+| `--infer-spg` | off | Infer space group from data instead of reading from filename |
+| `--spg-top-k K` | 160 | Number of top SPG candidates to evaluate |
+| `--max-volume V` | 1500.0 | Maximum allowed unit-cell volume (Å³) |
+| `--max-wp N` | 18 | Max Wyckoff sites per assignment |
+| `--max-dof N` | 25 | Max degrees of freedom per WP combination |
+| `--max-z N` | 24 | Max Z (formula units per cell) |
+| `--max-sim S` | 0.9 | Similarity threshold for refinement trigger 1 |
+| `--max-eng-rel E` | 0.1 | Energy-above-best (eV/atom) threshold for refinement trigger 2 |
+| `--qrs-method {sobol,halton}` | `sobol` | QRS sampler type |
+| `--workers N` | 1 | Parallel CSV workers (batch mode) |
+| `--begin N` / `--end N` | 0 / all | Slice the file list for array jobs |
+| `--reverse` | off | Process files in reverse order |
+| `--list-wp-only` | off | List Wyckoff candidates only, skip structure generation |
+| `--ase-logfile PATH` | *(none)* | Write ASE FIRE optimizer logs to this file |
+| `--wp-csv-path PATH` | `pxrd_app/tools/spg_comp_wp.csv` | Precomputed WP count table for cost estimation |
 
-#### Output
+### Environment Variables
 
-For each file the script prints the true space group, whether it appeared in top-1/3/5, and the ranked predictions with probabilities:
-
-```
-Examples/PXRD_Ba4NaBi_216.csv | true_spg=216 | top1=✓ | preds=[216:42.1%, 225:18.3%, 221:9.7%, ...]
-```
-
-Summary metrics printed at the end:
-
-```
-=== Summary (N=20) ===
-Top-1 Accuracy : 0.650
-Top-3 Accuracy : 0.800
-Top-5 Accuracy : 0.900
-MRR            : 0.742
-```
-
-- **Top-k Accuracy**: fraction of files where the true space group appears in the top-k predictions.
-- **MRR** (Mean Reciprocal Rank): average of $1/\text{rank}$ over all files (higher is better).
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PXRD_SUPPRESS_TORCH_LOAD_FUTUREWARNING` | `1` | Suppress PyTorch FutureWarning on checkpoint load |
 
 ---
 
 ## Input / Output
 
-### Input
+### Input Format
 
-- A CSV file with two columns: `2theta` (degrees) and `intensity` (a.u.)
-- Filename convention: `PXRD_<formula>_<spg>.csv`  
-  Example: `Examples/PXRD_PrYMg2_123.csv`
+A two-column CSV file:
 
-### Output (written to `Results/`)
+```
+2theta,intensity
+10.02,12.3
+10.04,14.1
+...
+```
 
-| File | Description |
+**Filename convention:** `PXRD_<formula>_<spg>.csv` (e.g., `PXRD_PrYMg2_123.csv`). The SPG suffix is used when `--infer-spg` is not set. The formula is always parsed from the filename unless `--formula` overrides it.
+
+### Output
+
+All results are written to `--output` (default: `Results/`):
+
+| Path | Description |
 |------|-------------|
-| `Match_<formula>_<spg>.cif` | Best refined crystal structure in CIF format |
-| `Match_<formula>_<spg>.png` | Observed vs. simulated PXRD pattern comparison |
-| `PXRD_agent.log` | Detailed run log with per-peak, per-cell, and per-structure diagnostics |
+| `cifs/Match_<formula>_<spg>.cif` | Best refined crystal structure (CIF) |
+| `logs/<name>.log` | Per-system run log with full diagnostics |
+| `summary.csv` | One row per input file: runtime, R², χ², Rwp, SPG, Wyckoff, cell |
 
-Notes:
+`tmp/` (GSAS-II intermediates) is created under the output directory and can be deleted after a run.
 
-- `Results/` is auto-created if missing.
-- `tmp/` (for GSAS project/log intermediates) is auto-created if missing.
+### Summary CSV Columns
+
+`csv_file_name`, `Runtime`, `N_struc`, `N_attempts`, `N_est`, `Status`, `E`, `dE`, `R2`, `Chi2`, `Rwp`, `SPG`, `Wyckoff`, `Cell`, `WP_qrs_id`
+
+---
+
+## Shared Pipeline State
+
+All stages communicate through a `run_state` dictionary (`pxrd_app/constants.py → DEFAULT_STATE`). Key fields:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `pxrd_csv` | `str` | Path to input CSV |
+| `formula` | `str` | Chemical formula |
+| `composition` | `dict` | Element → count |
+| `x1`, `y1` | `list[float]` | 2θ and intensity arrays |
+| `peaks` | `list[int]` | Peak indices in 2θ grid |
+| `peak_positions` | `list[float]` | 2θ values of detected peaks |
+| `spg` | `int` | Space group number |
+| `spg_predictions` | `list[int]` | Ranked SPG candidates (infer mode) |
+| `density_min/max` | `float` | ML-predicted density bounds (g cm⁻³) |
+| `min_volume` | `float` | Minimum unit-cell volume (Å³) |
+| `cells` | `list[CellManager]` | Ranked candidate unit cells |
+| `wavelength` | `float` | X-ray wavelength (default: 1.54184 Å) |
+| `qrs_method` | `str` | `"sobol"` or `"halton"` |
 
 ---
 
@@ -450,38 +368,27 @@ Notes:
 
 | Package | Purpose |
 |---------|---------|
-| `strands-agents` (import: `strands`) | Agentic framework (agent, tool, graph builder) |
-| `google-genai` | Gemini 2.5 Pro LLM backend |
-| `pyxtal` | Space group symmetry, Wyckoff positions, structure generation |
-| `ase` | Atomic simulation environment for geometry relaxation |
-| `mace-torch` | Universal neural-network force field (MACE) |
+| `python >= 3.11` | Language runtime |
+| `pyxtal` | Wyckoff positions, space group symmetry, structure generation |
+| `ase` | Geometry relaxation environment |
+| `mace-torch` | Universal MACE neural-network force field |
 | `torch` | PyTorch — ML model inference |
-| `scipy` | Peak detection, signal smoothing |
-| `pandas` / `numpy` | Data I/O and numerical operations |
-| GSAS-II | Full-pattern Rietveld refinement |
-| Python | `>=3.11` (recommended: `3.11`) |
+| `scipy` | Peak detection, smoothing, QMC samplers (Sobol/Halton) |
+| `pandas` / `numpy` | Data I/O and numerics |
+| `pymatgen` | Structure handling, CIF I/O |
+| `spglib` | Space group detection |
+| `gsas2pkg` | Full-pattern Rietveld refinement (GSAS-II) |
 
 ---
 
-## Environment Setup (Conda)
-
-Option 1: create from the checked-in Conda spec:
+## Environment Setup
 
 ```bash
 conda env create -f environment.yml
 conda activate pxrd-agent
 ```
 
-CI note: GitHub Actions runs a Conda smoke test from `environment.yml` on pull requests and pushes that modify environment/setup files (`.github/workflows/conda-smoke.yml`).
-
-Option 2: use the helper script (auto-detects CPU/GPU PyTorch and verifies imports):
-
-```bash
-bash scripts/setup_conda_env.sh
-conda activate pxrd-agent
-```
-
-If you need CUDA-enabled PyTorch after creating from `environment.yml`, install it in the active environment:
+For GPU-accelerated MACE, install a CUDA-enabled PyTorch:
 
 ```bash
 conda install -c pytorch -c nvidia pytorch-cuda=12.1
@@ -491,13 +398,4 @@ conda install -c pytorch -c nvidia pytorch-cuda=12.1
 
 ## Logging
 
-All output from the pipeline — including print statements from library code — is intercepted by `StreamToLogger` and routed through the Python `logging` module. Both `PXRD_agent.log` and the console receive identical `INFO`-level output. The Strands multiagent logger is silenced at `ERROR` level to reduce noise.
-
----
-
-## Extending the Pipeline
-
-- **Space group inference from PXRD:** Already implemented via `--infer-spg`. The pretrained classifier (`models/spacegroup/best_model.pth`) ranks up to `--spg-top-k` candidates; the pipeline iterates through them and stops at the first accepted solution.
-- **Multi-space-group search:** The graph can be extended with a fan-out node that spawns parallel `CellManagerAgent` + `WyckoffSolverAgent` sub-graphs for each candidate space group.
-- **Alternative force fields:** `relax_structure()` in `tools/utils.py` and `tools/ase_opt.py` can be swapped to use any ASE-compatible calculator.
-- **Batch processing:** The entry point loop can be extended to iterate over all CSVs in the `Examples/` directory, updating `share_state["pxrd_csv"]` before each run.
+All pipeline output is routed through the Python `logging` module (`pxrd_agent` logger). A per-system log file is written to `Results/logs/` alongside `PXRD_solver.log` in the working directory. Print statements from libraries are intercepted by `StreamToLogger` and emitted at `INFO` level.

@@ -3,12 +3,8 @@ from typing import Optional, Tuple, Dict, Any
 
 import numpy as np
 
-from pxrd_app.tools.peak_prediction import predict_peaks, predict_spacegroup
 from pxrd_app.tools.solver import SmartCellSolver
-from pxrd_app.tools.XRD import Profile
 from pxrd_app.constants import DEFAULT_STATE, CRYSTAL_SYSTEM_PRIORITY
-
-SPG_INFER_BACKENDS = {"model", "smart-cell"}
 
 
 def infer_formula_spg(path: str) -> Tuple[Optional[str], Optional[int]]:
@@ -196,19 +192,12 @@ def build_ranked_smart_cell_solution_cache(solutions: list[dict]) -> dict[int, l
 
 def infer_spg_from_backend(
     *,
-    x1: np.ndarray,
-    y1: np.ndarray,
     peak_positions: np.ndarray,
     formula: str,
-    spg_infer_backend: str,
     spg_top_k: int,
     max_volume: Optional[float],
     crystal_system: Optional[str] = None,
 ) -> dict:
-    backend = str(spg_infer_backend or "model").strip().lower()
-    if backend not in SPG_INFER_BACKENDS:
-        backend = "model"
-
     result = {
         "predictions": [],
         "source": None,
@@ -217,41 +206,25 @@ def infer_spg_from_backend(
         "smart_cell_ranked_spg_cells": [],
     }
 
-    if backend == "smart-cell":
-        smart_solutions = SmartCellSolver(
-            np.array(peak_positions, dtype=float),
-            hkl_max=(2, 5, 6),
-            max_mismatch=DEFAULT_STATE["cell_solver_max_mismatch"],
-            max_chi2=DEFAULT_STATE["cell_solver_max_chi2"],
-            max_square=DEFAULT_STATE["cell_solver_max_square"],
-            total_square=DEFAULT_STATE["cell_solver_total_square"],
-            theta_tols=[0.1, 0.15, 0.5],
-            min_abc=DEFAULT_STATE["min_abc"],
-            max_abc=DEFAULT_STATE["max_abc"],
-            min_volume=20.0,
-            max_volume=max_volume,
-            verbose=False,
-            crystal_system=crystal_system,
-        )
-        result["smart_cell_ranked_spg_cells"] = rank_smart_cell_spg_cell_solutions(smart_solutions)
-        candidate_map = build_ranked_smart_cell_solution_cache(smart_solutions)
-        result["smart_cell_candidates_by_spg"] = candidate_map
-        result["smart_cell_metrics_by_pair"] = build_smart_cell_metrics_cache(smart_solutions)
-        result["predictions"] = rank_spg_candidates_from_smart_solutions(smart_solutions, top_k=spg_top_k)
-        result["source"] = "smart_cell_solver"
-        if result["predictions"]:
-            return result
-
-    y1_norm = (y1 - np.min(y1)) / (np.max(y1) - np.min(y1) + 1e-8)
-    peak_results = predict_peaks(y1_norm, threshold=0.8)
-    peak_idx = [pos for pos, _ in peak_results]
-    peak_intensities = [y1_norm[pos] * 100 for pos in peak_idx]
-
-    if peak_idx:
-        _, py = Profile("gaussian").get_profile(x1[peak_idx], peak_intensities, 10, 80)
-        result["predictions"] = predict_spacegroup(py, formula, top_k=spg_top_k, use_normalization=False)
-        result["source"] = "reconstructed_profile"
-    else:
-        result["predictions"] = predict_spacegroup(y1_norm, formula, top_k=spg_top_k, use_normalization=True)
-        result["source"] = "raw_intensity_fallback"
+    smart_solutions = SmartCellSolver(
+        np.array(peak_positions, dtype=float),
+        hkl_max=(2, 5, 6),
+        max_mismatch=DEFAULT_STATE["cell_solver_max_mismatch"],
+        max_chi2=DEFAULT_STATE["cell_solver_max_chi2"],
+        max_square=DEFAULT_STATE["cell_solver_max_square"],
+        total_square=DEFAULT_STATE["cell_solver_total_square"],
+        theta_tols=[0.1, 0.15, 0.5],
+        min_abc=DEFAULT_STATE["min_abc"],
+        max_abc=DEFAULT_STATE["max_abc"],
+        min_volume=20.0,
+        max_volume=max_volume,
+        verbose=False,
+        crystal_system=crystal_system,
+    )
+    result["smart_cell_ranked_spg_cells"] = rank_smart_cell_spg_cell_solutions(smart_solutions)
+    candidate_map = build_ranked_smart_cell_solution_cache(smart_solutions)
+    result["smart_cell_candidates_by_spg"] = candidate_map
+    result["smart_cell_metrics_by_pair"] = build_smart_cell_metrics_cache(smart_solutions)
+    result["predictions"] = rank_spg_candidates_from_smart_solutions(smart_solutions, top_k=spg_top_k)
+    result["source"] = "smart_cell_solver"
     return result

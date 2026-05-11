@@ -81,7 +81,6 @@ DEFAULT_STATE = {
     "max_wp": 18,
     "max_Z": 24,
     "max_dof": 25,
-    "per_dof": 4,
     "max_atoms": 200,
     "max_volume": 1000.0,
     "cells": [],
@@ -111,10 +110,9 @@ DEFAULT_STATE = {
     "cell_solver_theta_tols": [0.1, 0.15, 0.5],
     "cell_solver_max_chi2": 0.5,
     "cell_solver_max_guess": 50000,
-    "multi_attempts": _env_int("PXRD_MULTI_ATTEMPTS", 1, min_value=1),
     "seed_base": _env_int("PXRD_SEED_BASE", 20260315),
     "spg_top_k": 200,
-    "spg_infer_backend": "model",
+    "spg_infer_backend": "smart-cell",
     "max_eng_rel": 0.1,
     "min_structures_before_early_stop": 10,
     "ase_logfile": None,
@@ -125,7 +123,6 @@ DEFAULT_STATE = {
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
     "max_wp_choices": 30,  # Limit number of WP choices per cell to avoid combinatorial explosion
     "wp_csv_path": "pxrd_app/tools/spg_comp_wp.csv",
-    "use_qrs": False,  # Whether to use Quasi-Random Sampling for structure generation
     "qrs_method": "sobol",  # Quasi-random sampler used when use_qrs is enabled
     "suppress_torch_load_futurewarning": _env_flag("PXRD_SUPPRESS_TORCH_LOAD_FUTUREWARNING", True),
 }
