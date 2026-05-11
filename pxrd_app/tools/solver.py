@@ -1775,7 +1775,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
                 # If DOF=0, allow 1 trial; if DOF*per_dof
-                N4 = max(1, len(xm.seeds))
+                N4 = len(xm.seeds) if xm.seeds is not None else 1
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9

@@ -151,10 +151,8 @@ $$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10
 |------|------|---------------------|
 | **Filename** | *(default)* | Parsed from `_<spg>.csv` suffix |
 | **Override** | `--spg N` | Fixed to space group N |
-| **ML classifier** | `--infer-spg --spg-backend model` | CNN predicts top-k SPGs from PXRD profile + formula |
 | **SmartCellSolver** | `--infer-spg --spg-backend smart-cell` | Jointly enumerates SPGs and cells, ranked by indexing quality |
 
-`--symmetry` (e.g., `cubic`, `monoclinic`, `any`) restricts the SPG search space. When `--infer-spg` is used with `smart-cell`, it defaults to `any`.
 
 ### 2.2 CellSolver (known SPG)
 
@@ -190,7 +188,7 @@ For orthorhombic SPGs, all six axis permutations are tried to handle axis-settin
 
 ### 3.2 Trial Structure Generation and QRS
 
-`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites. Trials per assignment: `per_dof × DOF + 1` (default `per_dof = 4`).
+`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites.
 
 **Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
 
@@ -229,10 +227,8 @@ The pipeline exits immediately on the first accepted solution.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `max_cells` | 10 | Candidate cells carried into Stage 3 |
 | `max_wp` | 18 | Max Wyckoff sites per assignment |
 | `max_dof` | 25 | Max degrees of freedom per WP combination |
-| `per_dof` | 4 | Trials per degree of freedom |
 | `max_Z` | 24 | Max formula units per cell |
 | `max_eng_rel` | 0.1 eV/atom | Energy window above best for refinement trigger 2 |
 | `max_force` | 0.5 eV/Å | Max per-atom force after relaxation |
@@ -262,18 +258,14 @@ The pipeline exits immediately on the first accepted solution.
 python PXRD_solve.py --input Examples/PXRD_PrYMg2_123.csv
 
 # Single file, infer SPG with SmartCellSolver + Halton QRS
-python PXRD_solve.py --input GSAS_PXRD/Ag2Hg5_127.csv \
-    --infer-spg \
-    --qrs-method halton \
-    --max-volume 1500.0
+python PXRD_solve.py --input GSAS_PXRD/Ag2Hg5_127.csv --infer-spg --qrs-method halton 
 
 # Batch: directory, 8 parallel workers
-python PXRD_solve.py --input GSAS_PXRD/ --workers 8 \
-    --infer-spg --output Results
+python PXRD_solve.py --input GSAS_PXRD/ --workers 8 --infer-spg 
 
 # Batch: file list (SLURM-style array job)
 python PXRD_solve.py --use-list --input data/test.txt \
-    --infer-spg --qrs-method halton --workers 48 --output 0428
+    --infer-spg --qrs-method halton --workers 48 
 ```
 
 ### All CLI Arguments
