@@ -266,7 +266,7 @@ Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
 9     1     123   782.6       0.0353   156       28       2.041        7.652    13.367
 ```
 The solver goes through the list and finds an excellent fit for the first cell which is the energy minimum with a high R2 value, and then stops the search.
-![Solution-PrYMg2-single](figs/EnergyR2_PrYMg2_123_single.png "Solution when SPG is known")
+![Solution-PrYMg2-single](Figs/EnergyR2_PrYMg2_123_single.png "Solution when SPG is known")
 
 ```bash
 # Single file, infer SPG with SmartCellSolver 
@@ -283,7 +283,7 @@ Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
 92    3     82    899.1       0.0167   284       11       1.857       10.811     7.692
 ```
 When the space group is unknown, the solver will generate a larger list and then goes through the list. It takes a longer time to find the excellent fit  which is the energy minimum with a high R2 value.
-![Solution-PrYMg2-auto](figs/EnergyR2_PrYMg2_123_auto.png "Solution when SPG is unknown")
+![Solution-PrYMg2-auto](Figs/EnergyR2_PrYMg2_123_auto.png "Solution when SPG is unknown")
 
 ```bash
 # Batch: file list (SLURM-style array job)
