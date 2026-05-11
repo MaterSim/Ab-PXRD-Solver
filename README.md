@@ -1,22 +1,18 @@
-# PXRD-Agent: Ab Initio Powder X-Ray Diffraction Structure Solver
+# Ab-PXRD-Solver: Ab Initio Powder X-Ray Diffraction Structure Solver
 
 ## Overview
 
-PXRD-Agent is a fully automated *ab initio* crystal structure determination pipeline. Given an experimental Powder X-Ray Diffraction (PXRD) pattern and a chemical formula, it autonomously:
+Ab-PXRD-Solver is a fully automated *ab initio* crystal structure determination pipeline. Given an experimental Powder X-Ray Diffraction (PXRD) pattern and a chemical formula, it autonomously:
 
-1. **Preprocesses** the diffraction pattern — adaptive background subtraction, Savitzky-Golay smoothing, and ML-guided peak detection.
+1. **Preprocesses** the diffraction pattern with adaptive background subtraction, Savitzky-Golay smoothing, and ML-guided peak detection.
 2. **Predicts density** bounds from the chemical formula using a pretrained Roost ensemble model.
-3. **Infers or enumerates space groups** — either read from the filename, inferred by a CNN classifier (`--spg-backend model`), or jointly solved with cell indexing (`--spg-backend smart-cell`).
-4. **Indexes peaks** to candidate unit cells via `CellSolver` (known SPG) or `SmartCellSolver` (unknown SPG).
-5. **Enumerates Wyckoff positions** compatible with the composition and density range.
-6. **Generates trial structures** using PyXtal with optional Quasi-Random Sampling (Sobol or Halton).
-7. **Relaxes structures** with the MACE universal neural-network force field via ASE.
-8. **Screens candidates** by cosine similarity of simulated vs. experimental PXRD patterns.
-9. **Refines** promising structures with full-pattern Rietveld refinement via GSAS-II.
+3. **Indexes peaks** to candidate unit cells via `CellSolver` (known SPG) or `SmartCellSolver` (unknown SPG).
+4. **Enumerates Wyckoff positions** compatible with the composition and density range.
+5. **Generates trial structures** using `PyXtal` with Quasi-Random Sampling (Sobol or Halton).
+6. **Relaxes structures** with the `MACE` universal neural-network force field via `ASE`.
+7. **Screens candidates** by cosine similarity of simulated vs. experimental PXRD patterns.
+8. **Refines** promising structures with full-pattern Rietveld refinement via `GSAS-II`.
 
-## System Architecture
-
----
 
 ## Pipeline Flowchart
 
@@ -61,12 +57,12 @@ Input: PXRD CSV + formula
 │                                                          │
 │   WPManager: enumerate valid Wyckoff assignments         │
 │   XtalManager: generate trial structures (PyXtal)        │
-│       ↓  optional: Quasi-Random Sampling (QRS)           │
+│       ↓  Quasi-Random Sampling (QRS)                     │
 │   MACE force field: geometry relaxation (ASE)            │
-│   XRD.py: simulate pattern → cosine similarity           │
+│   XRD.py: simulate pattern → Autocorrelation             │
 │       ↓  if sim ≥ threshold or (sim + energy gate)       │
 │   GSAS-II: Rietveld refinement                           │
-│       ↓  if R² ≥ 0.95 or χ² ≤ 0.12                      │
+│       ↓  if R² ≥ 0.95 or χ² ≤ 0.12                       │
 │   ✓ ACCEPTED — save CIF + plot, exit immediately         │
 └──────────────────────────────────────────────────────────┘
           │
@@ -184,13 +180,11 @@ For orthorhombic SPGs, all six axis permutations are tried to handle axis-settin
 
 ### 3.1 Wyckoff Position Enumeration
 
-`WPManager` lists all valid Wyckoff position assignments where each element's site multiplicities sum to its count in the formula and the resulting density is within `(density_min, density_max)`. Assignments are reranked by `score_wp_candidate()` to prefer lower-DOF, fewer-site configurations.
+`WPManager` lists all valid Wyckoff position assignments where each element's site multiplicities sum to its count in the formula and the resulting density is within `(density_min, density_max)`. Assignments are reranked by `score_wp_candidate()` to prefer smaller-volume, lower-mismatch, lower-DOF, fewer-site configurations.
 
 ### 3.2 Trial Structure Generation and QRS
 
-`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites.
-
-**Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
+`XtalManager` uses **PyXtal** to place atoms on Wyckoff sites with **Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
 
 ### 3.3 Geometry Relaxation (MACE + ASE)
 
@@ -215,7 +209,7 @@ A theoretical PXRD pattern is simulated (2θ: 10°–80°, step 0.02°, Cu-Kα�
 
 ### 3.5 Rietveld Refinement (GSAS-II)
 
-`tools/gsas.py` wraps GSAS-II for full-pattern Rietveld refinement. A per-refinement wall-time limit of 60 s prevents hangs; GSAS-II is recycled every 30 calls to avoid memory leaks.
+`pxrd_app/tools/gsas.py` wraps GSAS-II for full-pattern Rietveld refinement. A per-refinement wall-time limit of 60 s prevents hangs; GSAS-II is recycled every 30 calls to avoid memory leaks.
 
 A solution is **accepted** when:
 
@@ -243,9 +237,9 @@ The pipeline exits immediately on the first accepted solution.
 
 | Model | Location | Task |
 |-------|----------|------|
-| Peak detector | `tools/peak_finder/` | Assign peak probability to each 2θ point (CNN/transformer) |
-| Space group predictor | `tools/spacegroup/` | Rank space groups from PXRD profile + formula (`ImprovedXRDNetWithFormula`) |
-| Density ensemble | `tools/aviary/` | Predict density mean + uncertainty from composition (Roost, PyTorch) |
+| Peak detector | `pxrd_app/tools/peak_finder/` | Assign peak probability to each 2θ point (CNN/transformer) |
+| Space group predictor | `pxrd_app/tools/spacegroup/` | Rank space groups from PXRD profile + formula (`ImprovedXRDNetWithFormula`) |
+| Density ensemble | `pxrd_app/tools/aviary/` | Predict density mean + uncertainty from composition (Roost, PyTorch) |
 
 ---
 
@@ -256,16 +250,44 @@ The pipeline exits immediately on the first accepted solution.
 ```bash
 # Single file, SPG from filename
 python PXRD_solve.py --input Examples/PXRD_PrYMg2_123.csv
+```
+This run will generate a list of trial solutions as follows.
+```
+Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
+--------------------------------------------------------------------------------------------------------
+1     12    123   112.2       0.0004   42        7        0.034        3.818     7.701
+2     2     123   448.9       0.0003   30        26       0.100        5.399    15.401
+3     7     123   224.5       0.0004   91        22       0.119        5.399     7.701
+4     2     123   448.9       0.0004   42        25       0.122        7.635     7.701
+5     2     123   449.4       0.0030   18        11       0.127        3.818    30.832
+6     7     123   224.5       0.0004   195       13       0.136        3.818    15.401
+7     7     123   224.8       0.0167   39        17       0.319        7.645     3.846
+8     2     123   449.9       0.0312   60        19       0.759       10.821     3.843
+9     1     123   782.6       0.0353   156       28       2.041        7.652    13.367
+```
+The solver goes through the list and finds an excellent fit for the first cell which is the energy minimum with a high R2 value, and then stops the search.
+![Solution-PrYMg2-single](figs/EnergyR2_PrYMg2_123_single.png "Solution when SPG is known")
 
-# Single file, infer SPG with SmartCellSolver + Halton QRS
-python PXRD_solve.py --input GSAS_PXRD/Ag2Hg5_127.csv --infer-spg --qrs-method halton 
+```bash
+# Single file, infer SPG with SmartCellSolver 
+python PXRD_solve.py --input GSAS_PXRD/Ag2Hg5_127.csv --infer-spg
 
-# Batch: directory, 8 parallel workers
-python PXRD_solve.py --input GSAS_PXRD/ --workers 8 --infer-spg 
+Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
+--------------------------------------------------------------------------------------------------------
+1     3     115   112.2       0.0004   21        7        0.031        3.818     7.701
+2     12    123   112.2       0.0004   42        7        0.045        3.818     7.701
+3     2     99    112.2       0.0004   49        7        0.048        3.818     7.701
+...
+90    3     137   898.8       0.0046   234       29       1.586        7.635    15.416
+91    2     113   898.8       0.0046   278       29       1.729        7.635    15.416
+92    3     82    899.1       0.0167   284       11       1.857       10.811     7.692
+```
+When the space group is unknown, the solver will generate a larger list and then goes through the list. It takes a longer time to find the excellent fit  which is the energy minimum with a high R2 value.
+![Solution-PrYMg2-auto](figs/EnergyR2_PrYMg2_123_auto.png "Solution when SPG is unknown")
 
+```bash
 # Batch: file list (SLURM-style array job)
-python PXRD_solve.py --use-list --input data/test.txt \
-    --infer-spg --qrs-method halton --workers 48 
+python PXRD_solve.py --use-list --input data/test.txt --infer-spg --workers 48 
 ```
 
 ### All CLI Arguments
@@ -278,7 +300,6 @@ python PXRD_solve.py --use-list --input data/test.txt \
 | `--formula STR` | *(from filename)* | Override formula instead of parsing from filename |
 | `--spg N` | *(from filename)* | Fix or filter to a single space group (1–230) |
 | `--infer-spg` | off | Infer space group from data instead of reading from filename |
-| `--spg-top-k K` | 160 | Number of top SPG candidates to evaluate |
 | `--max-volume V` | 1500.0 | Maximum allowed unit-cell volume (Å³) |
 | `--max-wp N` | 18 | Max Wyckoff sites per assignment |
 | `--max-dof N` | 25 | Max degrees of freedom per WP combination |
@@ -287,8 +308,6 @@ python PXRD_solve.py --use-list --input data/test.txt \
 | `--max-eng-rel E` | 0.1 | Energy-above-best (eV/atom) threshold for refinement trigger 2 |
 | `--qrs-method {sobol,halton}` | `sobol` | QRS sampler type |
 | `--workers N` | 1 | Parallel CSV workers (batch mode) |
-| `--begin N` / `--end N` | 0 / all | Slice the file list for array jobs |
-| `--reverse` | off | Process files in reverse order |
 | `--list-wp-only` | off | List Wyckoff candidates only, skip structure generation |
 | `--ase-logfile PATH` | *(none)* | Write ASE FIRE optimizer logs to this file |
 | `--wp-csv-path PATH` | `pxrd_app/tools/spg_comp_wp.csv` | Precomputed WP count table for cost estimation |
