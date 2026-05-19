@@ -14,7 +14,7 @@ from pxrd_app.cli import build_common_parser, build_run_state, collect_input_csv
 from pxrd_app.runtime import write_results_csv
 from pxrd_app.plot import plot_energy_vs_r2
 from pxrd_app.core import run_data_preprocessor, run_wyckoff_solver, logger
-from pxrd_app.inference import infer_formula_spg, symmetry_from_spg
+from pxrd_app.inference import infer_formula_spg, spg_to_crystal_system
 from pxrd_app.tools.manager import CellManager
 from pxrd_app.tools.utils import format_wyckoff_labels
 
@@ -535,7 +535,7 @@ def _resolve_failure_csvs(summary_csv: str, examples_dir: str, symmetry: str = "
                 if csv_file:
                     if use_symmetry_filter:
                         _, spg = infer_formula_spg(csv_file)
-                        csv_symmetry = symmetry_from_spg(spg)
+                        csv_symmetry = spg_to_crystal_system(spg)
                         if csv_symmetry != symmetry:
                             continue
                     path = os.path.join(examples_dir, csv_file)

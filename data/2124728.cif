@@ -1,0 +1,308 @@
+####################################################################### 
+# 
+# This file contains crystal structure data downloaded from the 
+# Cambridge Structural Database (CSD) hosted by the Cambridge 
+# Crystallographic Data Centre (CCDC).
+# 
+# Full information about CCDC data access policies and citation 
+# guidelines are available at http://www.ccdc.cam.ac.uk/access/V1 
+# 
+# Audit and citation data items may have been added by the CCDC. 
+# Please retain this information to preserve the provenance of 
+# this file and to allow appropriate attribution of the data. 
+# 
+#######################################################################
+
+data_4-11-difluoroquinacridone_model_C_from_Rietveld
+_audit_block_doi                 10.5517/ccdc.csd.cc299ym6
+_database_code_depnum_ccdc_archive 'CCDC 2124728'
+loop_
+_citation_id
+_citation_doi
+_citation_year
+1 10.1107/S2052252522004237 2022
+_audit_update_record             
+;
+2022-04-20 deposited with the CCDC.	2026-05-19 downloaded from the CCDC.
+;
+
+#_database_code_depnum_ccdc_archive 'CCDC @@@@'
+_chemical_name_common            
+;
+4,11-Difluoro-quinacridone
+Model C from Rietveld refinement
+Attention! This is a wrong structural model, 
+which fits quite well to the powder data, 
+fits well to the pair-distribution function,
+and agrees with solid-state NMR data, 
+but has an unfavourable lattice energy. 
+Further discussion see publication.
+;
+_chemical_name_systematic        
+'4,11-Difluoroquino[2,3-b]acridine-7,14(5H,12H)-dione, wrong structural model A'
+_chemical_formula_moiety         'C20 H10 F2 N2 O2'
+_chemical_formula_sum            'C20 H10 F2 N2 O2'
+_chemical_formula_weight         348.3016
+
+#==============================================================================
+
+
+# 4. POWDER SPECIMEN AND CRYSTAL DATA
+
+_space_group_crystal_system      triclinic
+_space_group                     P-1
+_space_group_name_H-M_alt        'P -1'
+_space_group_IT_number           2
+_space_group_name_Hall           '-P 1'
+
+loop_
+_symmetry_equiv_pos_as_xyz
+'-x, -y, -z'
+'x, y, z'
+
+_cell_length_a                   3.88540(45)
+_cell_length_b                   7.0333(10)
+_cell_length_c                   14.1014(29)
+_cell_angle_alpha                102.713(16)
+_cell_angle_beta                 86.084(14)
+_cell_angle_gamma                105.939(16)
+_cell_volume                     361.44(11)
+
+_cell_formula_units_Z            1
+_cell_measurement_temperature    300
+_exptl_crystal_density_diffrn    1.600
+_exptl_crystal_F_000             178
+_exptl_absorpt_coefficient_mu    1.039
+_pd_char_colour                  orange
+_pd_char_particle_morphology     powder
+_exptl_crystal_description       powder
+
+#==============================================================================
+
+# 5. EXPERIMENTAL DATA
+
+_diffrn_ambient_temperature      300
+_diffrn_radiation_type           'Cu K\a~1~'
+_diffrn_radiation_wavelength     1.54056
+_diffrn_radiation_monochromator  Ge(111)
+_diffrn_measurement_device_type  STOE-Stadi-P
+_pd_meas_number_of_points        7800
+_pd_meas_2theta_range_min        2.00000
+_pd_meas_2theta_range_max        79.9900
+_pd_meas_2theta_range_inc        0.010000
+
+#==============================================================================
+# 6. REFINEMENT DATA
+
+#_cell_measurement_reflns_used   00
+_cell_measurement_theta_min      4.50000
+_cell_measurement_theta_max      79.9900
+_pd_meas_scan_method             cont
+_refine_ls_matrix_type           fullcycle
+#_refine_ls_number_parameters    000
+_refine_ls_number_restraints     60
+_refine_ls_number_constraints    0
+_refine_ls_hydrogen_treatment    refxyz
+_refine_ls_weighting_scheme      sigma
+_refine_ls_weighting_details     w=1/\s[Y~obs~]^2^
+_refine_ls_shift/su_max          0.001
+_refine_ls_extinction_method     none
+_computing_data_collection       '<i>WINX^POW^</i> (Stoe & Cie, 2004)'
+_computing_cell_refinement       TOPAS-Academic
+_computing_data_reduction        '<i>WINX^POW^</i> (Stoe & Cie, 2004)'
+_computing_structure_solution    FIDEL
+_computing_structure_refinement  TOPAS-Academic
+_computing_molecular_graphics    '<i>Mercury</i> (Macrae <i>et al.</i>, 2008)'
+_pd_proc_2theta_range_min        4.50000
+_pd_proc_2theta_range_max        79.9900
+_pd_proc_2theta_range_inc        0.010000
+_pd_calc_method                  'Rietveld Refinement'
+_pd_proc_ls_background_function  'Chebyshev function with 20 terms'
+_pd_proc_ls_profile_function     'fundamental parameters'
+_pd_proc_ls_pref_orient_corr     none
+_pd_proc_ls_prof_R_factor        0.16099 # background-subtracted
+_pd_proc_ls_prof_wR_factor       0.17676 # background-subtracted
+_pd_proc_ls_prof_wR_expected     0.02275 # background-subtracted
+_refine_ls_goodness_of_fit_all   7.768
+_refine_ls_R_factor_all          0.01941 # Bragg R value
+_pd_proc_wavelength              1.54056
+_pd_spec_mount_mode              transmission
+_pd_spec_mounting                'prepared between polymer films '
+
+
+
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_symmetry_multiplicity
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_B_iso_or_equiv
+_atom_site_U_iso_or_equiv
+
+C13 C 0 0.0940(21) 0.20440(59) -0.01121(30) 1 3.09(18) 0.03909
+C11 C 0 -0.0688(20) 0.15331(53) 0.07504(30) 1 3.09(18) 0.03909
+C12 C 0 -0.1547(21) -0.05327(51) 0.08686(32) 1 3.09(18) 0.03909
+H18 H 0 0.1527(69) 0.3560(26) -0.0263(22) 1 3.70(22) 0.04691
+C10 C 0 -0.1757(20) 0.30114(63) 0.15271(35) 1 3.09(18) 0.03909
+N3 N 0 -0.3216(19) -0.11487(59) 0.17185(34) 1 3.09(18) 0.03909
+C9 C 0 -0.3677(18) 0.22741(63) 0.23526(35) 1 3.09(18) 0.03909
+O2 O 0 -0.1555(31) 0.47485(92) 0.13863(53) 1 3.09(18) 0.03909
+H15 H 0 -0.3650(70) -0.2703(26) 0.1732(11) 1 3.70(22) 0.04691
+C8 C 0 -0.4444(18) 0.02046(64) 0.24381(34) 1 3.09(18) 0.03909
+C4 C 0 -0.4746(21) 0.36538(62) 0.31034(35) 1 3.09(18) 0.03909
+C7 C 0 -0.6256(21) -0.02890(66) 0.32946(37) 1 3.09(18) 0.03909
+H14 H 0 -0.4082(65) 0.5173(33) 0.3019(11) 1 3.70(22) 0.04691
+C5 C 0 -0.6403(24) 0.31030(64) 0.39403(34) 1 3.09(18) 0.03909
+F17 F 0 -0.7414(27) -0.22903(88) 0.33380(49) 1 3.09(18) 0.03909
+C6 C 0 -0.7275(20) 0.11023(64) 0.40134(36) 1 3.09(18) 0.03909
+H1 H 0 -0.6620(52) 0.4278(51) 0.4590(18) 1 3.70(22) 0.04691
+H16 H 0 -0.8918(89) 0.0653(46) 0.4593(17) 1 3.70(22) 0.04691
+
+loop_
+_geom_bond_id
+_geom_bond_atom_site_label_1
+_geom_bond_atom_site_label_2
+_geom_bond_distance
+1 C13 C11 1.404(7)
+2 C13 H18 1.09(2)
+4 C11 C12 1.443(5)
+5 C11 C10 1.458(7)
+6 C12 N3 1.419(7)
+8 C10 C9 1.454(7)
+9 C10 O2 1.261(9)
+10 N3 H15 1.06(2)
+11 N3 C8 1.386(7)
+12 C9 C8 1.434(7)
+13 C9 C4 1.394(7)
+14 C8 C7 1.417(8)
+15 C4 H14 1.06(2)
+16 C4 C5 1.385(8)
+17 C7 F17 1.369(8)
+18 C7 C6 1.365(8)
+19 C5 C6 1.379(6)
+20 C5 H1 1.11(3)
+21 C6 H16 1.05(3)
+22 C13 C11 1.404(7)
+23 C13 H18 1.09(2)
+24 C11 C12 1.443(5)
+25 C11 C10 1.458(7)
+26 C12 N3 1.419(7)
+27 C10 C9 1.454(7)
+28 C10 O2 1.261(9)
+29 N3 H15 1.06(2)
+30 N3 C8 1.386(7)
+31 C9 C8 1.434(7)
+32 C9 C4 1.394(7)
+33 C8 C7 1.417(8)
+34 C4 H14 1.06(2)
+35 C4 C5 1.385(8)
+36 C7 F17 1.369(8)
+37 C7 C6 1.365(8)
+38 C5 C6 1.379(6)
+39 C5 H1 1.11(3)
+40 C6 H16 1.05(3)
+
+
+loop_
+_geom_angle_id
+_geom_angle_atom_site_label_1
+_geom_angle_atom_site_label_2
+_geom_angle_atom_site_label_3
+_geom_angle
+1 C11 C13 H18 124(1)
+4 C13 C11 C12 120.2(5)
+5 C13 C11 C10 122.1(5)
+6 C12 C11 C10 117.7(5)
+7 C11 C12 N3 122.9(5)
+10 C11 C10 C9 117.2(5)
+11 C11 C10 O2 119.3(6)
+12 C9 C10 O2 122.3(6)
+13 C12 N3 H15 116(1)
+14 C12 N3 C8 120.1(5)
+15 H15 N3 C8 123(1)
+16 C10 C9 C8 122.9(5)
+17 C10 C9 C4 118.4(5)
+18 C8 C9 C4 118.7(5)
+19 N3 C8 C9 118.8(5)
+20 N3 C8 C7 124.3(5)
+21 C9 C8 C7 116.8(5)
+22 C9 C4 H14 116(1)
+23 C9 C4 C5 122.1(5)
+24 H14 C4 C5 121(1)
+25 C8 C7 F17 117.7(6)
+26 C8 C7 C6 122.9(5)
+27 F17 C7 C6 118.8(6)
+28 C4 C5 C6 119.6(6)
+29 C4 C5 H1 120(2)
+30 C6 C5 H1 120(2)
+31 C7 C6 C5 119.8(6)
+32 C7 C6 H16 121(2)
+33 C5 C6 H16 119(2)
+37 C13 C11 C12 120.2(5)
+38 C13 C11 C10 122.1(5)
+39 C12 C11 C10 117.7(5)
+42 C11 C12 N3 122.9(5)
+43 C11 C10 C9 117.2(5)
+44 C11 C10 O2 119.3(6)
+45 C9 C10 O2 122.3(6)
+46 C12 N3 H15 116(1)
+47 C12 N3 C8 120.1(5)
+48 H15 N3 C8 123(1)
+49 C10 C9 C8 122.9(5)
+50 C10 C9 C4 118.4(5)
+51 C8 C9 C4 118.7(5)
+52 N3 C8 C9 118.8(5)
+53 N3 C8 C7 124.3(5)
+54 C9 C8 C7 116.8(5)
+55 C9 C4 H14 116(1)
+56 C9 C4 C5 122.1(5)
+57 H14 C4 C5 121(1)
+58 C8 C7 F17 117.7(6)
+59 C8 C7 C6 122.9(5)
+60 F17 C7 C6 118.8(6)
+61 C4 C5 C6 119.6(6)
+62 C4 C5 H1 120(2)
+63 C6 C5 H1 120(2)
+64 C7 C6 C5 119.8(6)
+65 C7 C6 H16 121(2)
+66 C5 C6 H16 119(2)
+
+# start Validation Reply Form
+_vrf_PLAT411_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: Short Inter H...H Contact  H1       ..H1       .       1.71 Ang.  
+RESPONSE: Powder data
+;
+_vrf_PLAT972_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: Check Calcd Resid. Dens.  0.26A   From F17            -5.30 eA-3  
+RESPONSE: Powder data
+;
+_vrf_PLAT992_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: Repd & Actual _reflns_number_gt Values Differ by    1000359 Check 
+RESPONSE: _reflns_number_gt is not a sensible value for powders
+;
+_vrf_PLAT155_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: The Triclinic Unitcell is NOT Reduced ..........     Please Do !  
+RESPONSE: Unit cell setting from global structure solution run
+;
+_vrf_PLAT340_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: Low Bond Precision on  C-C Bonds ...............    0.00664 Ang.  
+RESPONSE: Powder data
+;
+_vrf_PLAT351_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: Long   C-H (X0.96,N1.08A)  C5       - H1       .       1.11 Ang.  
+RESPONSE: Powder data, refined with restrains from QM
+;
+_vrf_PLAT353_4-11-difluoroquinacridone_model_C_from_Rietveld 
+;
+PROBLEM: Long   N-H (N0.87,N1.01A)  N3       - H15      .       1.06 Ang.  
+RESPONSE: Powder data, refined with restrains from QM
+;

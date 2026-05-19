@@ -385,7 +385,7 @@ def _worker_loop(request_q, result_q):
 _DEFAULT_REFINE_TIMEOUT = 60
 _DEFAULT_MAX_CALLS_PER_WORKER = 30
 _DEFAULT_MAX_CYC = 20
-_DEFAULT_EARLY_EXIT_WR = 30.0
+_DEFAULT_EARLY_EXIT_WR = 50.0
 
 
 def _get_refine_timeout() -> int:

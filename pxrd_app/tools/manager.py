@@ -362,18 +362,23 @@ class RawDataManager:
             figname (str): Filename to save the plot.
             remark (str): Optional remark to display on the plot.
         """
-        plt.figure(figsize=(8,5))
-        plt.plot(self.x, self.y_raw, label='Raw Data')
-        plt.plot(self.x, self.y, label='Processed Data')
+        fig, ax = plt.subplots(figsize=(12, 4))
+        plt.scatter(self.x, self.y_raw, c='grey', s=3, label='Raw Data')
+        plt.plot(self.x, self.y, c='blue', label='Processed Data')
         if hasattr(self, 'peaks'):
-            plt.plot(self.x[self.peaks], self.y[self.peaks], "x", label=f'Detected Peaks ({len(self.peaks)})')
+            plt.plot(self.x[self.peaks], self.y[self.peaks], "x", c='red', label=f'Detected Peaks ({len(self.peaks)})')
         if remark is not None:
             plt.title(remark)
-        plt.xlabel('2θ (degrees)')
-        plt.ylabel('Intensity (a.u.)')
-        plt.legend()
+        plt.tick_params(axis='both', which='major', labelsize=15)
+        plt.xlabel('2θ (degrees)', fontsize=18)
+        plt.ylabel('Intensity (a.u.)', fontsize=18)
+        #plt.xlim(10, 80)
+        #text = 'Estimated density:\n(3.848, 4.316) g/'+rf'cm$^3$'
+        #plt.text(0.01, 0.9, text, transform=ax.transAxes, ha='left', va='top', fontsize=18)
+        plt.legend(fontsize=18)
+        plt.tight_layout()
         plt.savefig(figname)
-        plt.close()
+        plt.close()#; import sys; sys.exit()
 
     def to_csv(self, filename):
         """
@@ -1216,6 +1221,7 @@ class XtalManager:
             bounds = xtal.get_rep_bounds_from_spg_wps_cell(self.spg.number,
                                                            self.sites_flat,
                                                            [self.cell.a, self.cell.b, self.cell.c])
+            # n_seeds = min(prod(N_i), max(1, factor * sum(N_i))), where N_i = floor(b_i)
             max_pts = int(max(1, sum(int(b) for b in bounds) * factor))
             grids = [int(b) for b in bounds]
             self.skips = 0

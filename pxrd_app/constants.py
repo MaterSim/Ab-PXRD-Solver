@@ -114,6 +114,7 @@ DEFAULT_STATE = {
     "spg_top_k": 200,
     "spg_infer_backend": "smart-cell",
     "max_eng_rel": 0.1,
+    "disable_early_termination": False,
     "min_structures_before_early_stop": 10,
     "ase_logfile": None,
     "max_attempt_count": 10000,

@@ -37,7 +37,6 @@ def main() -> None:
     try:
         csv_files = collect_input_csv_files(args.input, use_list=args.use_list)
         if len(csv_files) > 1: csv_files = csv_files[args.begin:args.end]
-        if args.reverse: csv_files = list(reversed(csv_files))
     except FileNotFoundError as exc:
         print(str(exc))
         sys.exit(1)

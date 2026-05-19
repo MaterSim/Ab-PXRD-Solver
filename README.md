@@ -135,7 +135,7 @@ If `min(intensity) > 2.5`, background subtraction is applied via **asymmetric le
 
 `predict_density_ensemble()` runs a **Roost** message-passing neural network ensemble on the composition. Predictions are aggregated as `mean ± 2.5·std`, yielding `density_min` and `density_max` (g cm⁻³). The minimum cell volume bound is:
 
-$$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10^{24} \;\; (\text{Å}^3)$$
+$$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10^{24}  (\text{Å}^3)$$
 
 ---
 

@@ -67,11 +67,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Infer space group from PXRD/profile model instead of filename convention.",
     )
     parser.add_argument(
-        "--reverse",
-        action="store_true",
-        help="Reverse the order of processing CSV files.",
-    )
-    parser.add_argument(
         "--spg-top-k",
         type=int,
         default=160,
@@ -103,6 +98,11 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Maximum allowed unit-cell volume (A^3) for cell solutions. Larger cells are discarded.",
     )
     parser.add_argument(
+        "--disable-early-termination",
+        action="store_true",
+        help="Disable early-stop shortcuts and continue searching until other run limits are reached.",
+    )
+    parser.add_argument(
         "--list-wp-only",
         action="store_true",
         help=(
@@ -117,15 +117,6 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help=(
             "Number of CSV files to solve in parallel when --input points to a directory. "
             "Use 1 to run sequentially."
-        ),
-    )
-    parser.add_argument(
-        "--parallel-retry-rounds",
-        type=int,
-        default=1,
-        help=(
-            "Number of extra parallel retry rounds after the initial pool attempt when a "
-            "BrokenProcessPool occurs. Set to 0 to disable retries."
         ),
     )
     parser.add_argument(
@@ -163,8 +154,8 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--qrs-method",
         choices=("sobol", "halton"),
-        default="sobol",
-        help="Quasi-random sampler to use with --use-qrs. Defaults to sobol.",
+        default="halton",
+        help="Quasi-random sampler to use with --use-qrs. Defaults to halton.",
     )
     return parser
 
@@ -325,6 +316,7 @@ def _build_state(
     spg_top_k: Optional[int] = None,
     force_spg: Optional[int] = None,
     max_eng_rel: Optional[float] = None,
+    disable_early_termination: Optional[bool] = None,
     max_volume: Optional[float] = None,
     list_wp_only: Optional[bool] = None,
     results_dir: Optional[str] = None,
@@ -351,6 +343,8 @@ def _build_state(
             logger.warning(f"Ignoring invalid --spg={spg_val}; must be between 1 and 230.")
     if max_eng_rel is not None:
         run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
+    if disable_early_termination is not None:
+        run_state["disable_early_termination"] = bool(disable_early_termination)
     if max_volume is not None:
         max_volume = float(max_volume)
         if max_volume > 0:
@@ -385,6 +379,7 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         spg_top_k=args.spg_top_k,
         force_spg=args.spg,
         max_eng_rel=args.max_eng_rel,
+        disable_early_termination=args.disable_early_termination,
         max_volume=args.max_volume,
         list_wp_only=args.list_wp_only,
         results_dir=args.output,

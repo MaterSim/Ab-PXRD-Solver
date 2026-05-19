@@ -24,40 +24,23 @@ def infer_formula_spg(path: str) -> Tuple[Optional[str], Optional[int]]:
         return formula_guess, spg_guess
     return None, None
 
-def symmetry_from_spg(spg: Optional[int]) -> Optional[str]:
+def spg_to_crystal_system(spg: Optional[int]) -> Optional[str]:
     if spg is None:
         return None
-    if 195 <= spg <= 230:
-        return "cubic"
-    if 168 <= spg <= 194:
-        return "hexagonal"
-    if 143 <= spg <= 167:
-        return "trigonal"
-    if 75 <= spg <= 142:
-        return "tetragonal"
-    if 16 <= spg <= 74:
-        return "orthorhombic"
-    if 3 <= spg <= 15:
-        return "monoclinic"
     if 1 <= spg <= 2:
-        return "triclinic"
-    return None
-
-def spg_to_crystal_system(spg: int) -> Optional[str]:
-    if 1 <= spg <= 2:
-        return "triclinic"
+        return "Triclinic"
     if 3 <= spg <= 15:
-        return "monoclinic"
+        return "Monoclinic"
     if 16 <= spg <= 74:
-        return "orthorhombic"
+        return "Orthorhombic"
     if 75 <= spg <= 142:
-        return "tetragonal"
+        return "Tetragonal"
     if 143 <= spg <= 167:
-        return "trigonal"
+        return "Trigonal"
     if 168 <= spg <= 194:
-        return "hexagonal"
+        return "Hexagonal"
     if 195 <= spg <= 230:
-        return "cubic"
+        return "Cubic"
     return None
 
 

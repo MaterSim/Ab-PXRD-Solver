@@ -191,6 +191,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
         bg_subtract = False
     #min_height = 7.5 if bg_subtract else 5.0
     #height = min_height if bg_subtract else 1.5
+    #bg_subtract = True
     data = RawDataManager(x1, y1, bg_subtract=bg_subtract)
     data.get_peaks_from_scipy(height=height)
     data.filter_peaks_by_ml(threshold=0.8, min_height=min_height)
@@ -205,6 +206,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     #data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
     peaks = data.peaks
     peak_positions = x1[peaks]
+    data.plot('my.pdf')#; import sys; sys.exit()
 
     # QZ: Just to handle cases with very few peaks with light elements.
     if len(peaks) <= 10 and bg_subtract:
@@ -237,7 +239,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
         "spg": spg,
         "formula": formula,
         "x1": x1.tolist(),
-        "y1": y1.tolist(),
+        "y1": data.y.tolist(),
         "peaks": peaks.tolist(),
         "peak_positions": peak_positions.tolist(),
         "composition": composition,
@@ -366,6 +368,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_force = state.get("max_force")
     max_stress = state.get("max_stress")
     max_eng_rel = state.get("max_eng_rel")
+    disable_early_termination = bool(state.get("disable_early_termination", False))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     sim_max = state.get("max_sim")
     if max([Element(ele).z for ele in composition.keys()]) <= 6: sim_max = 0.55
@@ -462,6 +465,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         structure_log=all_structure_log,
         max_eng_rel=max_eng_rel,
         min_structures_before_early_stop=min_structures_before_early_stop,
+        disable_early_termination=disable_early_termination,
         forced_wp_solution=forced_wp_solution,
         ase_logfile=state.get("ase_logfile"),
         global_accepted=global_accepted,
@@ -515,10 +519,11 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             update_best = True
 
         # Early stop: excellent solution found
-        if state['best_result']["accepted"] and len(all_structure_log) >= min_structures_before_early_stop and (
+        if (not disable_early_termination and state['best_result']["accepted"]
+                and len(all_structure_log) >= min_structures_before_early_stop and (
             state['best_result']["r2"] >= max(min_r2 + 0.02, 0.97)
             or state['best_result']["chi2"] <= min(max_chi2 * 0.7, 0.08)
-        ):
+        )):
             logger.info(f"Early stop: excellent solution found.")
 
     state["structure_log"] = all_structure_log
@@ -840,7 +845,7 @@ def run_pipeline(state: dict) -> dict:
 
         # ── Phase 2 summary table ────────────────────────────────────────────
         logger.info(
-            f"\n{'Pair':<5} {'WPs':<5} {'SPG':<5} {'Volume(Å³)':<11} {'Chi2':<8}{'EstTrials':<10}{'Missing':<8} {'BalScore':<9} Dims"
+            f"\n{'Pair':<5} {'SPG':<5} {'Cell':<33}{'#WPs':<5}{'Volume(Å³)':<12}  {'Chi2':<8} {'N_m':<8}{'N_t':<6} {'Priority Score'}"
         )
         logger.info("-" * 104)
         for _ri, _pair in enumerate(planned_pairs, start=1):
@@ -850,11 +855,11 @@ def run_pipeline(state: dict) -> dict:
             _est_wps = _pair["est_wps"]
             _est_trials = _pair["est_trials"]
             _balance_score = float(_pair.get("balance_score", float("nan")))
-            _dims_str = "  ".join(f"{float(x):8.3f}" for x in _cell.dims)
+            _dims_str = "  ".join(f"{float(x):6.3f}" for x in _cell.dims)
             logger.info(
-                f"{_ri:<5} {_est_wps:<5} {_spg:<5} {_vol:<11.1f} "
-                f"{getattr(_cell, 'chi2', float('nan')):<8.4f} {_est_trials:<10}"
-                f"{getattr(_cell, 'missing', -1):<8} {_balance_score:<9.3f} {_dims_str}"
+                f"{_ri:<5} {_spg:<5} [{_dims_str:<30}] {_est_wps:<5}  {_vol:<11.1f}"
+                f"{_cell.chi2:<6.4f} {_cell.missing:5}"
+                f"{_est_trials:8} {_balance_score:9.3f}"
             )
         logger.info("")
 
@@ -872,6 +877,7 @@ def run_pipeline(state: dict) -> dict:
     max_wp_choices = state.get("max_wp_choices")
     N_cells = len(all_seed_cells)
     max_eng_rel = max(0.0, state.get("max_eng_rel"))
+    disable_early_termination = bool(state.get("disable_early_termination", False))
 
     for it in range(3):
         # Just in case some strctures failed very frequently
@@ -979,7 +985,7 @@ def run_pipeline(state: dict) -> dict:
                             global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
                         energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel)
                         enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
-                        if strict_early_exit:
+                        if strict_early_exit and not disable_early_termination:
                             if not energy_ok:
                                 logger.info(
                                     f"Good fit found for spg={spg_val}, but skipping quality-based early stop "
@@ -1003,7 +1009,7 @@ def run_pipeline(state: dict) -> dict:
                                     f"and {wp_attempted} WP candidate(s).")
                                     terminate_pair = True
                                     break
-                    elif excellent_r2:
+                    elif excellent_r2 and not disable_early_termination:
                         # The WP-level solver fired its early stop (r2 >= 0.98) but the
                         # result is not strictly accepted (chi2 slightly exceeds threshold).
                         # Finish the remaining WPs for this pair, but don't start new pairs.
@@ -1026,6 +1032,7 @@ def run_pipeline(state: dict) -> dict:
                     # previous WP/pair) and the minimum-structures budget is
                     # reached, stop all further exploration.
                     if (
+                        not disable_early_termination and
                         len(global_structure_log) >= structure_limit
                         and global_accepted_exists
                     ):

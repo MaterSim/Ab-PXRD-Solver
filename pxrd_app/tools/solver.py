@@ -1652,9 +1652,10 @@ def _make_structure_log_metadata(cell_obj, spg_sol, wp_ids, num_wps, dof, count,
 def search_solution(cells, spg, composition, ref_den, match_cif,
                     match_csv, x1, y1, eng_min, sim_max, N2, struc_count,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
-                    INST_FILE, logger, max_wp, max_Z, max_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
+                    INST_FILE, logger, max_wp, max_Z, max_dof, per_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, structure_log=[],
                     max_eng_rel=None, min_structures_before_early_stop=10,
+                    disable_early_termination=False,
                     forced_wp_solution=None, ase_logfile=None, global_accepted=False,
                     use_qrs=True, qrs_method='sobol', factor=1):
     """
@@ -1774,8 +1775,8 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                 log_metadata = _make_structure_log_metadata(
                     cell, spg_sol, wp_ids, num_wps, dof, count, Z, xm.sites
                 )
-                # If DOF=0, allow 1 trial; if DOF*per_dof
-                N4 = len(xm.seeds) if xm.seeds is not None else 1
+                # If DOF=0, allow 1 trial; otherwise scale by per_dof.
+                N4 = len(xm.seeds) if xm.seeds is not None else max(1, int(dof) * int(per_dof))
                 best_sim_in_wpset = 0.0
                 valid_trials_in_wpset = 0
                 local_accepted_score = -1e9
@@ -1847,6 +1848,8 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         xtal.from_seed(atoms)#; print("D****************", xtal);
                         xtal.to_file(match_cif)
                         wr, r2, chi2, _, elapsed = refine_pxrd(match_csv, match_cif, INST_FILE)
+                        #if r2 > 0.99:
+                        #    print(match_cif, match_csv, wr, r2, chi2); import sys; sys.exit()
 
                         if wr is not None:
                             refined_score = (1.5 * r2) - (0.4 * wr) - (0.2 * chi2)
@@ -1888,7 +1891,8 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
 
                     # If a globally-accepted solution already exists from a previous
                     # WP/pair, treat reaching the structure budget as an early stop.
-                    if global_accepted and len(structure_log) >= min_structures_before_early_stop:
+                    if (not disable_early_termination and global_accepted
+                            and len(structure_log) >= min_structures_before_early_stop):
                         early_stop = True
 
                     if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
@@ -1896,8 +1900,8 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         if refined_score is not None and refined_score > local_accepted_score and energy_ok:
                             local_accepted_score = refined_score
                             local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
-
-                        if should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
+                        if (not disable_early_termination and should_terminate(
+                                r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination)):
                             reopt_atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
                             if reopt_atoms is not None:
                                 reopt_eng = reopt_atoms.get_potential_energy() / len(reopt_atoms)
@@ -1915,23 +1919,25 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                                 f"***Excellent fit within current WP trial (r2={r2:.3f}, chi2={chi2:.3f}) "
                                 f"with energy (eng_rel={eng_rel:.3f} eV/atom); "
                             )
-                    if (struc_count >= min_structures_before_early_stop
-                            or len(structure_log) >= min_structures_before_early_stop) and early_stop:
-                        # Recompute the effective eng_rel of the best candidate against
-                        # the current eng_best.  A later structure in this same WP trial
-                        # may have found a lower energy, demoting the early-stop candidate
-                        # above the acceptable energy threshold.  If so, keep searching.
-                        best_for_check = local_accepted_result or best_refined_result_energy_ok
-                        if best_for_check is not None:
-                            current_final_eng_rel = max(0.0, float(best_for_check[5]) - float(eng_best))
-                            if current_final_eng_rel > max_eng_rel_for_termination:
-                                early_stop = False
-                        if early_stop:
-                            logger.info(
-                                f"Early stop triggered after {struc_count} local / "
-                                f"{len(structure_log)} global structures; terminating current WP search."
+                        if (not disable_early_termination
+                            and (struc_count >= min_structures_before_early_stop
+                             or len(structure_log) >= min_structures_before_early_stop)
+                            and early_stop):
+                            # Recompute the effective eng_rel of the best candidate against
+                            # the current eng_best.  A later structure in this same WP trial
+                            # may have found a lower energy, demoting the early-stop candidate
+                            # above the acceptable energy threshold.  If so, keep searching.
+                            best_for_check = local_accepted_result or best_refined_result_energy_ok
+                            if best_for_check is not None:
+                                current_final_eng_rel = max(0.0, float(best_for_check[5]) - float(eng_best))
+                                if current_final_eng_rel > max_eng_rel_for_termination:
+                                    early_stop = False
+                            if early_stop:
+                                logger.info(
+                                    f"Early stop triggered after {struc_count} local / "
+                                    f"{len(structure_log)} global structures; terminating current WP search."
                             )
-                            return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count, attempt_count=attempt_count)
+                                return _return_best_available(local_accepted_result, best_refined_result_energy_ok, struc_count, attempt_count=attempt_count)
 
             prev_limit = limit
         # Correct the structure count in the final accepted result if it exists, to reflect the total number of structures generated so far.
