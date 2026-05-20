@@ -814,7 +814,9 @@ def run_pipeline(state: dict) -> dict:
                 m["est_trials"],
                 round(m["vol"], 1),
                 m["cand_count"],
-                -CRYSTAL_SYSTEM_PRIORITY.get(spg_to_crystal_system(m["spg"])),
+                -CRYSTAL_SYSTEM_PRIORITY.get(
+                    (spg_to_crystal_system(m["spg"]) or '').lower(), 0
+                ),
                 spg_rank.get(m["spg"], 10**9),
                 getattr(m["cell"], "missing", 999),
                 int(np.round(float(getattr(m["cell"], "chi2", 1e9)) / 5e-4)),
