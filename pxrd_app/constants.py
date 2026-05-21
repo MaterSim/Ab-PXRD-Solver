@@ -81,7 +81,7 @@ DEFAULT_STATE = {
     "max_wp": 18,
     "max_Z": 24,
     "max_dof": 25,
-    "max_atoms": 200,
+    "max_atoms": 20,  # n_atoms per primitive cell
     "max_volume": 1000.0,
     "cells": [],
     # Constraints and parameters

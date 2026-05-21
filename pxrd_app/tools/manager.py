@@ -854,7 +854,7 @@ class WPManager:
         solve(sorted_indexed_comp, groups)
         return solutions
 
-    def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10, max_atoms=200,
+    def __init__(self, spg, cell, composition, max_wp=9, max_Z=24, max_dof=10, max_atoms=20,
                  ref_den=None, csv='pxrd_app/tools/spg_comp_wp.csv'):
         """
         WP Manager is used to infer likely Wyckoff positions from the given space group,
@@ -867,7 +867,7 @@ class WPManager:
             max_wp (int): Maximum number of Wyckoff positions to consider
             max_Z (int): Maximum Z value to consider for volume estimation
             max_dof (int): Maximum degrees of freedom to consider
-            max_atoms (int): Maximum number of atoms in the unit cell to consider
+            max_atoms (int): Maximum number of atoms per primitive unit cell to consider
             ref_den (float): Reference density to use for Z estimation (optional)
             csv (str): Path to the CSV file containing Wyckoff position data
         """
@@ -880,11 +880,19 @@ class WPManager:
         self.composition = composition
         self.comp = [composition[key] for key in composition.keys()]
         self.group = Group(spg)
+        if self.group.symbol[0] in ['I', 'A', 'C', 'B']:
+            self.multiplier = 2
+        elif self.group.symbol[0] in ['F']:
+            self.multiplier = 4
+        elif self.group.symbol[0] in ['R']:
+            self.multiplier = 3
+        else:
+            self.multiplier = 1
         self.orders = self.group.get_orders()
         self.lattice = Lattice.from_1d_representation(cell, self.group.lattice_type)
         self.max_wp = max_wp
         self.max_dof = max_dof
-        self.max_atoms = max_atoms
+        self.max_atoms = max_atoms * self.multiplier
         volume = self.lattice.volume
 
         # Calculate total number of atoms in formula unit
