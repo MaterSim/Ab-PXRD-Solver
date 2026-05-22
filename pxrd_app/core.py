@@ -232,7 +232,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
         if result.get("smart_cell_ranked_spg_cells"):
             state["smart_cell_ranked_spg_cells"] = result["smart_cell_ranked_spg_cells"]
 
-    min_volume = get_volume_from_density(composition, density_max) * 0.5
+    min_volume = get_volume_from_density(composition, density_max) * 0.7
 
     result = {
         "infer_spg_from_pxrd": infer_spg,
@@ -261,7 +261,7 @@ def run_cell_solver(state: dict) -> dict:
     peak_positions = state.get("peak_positions")
     max_cells = state.get("max_cells")
     max_volume = state.get("max_volume")
-    #min_volume = state.get("min_volume")
+    min_volume = state.get("min_volume")
     cell_solver_kwargs = _get_cell_solver_kwargs(state)
 
     if state['infer_spg_from_pxrd']:
@@ -299,7 +299,7 @@ def run_cell_solver(state: dict) -> dict:
             max_chi2=cell_solver_kwargs["max_chi2"],
             max_guess=cell_solver_kwargs["max_guess"],
             max_volume=max_volume,
-            #min_volume=min_volume,
+            min_volume=min_volume,
             verbose=False,
         )
         solutions = solver.solve()

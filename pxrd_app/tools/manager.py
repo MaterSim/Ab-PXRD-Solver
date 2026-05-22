@@ -49,7 +49,14 @@ def generate_qrs_grid(bounds, scramble=True, centered=False, seed=42, method='so
     dim = len(bounds)
 
     # total number of unique lattice points
-    total = int(max(min(np.prod(bounds), max_pts), 1))
+    # Use Python-int arithmetic to avoid int64 overflow for large grids (e.g. 180^9 > int64 max)
+    _grid_prod = 1
+    for _Ni in bounds:
+        _grid_prod *= int(_Ni)
+        if _grid_prod >= max_pts:
+            _grid_prod = max_pts
+            break
+    total = int(max(min(_grid_prod, max_pts), 1))
 
     # Sobol sampler
     if method == 'sobol':

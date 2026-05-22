@@ -24,7 +24,7 @@ try:
 except Exception:
     refine_pxrd = _missing_gsas_refine_pxrd
 
-def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, min_volume):
+def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, min_volume, max_volume=None):
     """
     Calculate cell parameters for a given set of hkls.
 
@@ -36,6 +36,7 @@ def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, mi
         min_abc: minimum allowed cell parameter value
         max_abc: maximum allowed cell parameter value
         min_volume: minimum allowed cell volume
+        max_volume: optional maximum allowed cell volume
 
     Returns:
         cells: list of cell parameters
@@ -55,6 +56,8 @@ def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, mi
         cells = d_spacings * np.sqrt(h_sq_sum)
         vols = cells ** 3
         mask = (cells < max_abc) & (cells > min_abc) & (vols > min_volume)
+        if max_volume is not None:
+            mask = mask & (vols <= max_volume)
         cells = cells[mask]
         cells = np.reshape(cells, [len(cells), 1])
         hkls_out = hkls[mask]
@@ -76,6 +79,8 @@ def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, mi
         cells = np.sqrt(1/xs)
         vols = (np.sqrt(3)/2) * cells[:, 0]**2 * cells[:, 1]
         mask2 = (cells[:, 0] < max_abc) & (cells[:, 0] > min_abc) & (vols > min_volume)
+        if max_volume is not None:
+            mask2 = mask2 & (vols <= max_volume)
         cells = cells[mask2]
         hkls_out = hkls_out[mask2]
 
@@ -96,6 +101,8 @@ def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, mi
         cells = np.sqrt(1/xs)
         vols = cells[:, 0]**2 * cells[:, 1]
         mask2 = np.all((cells[:, :2] < max_abc) & (cells[:, :2] > min_abc), axis=1) & (vols > min_volume)
+        if max_volume is not None:
+            mask2 = mask2 & (vols <= max_volume)
         cells = cells[mask2]
         hkls_out = hkls_out[mask2]
 
@@ -117,6 +124,8 @@ def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, mi
         cells = np.sqrt(1/xs)
         vols = cells[:, 0] * cells[:, 1] * cells[:, 2]
         mask2 = np.all((cells[:, :3] < max_abc) & (cells[:, :3] > min_abc), axis=1) & (vols > min_volume)
+        if max_volume is not None:
+            mask2 = mask2 & (vols <= max_volume)
         cells = cells[mask2]
         hkls_out = hkls_out[mask2]
 
@@ -157,6 +166,8 @@ def get_cell_params(bravais, hkls, two_thetas, wave_length, min_abc, max_abc, mi
         #cells[mask, 3] = 180.0 - cells[mask, 3]
         vols = cells[:, 0] * cells[:, 1] * cells[:, 2] * np.sin(np.radians(cells[:, 3]))
         mask2 = np.all((cells[:, :3] < max_abc) & (cells[:, :3] > min_abc), axis=1) & (vols > min_volume)
+        if max_volume is not None:
+            mask2 = mask2 & (vols <= max_volume)
         cells = cells[mask2]
         hkls_out = hkls_out[mask2]
     else:
@@ -487,7 +498,7 @@ class CellSolver:
                  theta_tols=[0.1, 0.15, 0.5], cell_tol=0.25, hkl_max=(2, 3, 10), max_square=20,
                  total_square=50, min_abc=2.0, max_abc=30.0,
                  min_angle=30.0, max_angle=150.0, min_volume=20.0, max_chi2=0.5,
-                 N_batch=20, wave_length=1.54184, max_guess=50000, max_volume=None, verbose=False):
+                 N_batch=50, wave_length=1.54184, max_guess=50000, max_volume=None, verbose=False):
         """
         PXRD Cell Solver from the given spg and 2theta values.
         The algorithm is based on generating possible hkl combinations
@@ -553,6 +564,9 @@ class CellSolver:
         else:
             self.max_mismatch_hkl = 2
         self.max_guess = max_guess
+        # Cache mapping rounded cell params → validate_cell result (None = invalid).
+        # Prevents repeated validate_cell calls for the same cell across batches.
+        self._cell_cache: dict = {}
 
 
     def get_cell_from_multi_hkls(self, hkls, thetas):
@@ -572,7 +586,8 @@ class CellSolver:
                                       self.wave_length,
                                       self.min_abc,
                                       self.max_abc,
-                                      self.min_volume)
+                                      self.min_volume,
+                                      self.max_volume)
 
         if len(cells) == 0: return []
         # keep cells up to 4 decimal places
@@ -600,7 +615,15 @@ class CellSolver:
         solutions = []
         for i, cell in enumerate(cells):
             if len(cell) == 4 and cell[3] > 90: cell[3] = 180 - cell[3]
+            # Round to 2 decimal places for cache key (matches cell_tol granularity).
+            cell_key = tuple(np.round(cell, decimals=2))
+            if cell_key in self._cell_cache:
+                cached = self._cell_cache[cell_key]
+                if cached is not None:
+                    solutions.append(cached)
+                continue
             sol, _ = self.validate_cell(cell, self.trial_hkls, hkls[i], h_maxs[i], k_maxs[i], l_maxs[i])
+            self._cell_cache[cell_key] = sol
             if sol is not None:
                 solutions.append(sol)
         return solutions
