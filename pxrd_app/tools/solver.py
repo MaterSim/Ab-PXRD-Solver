@@ -1214,10 +1214,10 @@ def SmartCellSolver(thetas, hkl_max, max_mismatch, max_chi2=0.1, max_square=28, 
             ('orthorhombic-I', 7, 0, [23, 24, 44, 45, 46, 71, 72, 73, 74]),
             ('orthorhombic-C', 6, 0, [21, 20, 35, 36, 37, 63, 64, 65, 66, 67, 68]),
             ('orthorhombic-A', 5, 0, [38, 39, 40, 41]),
-            ('orthorhombic-P', 4, 2, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 47, 48, 49,
+            ('orthorhombic-P', 4, 0, [16, 17, 18, 19, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 47, 48, 49,
                                       50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62]),
-            ('monoclinic-C', 3, 4, [5, 8, 9, 12, 15]),
-            ('monoclinic-P', 2, 4, [3, 4, 6, 7, 10, 11, 13, 14]),
+            ('monoclinic-C', 3, 0, [5, 8, 9, 12, 15]),
+            ('monoclinic-P', 2, 0, [3, 4, 6, 7, 10, 11, 13, 14]),
         ]
         if crystal_system is not None:
             cs = crystal_system.lower().strip()
@@ -1617,11 +1617,11 @@ def is_excellent_refinement(r2, chi2, min_r2, max_chi2):
     return r2 >= max(min_r2 + 0.03, 0.98) and chi2 <= min(max_chi2 * 0.75, 0.08)
 
 
-def should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination):
+def should_terminate(r2, chi2, eng_rel, min_r2, max_chi2, max_eng_for_termination):
     """Allow immediate termination only for excellent fit quality AND near-best energy."""
     if not is_excellent_refinement(r2, chi2, min_r2, max_chi2):
         return False
-    return eng_rel <= max_eng_rel_for_termination
+    return eng_rel <= max_eng_for_termination
 
 
 def _normalize_signature_value(value):
@@ -1677,9 +1677,9 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     max_force, max_stress, wavelength, thetas, resolution, SCALED_INTENSITY_TOL,
                     INST_FILE, logger, max_wp, max_Z, max_dof, per_dof, max_atoms, min_r2=0.95, max_chi2=0.12, refine_margin=0.02,
                     refine_sim_min=0.7, refine_eng_window=0.5, structure_log=[],
-                    max_eng_rel=None, min_structures_before_early_stop=10,
+                    max_eng=None, min_structures_before_early_stop=10,
                     disable_early_termination=False,
-                    forced_wp_solution=None, ase_logfile=None, global_accepted=False,
+                    forced_wp_solution=None, ase_log=None, global_accepted=False,
                     use_qrs=True, qrs_method='sobol', factor=1):
     """
     Explore candidates and return first satisfactory refinement result.
@@ -1723,10 +1723,10 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
     best_refined_energy_ok_score = -1e9
     min_structures_before_early_stop = max(0, int(min_structures_before_early_stop))
 
-    if max_eng_rel is None:
-        max_eng_rel_for_termination = refine_eng_window
+    if max_eng is None:
+        max_eng_for_termination = refine_eng_window
     else:
-        max_eng_rel_for_termination = max_eng_rel
+        max_eng_for_termination = max_eng
 
 
     def _finalize_result(result, attempt_count=None):
@@ -1816,7 +1816,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                     #print(f"[NDBG] post-generate valid={xtal.valid} {trial_idx}/{actual_idx}/{N4}")
                     #print(xtal.get_xtal_string())
                     if not xtal.valid: continue
-                    atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
+                    atoms = relax_structure(xtal.to_ase(), xm.dof, ase_log=ase_log)
                     _dbg(f"[NDBG] post-relax atoms_is_none={atoms is None}")
                     if atoms is None: continue
 
@@ -1878,7 +1878,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                             refined_score = (1.5 * r2) - (0.4 * wr) - (0.2 * chi2)
                             msg += f" {sim:.3f}, {eng:.3f}, {stress:.3f}, {fmax:.3f}"
                             msg += f" {wr:6.3f}, {r2:6.3f}, {chi2:6.3f}, {refined_score:.1f}, {elapsed:.1f}s"
-                            if eng_rel <= max_eng_rel_for_termination and refined_score > best_refined_energy_ok_score:
+                            if eng_rel <= max_eng_for_termination and refined_score > best_refined_energy_ok_score:
                                 best_refined_energy_ok_score = refined_score
                                 best_refined_result_energy_ok = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
                                 msg += " [best-energy-ok]"
@@ -1919,13 +1919,13 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                         early_stop = True
 
                     if wr is not None and (r2 > min_r2 or chi2 < max_chi2):
-                        energy_ok = eng_rel <= max_eng_rel_for_termination
+                        energy_ok = eng_rel <= max_eng_for_termination
                         if refined_score is not None and refined_score > local_accepted_score and energy_ok:
                             local_accepted_score = refined_score
                             local_accepted_result = (wr, r2, chi2, xtal, eng_best, eng, eng_rel, struc_count, actual_idx)
                         if (not disable_early_termination and should_terminate(
-                                r2, chi2, eng_rel, min_r2, max_chi2, max_eng_rel_for_termination)):
-                            reopt_atoms = relax_structure(xtal.to_ase(), xm.dof, ase_logfile=ase_logfile)
+                                r2, chi2, eng_rel, min_r2, max_chi2, max_eng_for_termination)):
+                            reopt_atoms = relax_structure(xtal.to_ase(), xm.dof, ase_log=ase_log)
                             if reopt_atoms is not None:
                                 reopt_eng = reopt_atoms.get_potential_energy() / len(reopt_atoms)
                                 eng_before = eng
@@ -1953,7 +1953,7 @@ def search_solution(cells, spg, composition, ref_den, match_cif,
                             best_for_check = local_accepted_result or best_refined_result_energy_ok
                             if best_for_check is not None:
                                 current_final_eng_rel = max(0.0, float(best_for_check[5]) - float(eng_best))
-                                if current_final_eng_rel > max_eng_rel_for_termination:
+                                if current_final_eng_rel > max_eng_for_termination:
                                     early_stop = False
                             if early_stop:
                                 logger.info(

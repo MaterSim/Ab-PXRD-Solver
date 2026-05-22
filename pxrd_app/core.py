@@ -206,7 +206,7 @@ def run_data_preprocessor(pxrd_csv: str, state: dict) -> dict:
     #data.filter_peaks_by_ml(threshold=0.8, min_height=3.0)
     peaks = data.peaks
     peak_positions = x1[peaks]
-    data.plot('my.pdf')#; import sys; sys.exit()
+    #data.plot('my.pdf')#; import sys; sys.exit()
 
     # QZ: Just to handle cases with very few peaks with light elements.
     if len(peaks) <= 10 and bg_subtract:
@@ -367,7 +367,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
     max_chi2 = state.get("max_chi2")
     max_force = state.get("max_force")
     max_stress = state.get("max_stress")
-    max_eng_rel = state.get("max_eng_rel")
+    max_eng = state.get("max_eng")
     disable_early_termination = bool(state.get("disable_early_termination", False))
     min_structures_before_early_stop = max(0, int(state.get("min_structures_before_early_stop", 10)))
     sim_max = state.get("max_sim")
@@ -463,13 +463,13 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
         min_r2,
         max_chi2,
         structure_log=all_structure_log,
-        max_eng_rel=max_eng_rel,
+        max_eng=max_eng,
         min_structures_before_early_stop=min_structures_before_early_stop,
         disable_early_termination=disable_early_termination,
         forced_wp_solution=forced_wp_solution,
-        ase_logfile=state.get("ase_logfile"),
+        ase_log=state["ase_log"],
         global_accepted=global_accepted,
-        qrs_method=state.get("qrs_method", "sobol"),
+        qrs_method=state["qrs"],
         factor=factor,
     )
 
@@ -484,9 +484,9 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             eng_min = min(float(eng_min), float(global_best_energy))
 
         candidate_selected_energy = float(selected_eng) if selected_eng is not None else None
-        candidate_eng_rel = None
+        candidate_eng = None
         if candidate_selected_energy is not None and global_best_energy is not None:
-            candidate_eng_rel = max(0.0, candidate_selected_energy - float(global_best_energy))
+            candidate_eng = max(0.0, candidate_selected_energy - float(global_best_energy))
 
         candidate = {
             "wr": float(wr),
@@ -495,7 +495,7 @@ def run_wyckoff_solver(state: dict, all_structure_log: list, structure_id_counte
             "xtal": xtal,
             "eng_best": float(global_best_energy) if global_best_energy is not None else float(eng_best),
             "selected_energy": candidate_selected_energy,
-            "eng_rel": candidate_eng_rel,
+            "eng_rel": candidate_eng,
             "wp_labels": state.get("wp_labels"),
             "cif": attempt_cif,
             "qrs_id": qrs_id,
@@ -636,7 +636,7 @@ def run_pipeline(state: dict) -> dict:
     infer_spg = state["infer_spg_from_pxrd"]
     composition = state["composition"]
     density_min, density_max = state["density_min"], state["density_max"]
-    csv_path = state.get("wp_csv_path")
+    csv_path = state.get("wp_path")
 
     wp_candidate_cache: dict[tuple, list] = {}
     wp_cost_cache: dict[tuple, tuple[int, int, int]] = {}
@@ -878,7 +878,7 @@ def run_pipeline(state: dict) -> dict:
     structure_limit = state['min_structures_before_early_stop']
     max_wp_choices = state.get("max_wp_choices")
     N_cells = len(all_seed_cells)
-    max_eng_rel = max(0.0, state.get("max_eng_rel"))
+    max_eng = max(0.0, state.get("max_eng"))
     disable_early_termination = bool(state.get("disable_early_termination", False))
 
     for it in range(3):
@@ -985,14 +985,14 @@ def run_pipeline(state: dict) -> dict:
                         global_eng_rel = trial_result.get("eng_rel")
                         if global_eng_rel is None and candidate_energy is not None and global_best_energy is not None:
                             global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
-                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel)
+                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng)
                         enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
                         if strict_early_exit and not disable_early_termination:
                             if not energy_ok:
                                 logger.info(
                                     f"Good fit found for spg={spg_val}, but skipping quality-based early stop "
                                     f"because dE_global={global_eng_rel:.4f} exceeds "
-                                    f"{max_eng_rel:.4f} eV/atom; search may still stop via "
+                                    f"{max_eng:.4f} eV/atom; search may still stop via "
                                     f"the structure-budget criterion."
                                 )
                             else:
@@ -1020,7 +1020,7 @@ def run_pipeline(state: dict) -> dict:
                         global_eng_rel = trial_result.get("eng_rel")
                         if global_eng_rel is None and candidate_energy is not None and global_best_energy is not None:
                             global_eng_rel = max(0.0, float(candidate_energy) - float(global_best_energy))
-                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng_rel)
+                        energy_ok = (global_eng_rel is not None and global_eng_rel <= max_eng)
                         enough_structures = len(global_structure_log) >= state["min_structures_before_early_stop"]
                         if energy_ok and enough_structures and not stop_after_pair:
                             stop_after_pair = True

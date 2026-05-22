@@ -9,13 +9,13 @@ from typing import Optional, List
 def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
-        "--begin", '-b',
+        "--begin",
         type=int,
         default=0,
         help="Index of the first CSV file to process (default: 0).",
     )
     parser.add_argument(
-        "--end", '-e',
+        "--end",
         type=int,
         default=-1,
         help="Index of the last CSV file to process (default: all).",
@@ -67,23 +67,13 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Infer space group from PXRD/profile model instead of filename convention.",
     )
     parser.add_argument(
-        "--spg-top-k",
-        type=int,
-        default=160,
-        help="Number of inferred space-group options to evaluate/show.",
-    )
-    parser.add_argument(
         "--spg",
         type=int,
         default=None,
-        help=(
-            "Restrict the search to a single space group number (1-230). "
-            "When --infer-spg is set, this filters the inferred SPG list to only this space group. "
-            "Without --infer-spg, it overrides the space group parsed from the filename."
-        ),
+        help="Restrict the search to a single space group number (1-230).",
     )
     parser.add_argument(
-        "--max-eng-rel",
+        "--max-eng",
         type=float,
         default=None,
         help=(
@@ -92,13 +82,13 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--max-volume",
+        "--max-vol",
         type=float,
         default=1500.0,
         help="Maximum allowed unit-cell volume (A^3) for cell solutions. Larger cells are discarded.",
     )
     parser.add_argument(
-        "--disable-early-termination",
+        "--no-early-termination",
         action="store_true",
         help="Disable early-stop shortcuts and continue searching until other run limits are reached.",
     )
@@ -120,16 +110,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--parallel-retry-min-workers",
-        type=int,
-        default=1,
-        help=(
-            "Minimum worker count to use during parallel retry rounds while backing off "
-            "from the initial --workers value."
-        ),
-    )
-    parser.add_argument(
-        "--ase-logfile",
+        "--ase-log",
         type=str,
         default=None,
         help=(
@@ -143,7 +124,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         help="Directory to write results (CIF files, CSV summary, run logs, plots) into. Defaults to 'Results'.",
     )
     parser.add_argument(
-        "--wp-csv-path",
+        "--wp-path",
         type=str,
         default="pxrd_app/tools/spg_comp_wp.csv",
         help=(
@@ -152,7 +133,7 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--qrs-method",
+        "--qrs",
         choices=("sobol", "halton"),
         default="halton",
         help="Quasi-random sampler to use with --use-qrs. Defaults to halton.",
@@ -315,7 +296,7 @@ def _build_state(
     infer_spg_from_pxrd: Optional[bool] = None,
     spg_top_k: Optional[int] = None,
     force_spg: Optional[int] = None,
-    max_eng_rel: Optional[float] = None,
+    max_eng: Optional[float] = None,
     disable_early_termination: Optional[bool] = None,
     max_volume: Optional[float] = None,
     list_wp_only: Optional[bool] = None,
@@ -325,9 +306,9 @@ def _build_state(
     max_Z: Optional[int] = None,
     max_atoms: Optional[int] = None,
     max_sim: Optional[float] = None,
-    ase_logfile: Optional[str] = None,
-    wp_csv_path: Optional[str] = None,
-    qrs_method: Optional[str] = None,
+    ase_log: Optional[str] = None,
+    wp_path: Optional[str] = None,
+    qrs: Optional[str] = None,
 ) -> dict:
     run_state = copy.deepcopy(default_state if state is None else state)
     if pxrd_csv is not None: run_state["pxrd_csv"] = pxrd_csv
@@ -341,8 +322,8 @@ def _build_state(
             run_state["force_spg"] = spg_val
         else:
             logger.warning(f"Ignoring invalid --spg={spg_val}; must be between 1 and 230.")
-    if max_eng_rel is not None:
-        run_state["max_eng_rel"] = max(0.0, float(max_eng_rel))
+    if max_eng is not None:
+        run_state["max_eng"] = max(0.0, float(max_eng))
     if disable_early_termination is not None:
         run_state["disable_early_termination"] = bool(disable_early_termination)
     if max_volume is not None:
@@ -353,19 +334,20 @@ def _build_state(
             logger.warning(f"Ignoring non-positive max_volume={max_volume}; expected > 0.")
     if list_wp_only is not None: run_state["list_wp_only"] = bool(list_wp_only)
     if results_dir is not None: run_state["results_dir"] = str(results_dir)
-    if wp_csv_path is not None: run_state["wp_csv_path"] = str(wp_csv_path)
+    if wp_path is not None: run_state["wp_path"] = str(wp_path)
     if max_wp is not None: run_state["max_wp"] = int(max_wp)
     if max_dof is not None: run_state["max_dof"] = int(max_dof)
     if max_Z is not None: run_state["max_Z"] = int(max_Z)
     if max_atoms is not None: run_state["max_atoms"] = int(max_atoms)
     if max_sim is not None: run_state["max_sim"] = float(max_sim)
-    if ase_logfile is not None:
-        text = str(ase_logfile).strip()
-        run_state["ase_logfile"] = text or None
-    if qrs_method is not None:
-        method = str(qrs_method).strip().lower()
-        run_state["qrs_method"] = method if method in ("sobol", "halton") else "sobol"
+    if ase_log is not None:
+        text = str(ase_log).strip()
+        run_state["ase_log"] = text or None
+    if qrs is not None:
+        method = str(qrs).strip().lower()
+        run_state["qrs"] = method if method in ("sobol", "halton") else "halton"
     run_state["status"] = "Failure"  # default to failure unless pipeline updates to success
+    #print(run_state["disable_early_termination"]); import sys; sys.exit()
     return run_state
 
 
@@ -376,18 +358,18 @@ def build_run_state(default_state: dict, logger, args: argparse.Namespace, csv_p
         pxrd_csv=csv_path,
         formula=args.formula,
         infer_spg_from_pxrd=args.infer_spg,
-        spg_top_k=args.spg_top_k,
+        spg_top_k=160,#args.spg_top_k,
         force_spg=args.spg,
-        max_eng_rel=args.max_eng_rel,
-        disable_early_termination=args.disable_early_termination,
-        max_volume=args.max_volume,
+        max_eng=args.max_eng,
+        disable_early_termination=args.no_early_termination,
+        max_volume=args.max_vol,
         list_wp_only=args.list_wp_only,
         results_dir=args.output,
         max_wp=args.max_wp,
         max_dof=args.max_dof,
         max_Z=args.max_z,
         max_sim=args.max_sim,
-        ase_logfile=args.ase_logfile,
-        wp_csv_path=args.wp_csv_path,
-        qrs_method=args.qrs_method,
+        ase_log=args.ase_log,
+        wp_path=args.wp_path,
+        qrs=args.qrs,
         )

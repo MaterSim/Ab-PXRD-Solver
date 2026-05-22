@@ -113,18 +113,18 @@ DEFAULT_STATE = {
     "seed_base": _env_int("PXRD_SEED_BASE", 20260315),
     "spg_top_k": 200,
     "spg_infer_backend": "smart-cell",
-    "max_eng_rel": 0.1,
+    "max_eng": 0.1,
     "disable_early_termination": False,
     "min_structures_before_early_stop": 10,
-    "ase_logfile": None,
+    "ase_log": None,
     "max_attempt_count": 10000,
     "max_relax_count": 1500,  # Limit total relaxations to avoid hang
     "max_enumeration_samples": 1000,  # Limit samples during cost estimation to avoid hang
     "max_trials": 50000000,  # Limit estimated trials to avoid hang
     "max_pairs": 250,  # Limit number of planned (cell, SPG) pairs to avoid hang
     "max_wp_choices": 30,  # Limit number of WP choices per cell to avoid combinatorial explosion
-    "wp_csv_path": "pxrd_app/tools/spg_comp_wp.csv",
-    "qrs_method": "sobol",  # Quasi-random sampler used when use_qrs is enabled
+    "wp_path": "pxrd_app/tools/spg_comp_wp.csv",
+    "qrs": "halton",  # Quasi-random sampler used when use_qrs is enabled
     "suppress_torch_load_futurewarning": _env_flag("PXRD_SUPPRESS_TORCH_LOAD_FUTUREWARNING", True),
 }
 

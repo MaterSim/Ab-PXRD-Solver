@@ -72,13 +72,13 @@ def get_volume_from_density(composition: Mapping[str, int], density: float) -> f
     min_volume = molecular_weight / density / N_A * 1e24  # in Å³
     return min_volume
 
-def relax_structure(atoms: Any, dof: int, ase_logfile: Optional[str] = None) -> Optional[Any]:
+def relax_structure(atoms: Any, dof: int, ase_log: Optional[str] = None) -> Optional[Any]:
     if dof > 0:
-        atoms = ASE_relax(atoms, opt_lat=False, step=10 * dof, logfile=ase_logfile)
+        atoms = ASE_relax(atoms, opt_lat=False, step=10 * dof, logfile=ase_log)
         final_step = 5 * dof
         final_fmax = 0.1
     else:
-        atoms = ASE_relax(atoms, opt_lat=False, step=5, logfile=ase_logfile)
+        atoms = ASE_relax(atoms, opt_lat=False, step=5, logfile=ase_log)
         final_step = None
         final_fmax = None
 
@@ -87,7 +87,7 @@ def relax_structure(atoms: Any, dof: int, ase_logfile: Optional[str] = None) -> 
 
     if final_step is not None:
         atoms = ASE_relax(atoms, opt_lat=False, step=final_step, fmax=final_fmax,
-                          logfile=ase_logfile)
+                          logfile=ase_log)
     return atoms
 
 
