@@ -932,6 +932,13 @@ class WPManager:
         if self.Zs[0] - self.Zs[1] == 1:
             Z = int(np.round(volume/((vol[0]+vol[1])/2)))
             self.Zs = (Z, Z)
+        # Re-apply max_atoms constraint after fallback: the fallback Z may exceed max_atoms
+        # when density_min implies a higher Z_min than what max_atoms allows as Z_max.
+        Z_max_from_atoms = self.max_atoms // sum(self.comp)
+        if self.Zs[1] > Z_max_from_atoms:
+            self.Zs = (min(self.Zs[0], Z_max_from_atoms), Z_max_from_atoms)
+        if self.Zs[0] > self.Zs[1]:
+            self.Zs = (self.Zs[1], self.Zs[1])
         # print(f"Estimated Z range: {self.Zs}, Vol: {volume:.2f}, Vol bounds: [{vol[0]:.2f}, {vol[1]:.2f}]")
 
     def get_wp_general(self):

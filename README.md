@@ -308,17 +308,17 @@ python PXRD_solve.py --use-list --input data/test.txt --infer-spg --workers 48
 | `--formula STR` | *(from filename)* | Override formula instead of parsing from filename |
 | `--spg N` | *(from filename)* | Fix or filter to a single space group (1–230) |
 | `--infer-spg` | off | Infer space group from data instead of reading from filename |
-| `--max-volume V` | 1500.0 | Maximum allowed unit-cell volume (Å³) |
+| `--max-vol V` | 1500.0 | Maximum allowed unit-cell volume (Å³) |
 | `--max-wp N` | 18 | Max Wyckoff sites per assignment |
 | `--max-dof N` | 25 | Max degrees of freedom per WP combination |
 | `--max-z N` | 24 | Max Z (formula units per cell) |
 | `--max-sim S` | 0.9 | Similarity threshold for refinement trigger 1 |
-| `--max-eng-rel E` | 0.1 | Energy-above-best (eV/atom) threshold for refinement trigger 2 |
-| `--qrs-method {sobol,halton}` | `sobol` | QRS sampler type |
+| `--max-eng E` | 0.1 | Energy-above-best (eV/atom) threshold for refinement trigger 2 |
+| `--qrs {sobol,halton}` | `sobol` | QRS sampler type |
 | `--workers N` | 1 | Parallel CSV workers (batch mode) |
 | `--list-wp-only` | off | List Wyckoff candidates only, skip structure generation |
-| `--ase-logfile PATH` | *(none)* | Write ASE FIRE optimizer logs to this file |
-| `--wp-csv-path PATH` | `pxrd_app/tools/spg_comp_wp.csv` | Precomputed WP count table for cost estimation |
+| `--ase-log PATH` | *(none)* | Write ASE FIRE optimizer logs to this file |
+| `--wp-path PATH` | `pxrd_app/tools/spg_comp_wp.csv` | Precomputed WP count table for cost estimation |
 
 ### Environment Variables
 
