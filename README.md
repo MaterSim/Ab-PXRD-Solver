@@ -4,11 +4,11 @@
 
 Ab-PXRD-Solver is a fully automated *ab initio* crystal structure determination pipeline. Given an experimental Powder X-Ray Diffraction (PXRD) pattern and a chemical formula, it autonomously:
 
-1. **Preprocesses** the diffraction pattern with adaptive background subtraction, Savitzky-Golay smoothing, and ML-guided peak detection.
+1. **Preprocesses** the diffraction pattern with adaptive background subtraction, smoothing, and ML-guided peak detection.
 2. **Predicts density** bounds from the chemical formula using a pretrained Roost ensemble model.
 3. **Indexes peaks** to candidate unit cells via `CellSolver` (known SPG) or `SmartCellSolver` (unknown SPG).
 4. **Enumerates Wyckoff positions** compatible with the composition and density range.
-5. **Generates trial structures** using `PyXtal` with Quasi-Random Sampling (Sobol or Halton).
+5. **Generates trial structures** using `PyXtal` with Quasi-Random Sampling.
 6. **Relaxes structures** with the `MACE` universal neural-network force field via `ASE`.
 7. **Screens candidates** by cosine similarity of simulated vs. experimental PXRD patterns.
 8. **Refines** promising structures with full-pattern Rietveld refinement via `GSAS-II`.
@@ -133,7 +133,7 @@ If `min(intensity) > 2.5`, background subtraction is applied via **asymmetric le
 
 ### 1.4 Density Prediction
 
-`predict_density_ensemble()` runs a **Roost** message-passing neural network ensemble on the composition. Predictions are aggregated as `mean ± 2.5·std`, yielding `density_min` and `density_max` (g cm⁻³). The minimum cell volume bound is:
+`predict_density_ensemble()` runs a **Roost** message-passing neural network ensemble on the composition. Predictions are aggregated as `mean ± 2.5·std`, yielding `density_min` and `density_max` (g/cm³). The minimum cell volume bound is:
 
 $$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10^{24}  (\text{Å}^3)$$
 
@@ -213,7 +213,7 @@ A theoretical PXRD pattern is simulated (2θ: 10°–80°, step 0.02°, Cu-Kα�
 
 A solution is **accepted** when:
 
-$$R^2 \geq 0.95 \quad \text{or} \quad \chi^2 \leq 0.12$$
+$$R^2 \geq 0.95 \quad \text{and} \quad \chi^2 \leq 0.12$$
 
 The pipeline exits immediately on the first accepted solution.
 
@@ -224,7 +224,7 @@ The pipeline exits immediately on the first accepted solution.
 | `max_wp` | 18 | Max Wyckoff sites per assignment |
 | `max_dof` | 25 | Max degrees of freedom per WP combination |
 | `max_Z` | 24 | Max formula units per cell |
-| `max_eng_rel` | 0.1 eV/atom | Energy window above best for refinement trigger 2 |
+| `max_eng_rel` | 0.1 eV/atom | Energy window above best for refinement|
 | `max_force` | 0.5 eV/Å | Max per-atom force after relaxation |
 | `max_stress` | 0.3 GPa | Max diagonal stress after relaxation |
 | `min_r2` | 0.95 | Rietveld acceptance: R² |
