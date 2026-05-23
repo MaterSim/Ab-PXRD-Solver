@@ -88,7 +88,7 @@ PXRD-Agent/
 │   ├── runtime.py             # Results CSV writing, timing summary
 │   └── tools/
 │       ├── manager.py         # RawDataManager, CellManager, WPManager, XtalManager
-│       │                      #   generate_qrs_grid (Sobol / Halton)
+│       │                      #   generate_qrs_grid
 │       ├── solver.py          # CellSolver, SmartCellSolver, search_solution,
 │       │                      #   enumerate_wyckoff, get_adaptive_wp_limits
 │       ├── density.py         # Roost ensemble density predictor
@@ -182,7 +182,7 @@ For orthorhombic SPGs, all six axis permutations are tried to handle axis-settin
 
 `WPManager` lists all valid Wyckoff position assignments where each element's site multiplicities sum to its count in the formula and the resulting density is within `(density_min, density_max)`. Assignments are reranked by `score_wp_candidate()` to prefer smaller-volume, lower-mismatch, lower-DOF, fewer-site configurations.
 
-### 3.2 Trial Structure Generation and QRS
+### 3.2 Trial Structure Generation and Quasi-Random Sampling
 
 `XtalManager` uses **PyXtal** to place atoms on Wyckoff sites with **Quasi-Random Sampling:** Fractional coordinates are drawn from a **Sobol** or **Halton** low-discrepancy sequence (`generate_qrs_grid` in `pxrd_app/tools/manager.py`) instead of pseudo-random numbers. This provides better uniform coverage of coordinate space with fewer trials.
 
@@ -253,17 +253,16 @@ python PXRD_solve.py --input Examples/PXRD_PrYMg2_123.csv
 ```
 This run will generate a list of trial solutions as follows.
 ```
-Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
+Pair  SPG   Cell                             #WPs Volume(Å³)    Chi2     N_m     N_t    Priority Score
 --------------------------------------------------------------------------------------------------------
-1     12    123   112.2       0.0004   42        7        0.034        3.818     7.701
-2     2     123   448.9       0.0003   30        26       0.100        5.399    15.401
-3     7     123   224.5       0.0004   91        22       0.119        5.399     7.701
-4     2     123   448.9       0.0004   42        25       0.122        7.635     7.701
-5     2     123   449.4       0.0030   18        11       0.127        3.818    30.832
-6     7     123   224.5       0.0004   195       13       0.136        3.818    15.401
-7     7     123   224.8       0.0167   39        17       0.319        7.645     3.846
-8     2     123   449.9       0.0312   60        19       0.759       10.821     3.843
-9     1     123   782.6       0.0353   156       28       2.041        7.652    13.367
+1     123   [ 3.818   7.701                ] 12     112.2      0.0004     7      42     0.035
+2     123   [ 5.399  15.401                ] 2      448.9      0.0003    26      30     0.104
+3     123   [ 5.399   7.701                ] 7      224.5      0.0004    22      91     0.123
+4     123   [ 7.635   7.701                ] 2      448.9      0.0004    25      42     0.126
+5     123   [ 3.818  30.832                ] 2      449.4      0.0030    11      18     0.131
+6     123   [ 3.818  15.401                ] 7      224.5      0.0004    13     195     0.141
+7     123   [ 7.652   3.843                ] 7      225.0      0.0392    17      39     0.466
+8     123   [10.821   3.843                ] 2      449.9      0.0312    19      60     0.786
 ```
 The solver goes through the list and finds an excellent fit for the first cell which is the energy minimum with a high R2 value, and then stops the search.
 
@@ -274,17 +273,31 @@ The solver goes through the list and finds an excellent fit for the first cell w
 
 ```bash
 # Single file, infer SPG with SmartCellSolver 
-python PXRD_solve.py --input GSAS_PXRD/Ag2Hg5_127.csv --infer-spg
+python PXRD_solve.py --input Examples/PXRD_PrYMg2_123.csv --infer-spg
 
-Pair  WPs   SPG   Volume(Å³)  Chi2    EstTrials Missing  BalScore  Dims
+Pair  SPG   Cell                             #WPs Volume(Å³)    Chi2     N_m     N_t    Priority Score
 --------------------------------------------------------------------------------------------------------
-1     3     115   112.2       0.0004   21        7        0.031        3.818     7.701
-2     12    123   112.2       0.0004   42        7        0.045        3.818     7.701
-3     2     99    112.2       0.0004   49        7        0.048        3.818     7.701
+1     115   [ 3.818   7.701                ] 3      112.2      0.0004     7      21     0.034
+2     123   [ 3.818   7.701                ] 12     112.2      0.0004     7      42     0.048
+3     99    [ 3.818   7.701                ] 2      112.2      0.0004     7      49     0.052
+4     127   [ 5.399   7.701                ] 2      224.5      0.0004    22      10     0.056
+5     140   [ 5.399  15.401                ] 6      448.9      0.0004     6      30     0.076
+6     82    [ 5.399  15.401                ] 1      448.9      0.0003     9      25     0.079
+7     111   [ 5.399   7.701                ] 2      224.5      0.0004    22      24     0.087
+8     69    [ 7.634  15.401   7.639        ] 1      898.2      0.0005     6      29     0.124
+9     69    [15.401   7.634   7.639        ] 1      898.2      0.0005     6      29     0.124
+10    69    [ 7.634   7.639  15.401        ] 1      898.2      0.0005     6      29     0.124
+11    100   [ 5.399   7.701                ] 2      224.5      0.0004    22      52     0.128
+12    131   [ 3.818  15.414                ] 6      224.7      0.0044    13      12     0.130
+13    108   [ 5.399  15.401                ] 2      448.9      0.0004     6     100     0.138
+14    139   [ 5.399  15.401                ] 3      448.9      0.0003     9      90     0.150
+15    129   [ 5.399   7.701                ] 5      224.5      0.0004    22      91     0.169
+16    123   [ 5.399   7.701                ] 7      224.5      0.0004    22      91     0.169
+17    123   [ 7.635   7.701                ] 2      448.9      0.0004    25      42     0.172
 ...
-90    3     137   898.8       0.0046   234       29       1.586        7.635    15.416
-91    2     113   898.8       0.0046   278       29       1.729        7.635    15.416
-92    3     82    899.1       0.0167   284       11       1.857       10.811     7.692
+69    127   [10.821   3.850                ] 2      450.8      0.0407    15      80     1.236
+70    82    [ 5.399  30.832                ] 3      898.8      0.0037    11     460     1.394
+71    82    [10.811   7.692                ] 3      899.1      0.0167    11     284     1.995
 ```
 When the space group is unknown, the solver will generate a larger list and then goes through the list. It takes a longer time to find the excellent fit  which is the energy minimum with a high R2 value.
 
@@ -314,7 +327,7 @@ python PXRD_solve.py --use-list --input data/test.txt --infer-spg --workers 48
 | `--max-z N` | 24 | Max Z (formula units per cell) |
 | `--max-sim S` | 0.9 | Similarity threshold for refinement trigger 1 |
 | `--max-eng E` | 0.1 | Energy-above-best (eV/atom) threshold for refinement trigger 2 |
-| `--qrs {sobol,halton}` | `sobol` | QRS sampler type |
+| `--qrs` | `halton` | QRS sampler type (`sobol` or `halton`) |
 | `--workers N` | 1 | Parallel CSV workers (batch mode) |
 | `--list-wp-only` | off | List Wyckoff candidates only, skip structure generation |
 | `--ase-log PATH` | *(none)* | Write ASE FIRE optimizer logs to this file |
