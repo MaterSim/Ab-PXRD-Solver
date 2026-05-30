@@ -1,4 +1,4 @@
-name: pxrd-agent
+name: ab-pxrd-solver
 channels:
   - conda-forge
   - pytorch
@@ -25,4 +25,3 @@ dependencies:
   - pip:
       - numpy<2
       - mace-torch
-      - wandb

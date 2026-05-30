@@ -417,13 +417,7 @@ All stages communicate through a `run_state` dictionary (`pxrd_app/constants.py 
 
 ```bash
 conda env create -f environment.yml
-conda activate pxrd-agent
-```
-
-For GPU-accelerated MACE, install a CUDA-enabled PyTorch:
-
-```bash
-conda install -c pytorch -c nvidia pytorch-cuda=12.1
+conda activate ab-pxrd-solver
 ```
 
 ---
