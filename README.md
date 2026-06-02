@@ -243,6 +243,14 @@ The pipeline exits immediately on the first accepted solution.
 
 ---
 
+
+## Environment Setup & Installation
+
+```bash
+conda env create -f environment.yml
+conda activate ab-pxrd-solver
+```
+
 ## Usage
 
 ### Quick Start
@@ -371,60 +379,6 @@ All results are written to `--output` (default: `Results/`):
 ### Summary CSV Columns
 
 `csv_file_name`, `Runtime`, `N_struc`, `N_attempts`, `N_est`, `Status`, `E`, `dE`, `R2`, `Chi2`, `Rwp`, `SPG`, `Wyckoff`, `Cell`, `WP_qrs_id`
-
----
-
-## Shared Pipeline State
-
-All stages communicate through a `run_state` dictionary (`pxrd_app/constants.py → DEFAULT_STATE`). Key fields:
-
-| Key | Type | Description |
-|-----|------|-------------|
-| `pxrd_csv` | `str` | Path to input CSV |
-| `formula` | `str` | Chemical formula |
-| `composition` | `dict` | Element → count |
-| `x1`, `y1` | `list[float]` | 2θ and intensity arrays |
-| `peaks` | `list[int]` | Peak indices in 2θ grid |
-| `peak_positions` | `list[float]` | 2θ values of detected peaks |
-| `spg` | `int` | Space group number |
-| `spg_predictions` | `list[int]` | Ranked SPG candidates (infer mode) |
-| `density_min/max` | `float` | ML-predicted density bounds (g cm⁻³) |
-| `min_volume` | `float` | Minimum unit-cell volume (Å³) |
-| `cells` | `list[CellManager]` | Ranked candidate unit cells |
-| `wavelength` | `float` | X-ray wavelength (default: 1.54184 Å) |
-| `qrs_method` | `str` | `"sobol"` or `"halton"` |
-
----
-
-## Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| `python >= 3.11` | Language runtime |
-| `pyxtal` | Wyckoff positions, space group symmetry, structure generation |
-| `ase` | Geometry relaxation environment |
-| `mace-torch` | Universal MACE neural-network force field |
-| `torch` | PyTorch — ML model inference |
-| `scipy` | Peak detection, smoothing, QMC samplers (Sobol/Halton) |
-| `pandas` / `numpy` | Data I/O and numerics |
-| `pymatgen` | Structure handling, CIF I/O |
-| `spglib` | Space group detection |
-| `GSAS-II` | Full-pattern Rietveld refinement |
-
----
-
-## Environment Setup
-
-```bash
-conda env create -f environment.yml
-conda activate ab-pxrd-solver
-```
-
-If your Conda installation is configured to use `libmamba` but that plugin is broken, switch back to the classic solver:
-
-```bash
-conda config --set solver classic
-```
 
 ---
 
