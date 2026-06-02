@@ -26,4 +26,5 @@ dependencies:
       - wandb
       - tensorboard
       - mace-torch
+      - git+https://github.com/AdvancedPhotonSource/GSAS-II.git
 

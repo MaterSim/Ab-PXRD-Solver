@@ -66,12 +66,18 @@ def check_gsas_available():
     try:
         _load_gsas_scriptable()
         # Import a compiled GSAS extension to ensure binary compatibility.
-        try:
-            import pyspg  # type: ignore  # noqa: F401
-        except Exception as exc:
+        # pip installs may expose this as GSASII.pyspg instead of top-level pyspg.
+        pyspg_errors = []
+        for modname in ("pyspg", "GSASII.pyspg"):
+            try:
+                import_module(modname)
+                break
+            except Exception as exc:
+                pyspg_errors.append(f"{modname}: {exc}")
+        else:
             return False, (
                 "GSAS-II scriptable API imported, but binary module load failed "
-                f"(pyspg): {exc}"
+                "(pyspg). Tried: " + " | ".join(pyspg_errors)
             )
         return True, "GSAS-II is available."
     except Exception as exc:
@@ -573,27 +579,27 @@ if __name__ == "__main__":
     INST_FILE = "pxrd_app/tools/INST_XRY.PRM"
     pxrd_csv = "Examples/PXRD_PrYMg2_123.csv"
     match_cif = "Examples/Reference_PrYMg2.cif"
-    pxrd_csv = "Examples/PXRD_ErB4Rh4_142.csv"
-    match_cif = "Results/tmp/run_PXRD_ErB4Rh4_142/Match_PXRD_ErB4Rh4_142_attempt1.cif"
-    pxrd_csv = "GSAS_PXRD/Mn7O12_204.csv"
-    pxrd_csv = "GSAS_PXRD/CaGe2_166.csv"
-    match_cif = 'data/CaGe2-2.cif'
-    pxrd_csv = "GSAS_PXRD/FFe7LiO7_38.csv"
-    match_cif = 'data/LiFe7O7F.cif'
-    pxrd_csv = "GSAS_PXRD/B12BeC2_166.csv"
-    match_cif = 'data/B12BeC2.cif'
-    pxrd_csv = "GSAS_PXRD/BeH2_72.csv"
-    match_cif = 'data/BeH2.cif'
-    pxrd_csv = "GSAS_PXRD/BC2F2LiO4_63.csv"
-    match_cif = 'data/BC2F2LiO4.cif'
-    pxrd_csv = "GSAS_PXRD/FeLi2O4Ti_131.csv"
-    match_cif = 'data/Li2TiFeO4.cif'
-    pxrd_csv = "GSAS_PXRD/Cr4NaO8_87.csv"
-    match_cif = 'data/NaCr4O8.cif'
-    pxrd_csv = "GSAS_PXRD/Fe3SeTe2_99.csv"
-    match_cif = 'data/Fe3Te2Se.cif'
-    pxrd_csv = "GSAS_PXRD/B2BeC2_59.csv"
-    match_cif = 'data/B2BeC2.cif'
+    #pxrd_csv = "Examples/PXRD_ErB4Rh4_142.csv"
+    #match_cif = "Results/tmp/run_PXRD_ErB4Rh4_142/Match_PXRD_ErB4Rh4_142_attempt1.cif"
+    #pxrd_csv = "GSAS_PXRD/Mn7O12_204.csv"
+    #pxrd_csv = "GSAS_PXRD/CaGe2_166.csv"
+    #match_cif = 'data/CaGe2-2.cif'
+    #pxrd_csv = "GSAS_PXRD/FFe7LiO7_38.csv"
+    #match_cif = 'data/LiFe7O7F.cif'
+    #pxrd_csv = "GSAS_PXRD/B12BeC2_166.csv"
+    #match_cif = 'data/B12BeC2.cif'
+    #pxrd_csv = "GSAS_PXRD/BeH2_72.csv"
+    #match_cif = 'data/BeH2.cif'
+    #pxrd_csv = "GSAS_PXRD/BC2F2LiO4_63.csv"
+    #match_cif = 'data/BC2F2LiO4.cif'
+    #pxrd_csv = "GSAS_PXRD/FeLi2O4Ti_131.csv"
+    #match_cif = 'data/Li2TiFeO4.cif'
+    #pxrd_csv = "GSAS_PXRD/Cr4NaO8_87.csv"
+    #match_cif = 'data/NaCr4O8.cif'
+    #pxrd_csv = "GSAS_PXRD/Fe3SeTe2_99.csv"
+    #match_cif = 'data/Fe3Te2Se.cif'
+    #pxrd_csv = "GSAS_PXRD/B2BeC2_59.csv"
+    #match_cif = 'data/B2BeC2.cif'
     #for match_cif in ['Fails/failed_ID100.cif', 'Fails/failed_ID77.cif']:
     wr, r2, chi2, cif, elapsed = refine_pxrd(pxrd_csv, match_cif, INST_FILE, plot=True)
     print(match_cif, wr, r2, chi2, elapsed)
@@ -608,3 +614,4 @@ if __name__ == "__main__":
     #import pandas as pd
     #df = pd.DataFrame({'2theta': x, 'intensity': y})
     #df.to_csv("example.csv", index=False)
+

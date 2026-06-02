@@ -409,14 +409,14 @@ All stages communicate through a `run_state` dictionary (`pxrd_app/constants.py 
 | `pandas` / `numpy` | Data I/O and numerics |
 | `pymatgen` | Structure handling, CIF I/O |
 | `spglib` | Space group detection |
-| `GSAS-II` | Optional full-pattern Rietveld refinement; install separately so `GSASIIscriptable` is importable |
+| `GSAS-II` | Full-pattern Rietveld refinement |
 
 ---
 
 ## Environment Setup
 
 ```bash
-conda env create -f environment.yml --solver classic
+conda env create -f environment.yml
 conda activate ab-pxrd-solver
 ```
 
@@ -425,8 +425,6 @@ If your Conda installation is configured to use `libmamba` but that plugin is br
 ```bash
 conda config --set solver classic
 ```
-
-GSAS-II is not included in `environment.yml` because it is not reliably distributed across Conda channels. Install it separately using the official GSAS-II workflow, then ensure `GSASIIscriptable` is importable or set `GSASII_PATH`.
 
 ---
 
