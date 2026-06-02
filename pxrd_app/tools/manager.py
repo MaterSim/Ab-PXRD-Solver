@@ -6,6 +6,7 @@ Module for PXRD managers
 - XtalManager: sample crystal structures from Spg, cell parameters and Wyckoff positions.
 """
 from typing import Sequence
+import os
 import numpy as np
 from pandas import read_csv
 from scipy.signal import find_peaks, savgol_filter
@@ -880,7 +881,18 @@ class WPManager:
         """
         #print(ref_den)
         #df = read_csv(rf("pyxtal", csv))
-        df = read_csv(csv)
+        csv_path = csv
+        if not os.path.isabs(csv_path) and not os.path.exists(csv_path):
+            module_dir = os.path.dirname(__file__)
+            module_relative = os.path.join(module_dir, csv_path)
+            if os.path.exists(module_relative):
+                csv_path = module_relative
+            else:
+                basename_relative = os.path.join(module_dir, os.path.basename(csv_path))
+                if os.path.exists(basename_relative):
+                    csv_path = basename_relative
+
+        df = read_csv(csv_path)
         self.spg = spg
         self.df = df[df['spg'] == self.spg]
         self.cell = cell
@@ -1319,3 +1331,4 @@ if __name__ == "__main__":
     #    if len(sols) == 0:
     #        print(f"SPG: {spg}, No Wyckoff solutions found for the given composition and cell.")
     print(generate_qrs_grid([2, 2, 2], method='sobol'))
+
