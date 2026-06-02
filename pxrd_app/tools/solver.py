@@ -11,7 +11,8 @@ from pyxtal.symmetry import Group, get_bravais_lattice, get_lattice_type, genera
 def _missing_gsas_refine_pxrd(*args, **kwargs):
     raise ModuleNotFoundError(
         "GSAS-II Python module 'GSASIIscriptable' is not available. "
-        "Install GSAS-II (e.g., conda-forge gsas2pkg) to enable refinement."
+        "Install GSAS-II separately and ensure GSASIIscriptable is importable "
+        "or set GSASII_PATH to your GSAS-II installation."
     )
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2120,3 +2121,4 @@ if __name__ == "__main__":
                                         max_mismatch=40,
                                         sort_by='volume')
         print(f"Final consolidated solutions for {match_csv}\n")
+

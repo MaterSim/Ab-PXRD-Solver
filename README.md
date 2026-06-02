@@ -409,19 +409,28 @@ All stages communicate through a `run_state` dictionary (`pxrd_app/constants.py 
 | `pandas` / `numpy` | Data I/O and numerics |
 | `pymatgen` | Structure handling, CIF I/O |
 | `spglib` | Space group detection |
-| `gsas2pkg` | Full-pattern Rietveld refinement (GSAS-II) |
+| `GSAS-II` | Optional full-pattern Rietveld refinement; install separately so `GSASIIscriptable` is importable |
 
 ---
 
 ## Environment Setup
 
 ```bash
-conda env create -f environment.yml
+conda env create -f environment.yml --solver classic
 conda activate ab-pxrd-solver
 ```
+
+If your Conda installation is configured to use `libmamba` but that plugin is broken, switch back to the classic solver:
+
+```bash
+conda config --set solver classic
+```
+
+GSAS-II is not included in `environment.yml` because it is not reliably distributed across Conda channels. Install it separately using the official GSAS-II workflow, then ensure `GSASIIscriptable` is importable or set `GSASII_PATH`.
 
 ---
 
 ## Logging
 
 All pipeline output is routed through the Python `logging` module (`pxrd_agent` logger). A per-system log file is written to `Results/logs/` alongside `PXRD_solver.log` in the working directory. Print statements from libraries are intercepted by `StreamToLogger` and emitted at `INFO` level.
+

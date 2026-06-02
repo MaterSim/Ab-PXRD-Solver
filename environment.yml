@@ -17,7 +17,6 @@ dependencies:
   - ase
   - monty
   - spglib
-  - gsas2pkg
   - typing_extensions
   - pytorch
   - torchvision
