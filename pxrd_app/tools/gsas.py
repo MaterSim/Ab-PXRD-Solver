@@ -27,6 +27,27 @@ def _get_tmp_root() -> str:
     return os.getenv("PXRD_TMP_ROOT", "tmp")
 
 
+def _resolve_tool_path(path: str) -> str:
+    """Resolve data/config paths robustly across different working directories."""
+    if os.path.isabs(path):
+        return path
+
+    if os.path.exists(path):
+        return os.path.abspath(path)
+
+    module_dir = os.path.dirname(__file__)
+    module_relative = os.path.join(module_dir, path)
+    if os.path.exists(module_relative):
+        return module_relative
+
+    basename_relative = os.path.join(module_dir, os.path.basename(path))
+    if os.path.exists(basename_relative):
+        return basename_relative
+
+    # Keep a stable absolute path for error messages if no candidate exists.
+    return os.path.abspath(path)
+
+
 def _load_gsas_scriptable():
     """Load GSAS-II scriptable API from common import locations."""
     gsas_candidates = []
@@ -127,6 +148,7 @@ def simulate_pxrd(cif_file, U=0.1, V=-0.1, W=0.5, X=0.2, Y=0.2, grainsize=20,
         max_counts: Counts scaling for Poisson noise
     """
     G2sc = _load_gsas_scriptable()
+    iparams = _resolve_tool_path(iparams)
 
     # Create project and add phase
     tmp_root = _get_tmp_root()
@@ -530,7 +552,7 @@ def refine_pxrd(pxrd_file, cif_file, instprm="INST_XRY.PRM", ax=None, plot=False
     # Convert to absolute paths so the subprocess can find them
     pxrd_file = os.path.abspath(pxrd_file)
     cif_file = os.path.abspath(cif_file)
-    instprm = os.path.abspath(instprm)
+    instprm = _resolve_tool_path(instprm)
 
     import time as _time
     _t0 = _time.perf_counter()
