@@ -23,4 +23,7 @@ dependencies:
   - torchaudio
   - pip:
       - numpy<2
+      - wandb
+      - tensorboard
       - mace-torch
+
