@@ -176,6 +176,8 @@ Run `python PXRD_solve.py --help` for the full argument list. Tunable hyperparam
 | `logs/<name>.log` | Per-run diagnostics |
 | `summary.csv` | Runtime, R², χ², Rwp, SPG, Wyckoff, cell |
 
+`tmp/` (GSAS-II intermediates) is created under the output directory and can be deleted after a run.
+
 ---
 
 ## Dependencies & Setup
