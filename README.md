@@ -177,21 +177,19 @@ Run `python PXRD_solve.py --help` for the full argument list. Tunable hyperparam
 | `summary.csv` | Runtime, R², χ², Rwp, SPG, Wyckoff, cell |
 
 `tmp/` (GSAS-II intermediates) is created under the output directory and can be deleted after a run.
+Logs are written to `Results/logs/` and `PXRD_solver.log` in the working directory.
 
 ---
 
 ## Dependencies & Setup
 
-**Key packages:** Python ≥ 3.11, PyXtal, ASE, mace-torch, PyTorch, SciPy, pandas/numpy, pymatgen, spglib, GSAS-II.
+**Key packages:** Python ≥ 3.11, PyXtal, ASE, mace-torch, PyTorch, SciPy, pandas/numpy, pymatgen, spglib, GSAS-II. One can use the following command to complete the setup.
+
 
 ```bash
 conda env create -f environment.yml
 conda activate ab-pxrd-solver
 ```
-
-If Conda's `libmamba` solver is broken: `conda config --set solver classic`.
-
-Logs are written to `Results/logs/` and `PXRD_solver.log` in the working directory.
 
 ---
 
