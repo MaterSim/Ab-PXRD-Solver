@@ -10,6 +10,7 @@
 - [Usage](#usage)
 - [Input / Output](#input--output)
 - [Dependencies & Setup](#dependencies--setup)
+- [Citation and Online Database](#citation-and-online-database)
 
 ---
 
@@ -189,3 +190,23 @@ conda activate ab-pxrd-solver
 If Conda's `libmamba` solver is broken: `conda config --set solver classic`.
 
 Logs are written to `Results/logs/` and `PXRD_solver.log` in the working directory.
+
+---
+
+## Citation and Online Database
+
+If you use Ab-PXRD-Solver in your research, please cite:
+
+```bibtex
+@misc{su2026abinitiocrystalstructuredetermination,
+      title={Ab-initio Crystal Structure Determination from Powder X-Ray Diffraction},
+      author={Kaixiang Su and Osman Goni Ridwan and Hongfei Xue and Qiang Zhu},
+      year={2026},
+      eprint={2605.24594},
+      archivePrefix={arXiv},
+      primaryClass={cond-mat.mtrl-sci},
+      url={https://arxiv.org/abs/2605.24594},
+}
+```
+
+Systematic results on 1000+ systems are available at [https://mmi.charlotte.edu/ab_pxrd_solver](https://mmi.charlotte.edu/ab_pxrd_solver).
