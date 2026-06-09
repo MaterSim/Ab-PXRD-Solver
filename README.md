@@ -4,8 +4,8 @@
 
 Ab-PXRD-Solver is a fully automated *ab initio* crystal structure determination pipeline. Given an experimental Powder X-Ray Diffraction (PXRD) pattern and a chemical formula, it autonomously:
 
-1. **Preprocesses** the diffraction pattern with adaptive background subtraction, smoothing, and ML-guided peak detection.
-2. **Predicts density** bounds from the chemical formula using a pretrained Roost ensemble model.
+1. **Preprocesses** the diffraction pattern with adaptive background subtraction, smoothing, and peak detection.
+2. **Predicts density bounds** from the chemical formula using a pretrained Roost ensemble model.
 3. **Indexes peaks** to candidate unit cells via `CellSolver` (known SPG) or `SmartCellSolver` (unknown SPG).
 4. **Enumerates Wyckoff positions** compatible with the composition and density range.
 5. **Generates trial structures** using `PyXtal` with Quasi-Random Sampling.
@@ -72,7 +72,6 @@ Output: Results/cifs/Match_<formula>_<spg>.cif
         Results/summary.csv
 ```
 
----
 
 ## Module Structure
 
@@ -103,7 +102,6 @@ PXRD-Agent/
 └── environment.yml            # Conda environment spec
 ```
 
----
 
 ## Stage 1 — Data Preprocessing
 
@@ -137,7 +135,6 @@ If `min(intensity) > 2.5`, background subtraction is applied via **asymmetric le
 
 $$V_{\text{min}} = \frac{M_{\text{formula}}}{d_{\text{max}} \cdot N_A} \times 10^{24}  (\text{Å}^3)$$
 
----
 
 ## Stage 2 — Space Group Inference and Cell Indexing
 
@@ -171,7 +168,6 @@ For orthorhombic SPGs, all six axis permutations are tried to handle axis-settin
 
 `CellManager.consolidate()` merges equivalent cells (within 5% on each parameter) and retains the top `max_cells = 10` solutions ranked by (missing peaks, χ²).
 
----
 
 ## Stage 3 — Crystal Structure Solution
 
@@ -372,17 +368,20 @@ All results are written to `--output` (default: `Results/`):
 |------|-------------|
 | `cifs/Match_<formula>_<spg>.cif` | Best refined crystal structure (CIF) |
 | `logs/<name>.log` | Per-system run log with full diagnostics |
-| `summary.csv` | One row per input file: runtime, R², χ², Rwp, SPG, Wyckoff, cell |
 
 `tmp/` (GSAS-II intermediates) is created under the output directory and can be deleted after a run.
 
-### Summary CSV Columns
 
-`csv_file_name`, `Runtime`, `N_struc`, `N_attempts`, `N_est`, `Status`, `E`, `dE`, `R2`, `Chi2`, `Rwp`, `SPG`, `Wyckoff`, `Cell`, `WP_qrs_id`
-
----
-
-## Logging
-
-All pipeline output is routed through the Python `logging` module (`pxrd_agent` logger). A per-system log file is written to `Results/logs/` alongside `PXRD_solver.log` in the working directory. Print statements from libraries are intercepted by `StreamToLogger` and emitted at `INFO` level.
-
+## Citation and online database
+```
+@misc{su2026abinitiocrystalstructuredetermination,
+      title={Ab-initio Crystal Structure Determination from Powder X-Ray Diffraction}, 
+      author={Kaixiang Su and Osman Goni Ridwan and Hongfei Xue and Qiang Zhu},
+      year={2026},
+      eprint={2605.24594},
+      archivePrefix={arXiv},
+      primaryClass={cond-mat.mtrl-sci},
+      url={https://arxiv.org/abs/2605.24594}, 
+}
+```
+The systematic results on 1000+ systems is available via https://mmi.charlotte.edu/ab_pxrd_solver
